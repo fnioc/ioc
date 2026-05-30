@@ -22,6 +22,14 @@ tasks:
       - 'dist'
   test:
     command: 'bun run test'
+    # The ts-patch e2e (test/e2e.test.ts) loads the BUILT @fnioc/transformer as a
+    # plugin and runs `node tspc`, which resolves both @fnioc/transformer and the
+    # injected @fnioc/core import via their `dist` entry points. Both must be
+    # built first; `build` transitively pulls `core:build`, but naming both keeps
+    # the ordering intent explicit and the dist outputs as cache inputs.
+    deps:
+      - 'build'
+      - 'core:build'
     inputs:
       - 'src/**/*'
       - 'test/**/*'
