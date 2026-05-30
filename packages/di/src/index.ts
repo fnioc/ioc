@@ -7,10 +7,11 @@
 //
 // Phase 2A scope: registration, the scope chain + tagged lifetimes, resolution
 // with the captive-dependency rule, greedy signature selection, cycle
-// detection, the useFactory/useValue overrides, and native disposal. Factory
-// injection (a ctor param typed `() => IFoo` becoming an injected factory) and
-// hole-filling are deferred to Phase 2D — see the `// Phase 2D:` markers in
-// scope.ts.
+// detection, the useFactory/useValue overrides, and native disposal.
+//
+// Phase 2D.2 adds factory injection (a ctor param typed `() => IFoo` becomes an
+// injected callable) and hole-filling (a caller-supplied parameter filled
+// positionally at factory call time).
 
 export { DiBuilder } from "./builder.js";
 export type { AddBuilder } from "./builder.js";
@@ -34,6 +35,7 @@ export {
   MissingScopeError,
   MissingMetadataError,
   NoSatisfiableSignatureError,
+  FactoryTargetError,
   CircularDependencyError,
   AsyncDisposalRequiredError,
 } from "./errors.js";
