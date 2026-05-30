@@ -1,4 +1,4 @@
-import type { Token } from "./types.js";
+import type { DepSlot } from "./types.js";
 import { defineDeps } from "./defineDeps.js";
 
 /**
@@ -22,7 +22,7 @@ import { defineDeps } from "./defineDeps.js";
  * ```
  */
 export function signature(
-  ...tokens: ReadonlyArray<Token | null>
+  ...tokens: ReadonlyArray<DepSlot>
 ): (value: Function, _context: ClassDecoratorContext) => void {
   return (value: Function, _context: ClassDecoratorContext): void => {
     defineDeps(value, [tokens.slice()]);

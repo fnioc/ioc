@@ -12,7 +12,7 @@
 // one fail loudly instead of silently capturing it.
 
 import { getDeps } from "@fnioc/core";
-import type { Token } from "@fnioc/core";
+import type { DepSlot, Token } from "@fnioc/core";
 
 import {
   AsyncDisposalRequiredError,
@@ -276,8 +276,8 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
 
     const signature = this.selectSignature(token, ctor, record.signatures);
     const args = signature.map((dep) =>
-      // Non-null by selection — hole-containing signatures are skipped this
-      // phase (Phase 2D fills holes via factories).
+      // All-token by selection — signatures containing a hole or a FactoryRef
+      // are skipped this phase (Phase 2D.2 fills holes / injects factories).
       this.resolveWith<unknown>(dep as Token, stack),
     );
     return new ctor(...(args as never[])) as T;
@@ -285,11 +285,12 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
 
   /**
    * Greedy signature selection. Scans signatures longest → shortest and returns
-   * the first DIRECTLY satisfiable one: every element is a non-null token whose
+   * the first DIRECTLY satisfiable one: every slot is a string token whose
    * registration is resolvable in this (the owning) scope's chain.
    *
-   * - A `null` hole is NOT directly satisfiable this phase — hole-containing
-   *   signatures are skipped (Phase 2D fills them via factories).
+   * - A `null` hole or a `FactoryRef` slot is NOT directly satisfiable this
+   *   phase — signatures containing either are skipped (Phase 2D.2 fills holes
+   *   and injects factories).
    * - Equal-arity ties break by registration order (the order signatures appear
    *   in the DepRecord), which `sort`'s stability preserves.
    * - None satisfiable ⇒ throw naming the unsatisfiable tokens.
@@ -297,8 +298,8 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
   private selectSignature(
     token: Token,
     ctor: Ctor,
-    signatures: ReadonlyArray<ReadonlyArray<Token | null>>,
-  ): ReadonlyArray<Token | null> {
+    signatures: ReadonlyArray<ReadonlyArray<DepSlot>>,
+  ): ReadonlyArray<DepSlot> {
     // Stable sort by descending length; index keeps equal-arity ties in
     // registration order.
     const ordered = signatures
@@ -311,9 +312,11 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
 
     const unsatisfiable = new Set<Token>();
     for (const { sig } of ordered) {
-      // Phase 2D: a hole (null) becomes a factory-filled parameter. Until then
-      // a hole-containing signature is not directly satisfiable — skip it.
-      if (sig.some((dep) => dep === null)) continue;
+      // Phase 2D.2: a hole (null) becomes a caller-supplied param and a
+      // FactoryRef becomes an injected factory. Until then, a signature with
+      // either kind of slot is not directly satisfiable — skip it. Only an
+      // all-string-token signature is directly resolvable this phase.
+      if (sig.some((dep) => typeof dep !== "string")) continue;
 
       let satisfiable = true;
       for (const dep of sig) {

@@ -7,13 +7,32 @@
 export type Token = string;
 
 /**
+ * Marks a constructor parameter to be injected as a *factory* producing the
+ * registered token `factory`, rather than a resolved instance. The factory's
+ * own call signature is the target ctor's unregistered params, partitioned at
+ * resolve time.
+ */
+export interface FactoryRef {
+  readonly factory: Token;
+}
+
+/**
+ * One positional slot in a constructor signature:
+ *   - a `Token` string  — a container-resolved dependency,
+ *   - `null` (the hole sentinel) — a caller-supplied parameter, or
+ *   - a `FactoryRef` — a factory-injected parameter (see `FactoryRef`).
+ */
+export type DepSlot = Token | null | FactoryRef;
+
+/**
  * Per-constructor dependency metadata stored in the global WeakMap.
  *
  * `signatures` is an array of arrays from v1: each element is one constructor
- * signature (for overload support). `signatures[i][j]` is the token — or the
- * `null` hole sentinel — for constructor parameter `j` of overload `i`.
+ * signature (for overload support). `signatures[i][j]` is the `DepSlot` — a
+ * token, the `null` hole sentinel, or a `FactoryRef` — for constructor
+ * parameter `j` of overload `i`.
  */
 export interface DepRecord {
   readonly abi: number;
-  readonly signatures: ReadonlyArray<ReadonlyArray<Token | null>>;
+  readonly signatures: ReadonlyArray<ReadonlyArray<DepSlot>>;
 }

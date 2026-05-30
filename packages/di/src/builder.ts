@@ -66,9 +66,8 @@ export class DiBuilder<Scopes extends string = string> {
     // hand-written type-form call fails loud rather than registering garbage.
     if (typeof tokenOrCtor !== "string" || maybeCtor === undefined) {
       throw new TypeError(
-        "DiBuilder.add must be called with (token, ctor) at runtime. The " +
-          "type-only add<I>(ctor) overload is lowered to that form by the " +
-          "transformer and is never executed directly.",
+        'add<I>(ctor) requires the @fnioc/transformer plugin. Without it, ' +
+          'register with an explicit token: add("my:token", MyClass).',
       );
     }
 
