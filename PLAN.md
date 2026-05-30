@@ -21,11 +21,12 @@
 
 | Phase / Track | Status | Notes |
 |---|---|---|
-| **Phase 0** — Scaffold (main checkout) | 🟡 | Scaffold pushed to `fnioc/ioc`; verifying first green CI run
-| **Phase 1** — `@fnioc/core` (ABI + WeakMap + authoring surfaces) | ⬜ | BARRIER: di + transformer both block on this |
-| **Phase 2A** — `@fnioc/di` runtime | ⬜ | Parallel with 2B + 2C after Phase 1 |
-| **Phase 2B** — `@fnioc/transformer` | ⬜ | Parallel with 2A + 2C after Phase 1 |
-| **Phase 2C** — Docs (README + API reference) | ⬜ | Parallel with 2A + 2B once API shape is firm (it is) |
+| **Phase 0** — Scaffold (main checkout) | ✅ | Green on `main`; repo + branch protection (`verify`) + squash auto-merge configured
+| **Phase 1** — `@fnioc/core` (ABI + WeakMap + authoring surfaces) | ✅ | Merged (PR #1) — 22 tests; ABI, global WeakMap, `defineDeps`/`getDeps`, `@signature`, `forCtor` |
+| **Phase 2A** — `@fnioc/di` runtime (base; no factories) | 🟡 | `feat-di` worktree (subagent) |
+| **Phase 2B** — `@fnioc/transformer` (base; no factory detection) | 🟡 | `feat-transformer` worktree (subagent) |
+| **Phase 2C** — Docs (README + API reference) | 🟡 | `feat-docs` worktree (subagent) |
+| **Phase 2D** — Factories (coordinated: core ABI + di + transformer) | ⬜ | After 2A + 2B; factory injection couples all three packages |
 | **Phase 3** — Integration & verification | ⬜ | BARRIER: needs 2A + 2B green |
 | **Phase 4** — Packaging & publish | ⬜ | Sequential after Phase 3 |
 | **Phase 5** — Dir rename + session transfer | ⬜ | Deferred to end; keep cwd stable throughout |
@@ -383,6 +384,7 @@ Per user prefs: whenever a branch is pushed, a PR is opened, or a workflow is tr
 *(Append-only. Newest entries at the bottom.)*
 
 - **2026-05-30** — Design locked (see `ioc-locked-design.md`). PRD drafted to `PRD.md`. PLAN drafted to `PLAN.md`. Repo directory exists at `~/src/ioc@rhombus-toolkit` (empty; no git init yet). All phases at ⬜.
+- **2026-05-30** — Phase 1 (`@fnioc/core`) merged via PR #1 (22 tests). **Restructured factories into a coordinated Phase 2D** (core ABI element extension for a factory descriptor + di injection + transformer detection + the §4.5 factory-signature diagnostic), to run AFTER the base di + transformer land — factory injection couples all three packages and shouldn't be crammed into the first di PR. The ABI `signatures` element type stays `Token | null` for v1 base; 2D extends it to `Token | null | FactoryRef` (still ABI v1 — pre-release, no published consumers). Dispatched Phase 2 in parallel: di base engine, transformer base, docs.
 - **2026-05-30** — Phase 0 scaffold complete locally: Bun + Moon + release-please, three package skeletons, real `tsc -b` → `dist` build, smoke tests. `moon run :lint :test :build` green locally. Repo created at `fnioc/ioc`, pushed to `main`; squash auto-merge + branch protection (require `verify`) enabled; publish job no-ops cleanly until `AUTOMERGE_PAT` is set. First CI run hit moon's genesis single-commit `HEAD~1` baseline error (no parent commit) — resolved by this second commit; every future push sits on existing history so it won't recur. **Blocker:** bw Vault server `hass4150.duckdns.org` unreachable → npm god token + `AUTOMERGE_PAT` retrieval deferred (only needed at Phase 4 publish).
 
 ---
