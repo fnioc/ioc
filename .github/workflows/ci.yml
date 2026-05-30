@@ -310,6 +310,7 @@ jobs:
         if: ${{ steps.release.outputs.releases_created == 'true' }}
         env:
           SORTED: ${{ steps.sorted.outputs.sorted }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           echo "$SORTED" | jq -r '.[]' | while read -r pkg_path; do
