@@ -67,6 +67,26 @@ Tokens are stable strings derived from TypeScript interface types. The derivatio
 
 The transformer walks up to the nearest `package.json` to identify the owning package, then checks whether the symbol is publicly reachable.
 
+### `nameof<T>()`
+
+The transformer provides a compile-time token helper. Each `nameof<IFoo>()` call in source is rewritten to the derived string token at build time — callers never ship the generation logic at runtime.
+
+```typescript
+import { nameof } from "@fnioc/transformer";
+
+const token = nameof<IUserRepo>();
+// → "your-pkg:contracts/IUserRepo" at compile time
+```
+
+If the transformer is not wired up and `nameof` runs at runtime, it throws:
+
+```
+nameof<T>() requires the @fnioc/transformer plugin. Add { "transform":
+"@fnioc/transformer" } to your tsconfig "plugins", or pass a token string.
+```
+
+This is intentional: un-transformed code fails loudly rather than silently returning `undefined`.
+
 ### Version skew caveat
 
 Tokens do not embed the package version. Two compatible versions of the same package unify on the same token — the usual case. If two **incompatible** versions of a package are installed simultaneously, their tokens will collide, producing a registration conflict rather than two isolated containers. The mitigation is the same as for any peer dependency: keep compatible versions aligned. This is an acknowledged trade-off; version-embedded tokens would prevent legitimate version unification.
@@ -78,11 +98,12 @@ Tokens do not embed the package version. Two compatible versions of the same pac
 For each `services.add<IFoo>(Foo).as<"scope">()` call the transformer finds, it:
 
 1. Reads `Foo`'s constructor parameter types via the TypeChecker.
-2. Derives a token per parameter:
+2. Derives a slot per parameter:
    - Interfaces and class types → string token per the derivation rule above.
    - `Promise<X>` → token for `X` (not a `Promise<X>` token — see below).
    - Primitives (`string`, `number`, `boolean`, `symbol`, `bigint`), `unknown`, `any`, `void` → `null` (a hole sentinel; these cannot be interface tokens).
-3. Emits `defineDeps(Foo, [[...tokens]])` immediately before the registration call.
+   - **Inline function types** (`() => IFoo`, `(a: B) => IFoo`) → `{ factory: "pkg:IFoo" }` (a `FactoryRef` — see factory detection below).
+3. Emits `defineDeps(Foo, [[...slots]])` immediately before the registration call.
 4. Rewrites the call from the type-driven form to the plain-data form.
 
 ```typescript
@@ -101,6 +122,39 @@ The transformer normally emits exactly one signature per class — the single ca
 ### `Promise<X>` unwrap
 
 A constructor parameter typed `Promise<IDb>` maps to the same token as `IDb`: `"pkg:IDb"`. The container caches whatever the factory returns, which may be a `Promise`. The consumer's dep is `Promise<IDb>`, but the token is `"pkg:IDb"` — Promise-ness lives in the factory's return, not in the token.
+
+---
+
+## Factory detection
+
+A constructor parameter whose type annotation is an **inline function-type literal** (`ts.FunctionTypeNode`) is detected as a factory and emitted as `{ factory: "<token>" }` in the `defineDeps` signature. The token is derived from the return type after unwrapping any `Promise<X>`.
+
+```typescript
+// Inline function-type annotation → factory ref keyed on "pkg:IDb"
+constructor(makeDb: () => IDb) { ... }
+constructor(makeDb: (id: string) => Promise<IDb>) { ... }
+
+// Named type reference → normal token "pkg:IDbFactory", NOT a factory
+interface IDbFactory { (): IDb }
+constructor(makeDb: IDbFactory) { ... }
+```
+
+Detection is **purely syntactic** — it reads the annotation node kind, not the resolved `ts.Type`. This is intentional: an inline arrow type and a named callable interface are structurally identical once resolved; only the syntax tells them apart. The named-interface form is the deliberate opt-out.
+
+### Emitted form
+
+```typescript
+// Author code
+class RequestHandler {
+  constructor(
+    private log: ILogger,        // resolved dep
+    private makeDb: () => IDb,   // factory-injected
+  ) {}
+}
+
+// Lowered output
+defineDeps(RequestHandler, [["pkg:ILogger", { factory: "pkg:IDb" }]]);
+```
 
 ---
 
@@ -129,18 +183,44 @@ A genuine zero-argument constructor is `new`ed directly without a dep lookup.
 
 ---
 
-## Factory-signature diagnostic
+## Diagnostics
 
-When the transformer can statically see a factory-typed constructor parameter (one whose type annotation is a literal arrow or function type returning a registered interface), it validates the factory's call signature against the target constructor's **unregistered** parameters in order.
+The transformer emits warnings during `tsc`/`tspc` for three classes of statically-detectable misconfigurations. Each diagnostic is anchored at the relevant node in the source file. All checks are conservative — they fire only where a mismatch is statically certain, never on a guess.
 
-This is the primary value-add of running the transformer: compile-time feedback when a factory's declared call signature doesn't match what the container will actually pass at runtime. The diagnostic fires during `tsc`/`tspc` — no separate lint step needed.
+### Factory-signature mismatch (code 990003)
 
-Additional diagnostics the transformer emits where statically visible:
+When the transformer can see the concrete class behind a factory-typed parameter, it compares the factory's declared call signature against the target constructor's unregistered parameters in order. If the counts don't match, it warns:
 
-| Diagnostic | Condition |
-|---|---|
-| Wrong dep type for async registration | A consumer declares `IDb` as a direct dep when the service is async-registered (should be `Promise<IDb>`). |
-| Equal-arity overload ambiguity | Two signatures of the same length for the same constructor — greedy selection cannot distinguish them. |
+```
+Factory parameter "makeRepo" takes 2 argument(s), but the factory caller
+must supply 1 — the unregistered parameter(s) of the produced type's
+constructor. List exactly those, in order.
+```
+
+This is the primary value-add of running the transformer: compile-time feedback when a factory's declared arity doesn't match what the container will actually expose at runtime. The check runs only when the produced type resolves to a concrete class the transformer can read.
+
+### Async mismatch (code 990004)
+
+A constructor parameter typed as a bare interface (`IDb`) when the token is registered via an async `useFactory` (one returning `Promise<IDb>`). The container hands back the `Promise` verbatim, so the parameter must be declared `Promise<IDb>` and awaited by the consumer:
+
+```
+Dependency "db" is registered async, so the container returns a Promise.
+Declare it as Promise<IDb> and await it where you use it.
+```
+
+This check fires only when the `useFactory` for the same token is visibly `async` or has an annotated `Promise<...>` return type in the same file.
+
+### Equal-arity overload ambiguity (code 990005)
+
+Two manually-registered constructor signatures (via stacked `@signature` decorators or chained `forCtor(...).signature(...)` calls) have the same length. The engine's greedy selection picks overloads by argument count, so two same-length signatures cannot be distinguished:
+
+```
+MyService has two constructor signatures of the same length (2). The
+container picks an overload by argument count, so it cannot tell them
+apart. Give them different lengths.
+```
+
+This check runs on all registrations, including manually-annotated ones.
 
 An `@fnioc/eslint-plugin` that surfaces these diagnostics in-editor is planned for a future release.
 

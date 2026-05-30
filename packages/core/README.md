@@ -36,6 +36,34 @@ A coarse integer compatibility guard for the global WeakMap. Bumped only on an a
 
 ---
 
+## `FactoryRef`
+
+Marks a constructor parameter to be injected as a factory rather than a resolved instance.
+
+```typescript
+export interface FactoryRef {
+  readonly factory: Token;
+}
+```
+
+`factory` is the token of the target service. At resolution time the engine builds a callable that produces instances of that target — the callable's call signature covers only the target constructor's unregistered parameters.
+
+---
+
+## `DepSlot`
+
+One positional slot in a constructor signature. Can be:
+
+- a `Token` string — a container-resolved dep,
+- `null` (the hole sentinel) — a caller-supplied parameter, or
+- a `FactoryRef` — a factory-injected parameter.
+
+```typescript
+export type DepSlot = Token | null | FactoryRef;
+```
+
+---
+
 ## `DepRecord`
 
 Per-constructor metadata stored in the global WeakMap.
@@ -43,11 +71,11 @@ Per-constructor metadata stored in the global WeakMap.
 ```typescript
 export interface DepRecord {
   readonly abi: number;
-  readonly signatures: ReadonlyArray<ReadonlyArray<Token | null>>;
+  readonly signatures: ReadonlyArray<ReadonlyArray<DepSlot>>;
 }
 ```
 
-`signatures` is an array of arrays from v1. Multiple signatures support constructor overloads without an ABI break — the same `DepRecord` shape holds one or many.
+`signatures` is an array of arrays from v1. Multiple signatures support constructor overloads without an ABI break — the same `DepRecord` shape holds one or many. Each slot is a `DepSlot` — a token string, `null` (hole), or a `FactoryRef`.
 
 ---
 
@@ -58,7 +86,7 @@ The single write path into the dep-metadata store. Both the transformer-emitted 
 ```typescript
 export function defineDeps(
   ctor: Function,
-  signatures: ReadonlyArray<ReadonlyArray<Token | null>>,
+  signatures: ReadonlyArray<ReadonlyArray<DepSlot>>,
 ): void
 ```
 
@@ -91,7 +119,7 @@ A TC39 class decorator (not legacy `experimentalDecorators`). Writes one signatu
 
 ```typescript
 export function signature(
-  ...tokens: ReadonlyArray<Token | null>
+  ...tokens: ReadonlyArray<DepSlot>
 ): (ctor: Function, ctx: ClassDecoratorContext) => void
 ```
 
@@ -125,7 +153,7 @@ Fluent free-function equivalent of `@signature`. Use for classes you don't own (
 export function forCtor(ctor: Function): ForCtorBuilder
 
 interface ForCtorBuilder {
-  signature(...tokens: ReadonlyArray<Token | null>): ForCtorBuilder;
+  signature(...tokens: ReadonlyArray<DepSlot>): ForCtorBuilder;
 }
 ```
 
@@ -170,6 +198,8 @@ const deps: WeakMap<Function, DepRecord> =
 | `Token` | Type alias | `string` — the DI key type. |
 | `hole` | Constant | `null` — marks a non-resolved constructor parameter. |
 | `ABI_VERSION` | Constant | Integer compatibility guard for the global WeakMap. |
+| `FactoryRef` | Interface | `{ factory: Token }` — marks a slot as a factory-injected parameter. |
+| `DepSlot` | Type alias | `Token \| null \| FactoryRef` — one positional slot in a signature. |
 | `DepRecord` | Interface | `{ abi, signatures }` — per-constructor metadata shape. |
 | `defineDeps` | Function | Write dep metadata into the global WeakMap. |
 | `getDeps` | Function | Read dep metadata from the global WeakMap. |

@@ -176,12 +176,11 @@ await using _ = root; // uses native Symbol.asyncDispose (TypeScript 5.2+)
 
 ---
 
-## Roadmap
+## Factory injection
 
-**Factory injection** (Phase 2D) — constructor parameters typed as arrow functions returning a registered interface are injected as factories, not instances. Partial/positional factories — where the factory's call signature covers only the unregistered parameters — are designed and coming.
+Constructor parameters typed as inline arrow or function types returning a registered interface are injected as callables rather than resolved instances. The factory's call signature exposes only the target constructor's unregistered parameters, in order — registered deps are resolved by the container at call time.
 
 ```typescript
-// Designed, not yet implemented
 class RequestHandler {
   constructor(
     private log: ILogger,         // resolved normally
@@ -189,13 +188,19 @@ class RequestHandler {
   ) {}
 
   handle() {
-    const db = this.makeConn(); // fresh IDb per call
+    const db = this.makeConn(); // builds an IDb on demand
     // ...
   }
 }
 ```
 
-Other planned additions: `@fnioc/eslint-plugin` (factory-signature diagnostics in-editor), an `unplugin` wrapper (Vite/Rollup/esbuild/webpack), and DI-aware testing utilities.
+Named callable interfaces opt out of factory interpretation and resolve as normal services. The transformer validates factory signatures at compile time (see [`@fnioc/transformer`](packages/transformer/README.md)).
+
+---
+
+## Roadmap
+
+Planned additions: `@fnioc/eslint-plugin` (factory-signature diagnostics in-editor), an `unplugin` wrapper (Vite/Rollup/esbuild/webpack), and DI-aware testing utilities.
 
 ---
 

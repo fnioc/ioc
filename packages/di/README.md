@@ -186,6 +186,76 @@ The transformer unwraps `Promise<X>` at dep-extraction: a parameter typed `Promi
 
 ---
 
+## Factory injection
+
+A constructor parameter whose type annotation is an inline function type returning a registered interface is injected as a **factory** — a callable that builds the target on demand — rather than a resolved instance.
+
+```typescript
+// IDb is a registered class. This parameter receives a callable:
+constructor(makeDb: () => IDb) { ... }
+
+// Partial factory — the target ctor has holes the caller fills:
+constructor(makeRepo: (tableName: string) => IUserRepo) { ... }
+```
+
+### Named function-interface opt-out
+
+A **named** callable interface is NOT treated as a factory — it resolves as a normal service keyed on that interface's own token:
+
+```typescript
+interface IDbFactory { (): IDb }
+
+// Resolves as the "pkg:IDbFactory" token, not a factory for IDb
+constructor(dbFactory: IDbFactory) { ... }
+```
+
+Name the interface to opt out of factory interpretation whenever your function-typed service should itself be a registered dep.
+
+### Partial / positional factories
+
+The injected callable exposes **only the target constructor's unregistered parameters**, in their relative order. Registered deps are resolved by the container at call time; holes and unregistered params are filled positionally by caller-supplied arguments.
+
+```typescript
+// IUserRepo concrete: constructor(log: ILogger, tableName: string, db: IDb)
+// ILogger and IDb are registered; tableName is not (a hole).
+// Injected factory type: (tableName: string) => IUserRepo
+
+class RequestHandler {
+  constructor(private makeRepo: (tableName: string) => IUserRepo) {}
+
+  handle() {
+    const repo = this.makeRepo("users");
+    // At call time: new UserRepo(resolve(ILogger), "users", resolve(IDb))
+  }
+}
+```
+
+There are no Ramda-style placeholders. The factory's call arity is exactly the count of unregistered parameters; the caller never sees the full constructor shape.
+
+### Lifetime semantics
+
+The injected factory is a closure captured at injection time, referencing the owning scope. How the target's instance is managed depends on whether the factory is parameterized:
+
+| Factory kind | Lifetime behavior |
+|---|---|
+| **Zero-arg** (`() => IFoo`, no holes or unregistered params) | Routes through normal `resolve` — respects the target's registered lifetime. A singleton target returns the same instance on every call; a transient target yields a fresh one. |
+| **Parameterized** (caller args fill holes or unregistered params) | Builds a **fresh instance on every call**, bypassing the instance cache. Caller args differ per invocation, so caching would be wrong — two calls with different arguments must not collapse to one cached instance. |
+
+The captive-dependency rule (§5.4) holds at call time: the target's own deps are resolved relative to the scope that owns the factory-holding instance. A factory captured by a singleton that tries to build a request-scoped target still throws `MissingScopeError` when invoked.
+
+### `FactoryTargetError`
+
+Thrown when the container tries to build the factory callable and cannot. Two reasons:
+
+| Reason | Meaning |
+|---|---|
+| `"unregistered"` | The factory's target token has no registration. A factory parameter needs the target registered with `services.add(...)`. |
+| `"not-a-class"` | The target is registered as a `useValue` or `useFactory` override, not a class. A factory builds its target with `new`; only class registrations qualify. Resolve it directly or change the registration. |
+
+Note: `FactoryTargetError` is thrown when the factory callable is constructed (at owning-class resolution time), not when the callable is invoked.
+
+---
+
 ## API reference
 
 ### `DiBuilder<Scopes>`
