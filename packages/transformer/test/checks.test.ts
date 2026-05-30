@@ -60,6 +60,87 @@ describe("factory-signature diagnostic (§4.5)", () => {
     );
   });
 
+  test("fires for a hand-declared @signature factory slot with a bad arity", () => {
+    // SqlUserRepo is hand-annotated via @signature (authoritative — no
+    // transformer-synthesized defineDeps). Its ctor still carries an inline
+    // factory param `makeFoo: (...) => Foo`. Foo's ctor has exactly one hole
+    // (b: string; a: IA is resolvable), so the factory must take 1 arg; it
+    // declares 2 → mismatch. The §8 factory-signature diagnostic must still
+    // fire for the hand-declared slot, not be skipped by the annotated path.
+    const src = `
+      import { signature } from "@fnioc/core";
+      interface IA {}
+      class B2 {}
+      interface IFoo {}
+      class Foo implements IFoo {
+        constructor(a: IA, b: string) {}
+      }
+      interface ISvc {}
+      @signature("manual:IA")
+      class Svc implements ISvc {
+        constructor(makeFoo: (x: B2, y: number) => Foo) {}
+      }
+      declare const services: any;
+      services.add<ISvc>(Svc).as<"singleton">();
+    `;
+    const { output, diagnostics } = transform(fixture(src));
+    // The annotated class still skips transformer-generated defineDeps.
+    expect(output).not.toContain("defineDeps(Svc");
+    const diag = diagnostics.find(
+      (d) => d.code === DiagnosticCode.FactorySignatureMismatch,
+    );
+    expect(diag).toBeDefined();
+    expect(diag!.category).toBe(0 /* ts.DiagnosticCategory.Warning */);
+    expect(String(diag!.messageText)).toContain("makeFoo");
+    expect(String(diag!.messageText)).not.toContain("lower");
+  });
+
+  test("fires for a forCtor-annotated class factory slot with a bad arity", () => {
+    const src = `
+      import { forCtor } from "@fnioc/core";
+      interface IA {}
+      class B2 {}
+      interface IFoo {}
+      class Foo implements IFoo {
+        constructor(a: IA, b: string) {}
+      }
+      interface ISvc {}
+      class Svc implements ISvc {
+        constructor(makeFoo: (x: B2, y: number) => Foo) {}
+      }
+      forCtor(Svc).signature({ factory: "manual:IFoo" });
+      declare const services: any;
+      services.add<ISvc>(Svc).as<"singleton">();
+    `;
+    const { output, diagnostics } = transform(fixture(src));
+    expect(output).not.toContain("defineDeps(Svc");
+    expect(codes(diagnostics)).toContain(
+      DiagnosticCode.FactorySignatureMismatch,
+    );
+  });
+
+  test("no diagnostic for a hand-declared factory slot with matching arity", () => {
+    const src = `
+      import { signature } from "@fnioc/core";
+      interface IA {}
+      interface IFoo {}
+      class Foo implements IFoo {
+        constructor(a: IA, b: string) {}
+      }
+      interface ISvc {}
+      @signature("manual:IA")
+      class Svc implements ISvc {
+        constructor(makeFoo: (b: string) => Foo) {}
+      }
+      declare const services: any;
+      services.add<ISvc>(Svc).as<"singleton">();
+    `;
+    const { diagnostics } = transform(fixture(src));
+    expect(codes(diagnostics)).not.toContain(
+      DiagnosticCode.FactorySignatureMismatch,
+    );
+  });
+
   test("silent when the produced type is an interface with no reachable class", () => {
     // The factory returns IFoo (an interface) — no concrete ctor is statically
     // reachable, so the check cannot run and must not guess.

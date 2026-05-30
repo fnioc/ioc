@@ -25,6 +25,7 @@ import {
   type Slot,
 } from "./deps.js";
 import {
+  checkAnnotatedFactoryParams,
   checkExtractedRegistration,
   checkOverloads,
   type CheckContext,
@@ -154,6 +155,11 @@ function buildDefineDeps(
     (classDecl && hasSignatureDecorator(classDecl)) ||
     ctx.forCtorAnnotated.has(extraction.classSymbol);
   if (annotated) {
+    // The manual annotation governs the emitted signature, but PRD §8 still
+    // validates factory parameters declared on the hand-annotated ctor against
+    // the produced type's constructor holes — a hand-authored factory slot with
+    // a bad signature must not ship without a diagnostic.
+    checkAnnotatedFactoryParams(extraction.classSymbol, ctx);
     ctx.sink.addDiagnostic(
       info(
         ctx.sourceFile,

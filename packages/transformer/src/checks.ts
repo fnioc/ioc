@@ -8,8 +8,8 @@
 //   1. Factory-signature mismatch (§4.5). An inline-factory ctor param
 //      `(b: B2, d: D4) => IFoo` must list, in order, the unregistered (hole)
 //      params of IFoo's concrete constructor. When that concrete ctor is
-//      statically reachable, compare; warn on a length or per-position
-//      mismatch.
+//      statically reachable, compare arities and warn on a count mismatch (the
+//      check is arity-only — it does not compare per-position types).
 //   2. Async mismatch. A ctor param declared as a bare `IDb` for a token that
 //      is registered async (a `useFactory` whose result is a `Promise`) — the
 //      value is a `Promise<IDb>`, so the dep should be declared `Promise<IDb>`.
@@ -63,6 +63,33 @@ export function checkExtractedRegistration(
   for (const param of ctor.parameters) {
     checkFactoryParam(param, ctx);
     checkAsyncParam(param, ctx);
+  }
+}
+
+/**
+ * Factory-signature (§4.5) check for a manually-annotated class (`@signature` /
+ * `forCtor`). The annotated path skips dep extraction and `defineDeps` emission,
+ * so `checkExtractedRegistration` never runs for it — but PRD §8 still requires
+ * factory parameters declared on a hand-annotated ctor to be validated against
+ * the produced type's constructor holes. This runs ONLY the factory-signature
+ * check (not the async-mismatch one, which keys off transformer-derived tokens
+ * the author has overridden by annotating). Each param is independently
+ * best-effort: an un-resolvable shape is skipped, never flagged.
+ */
+export function checkAnnotatedFactoryParams(
+  classSymbol: ts.Symbol,
+  ctx: CheckContext,
+): void {
+  const classDecl = classSymbol
+    .getDeclarations()
+    ?.find(ts.isClassDeclaration);
+  if (!classDecl) return;
+
+  const ctor = findConstructor(classDecl);
+  if (!ctor) return;
+
+  for (const param of ctor.parameters) {
+    checkFactoryParam(param, ctx);
   }
 }
 
