@@ -32,7 +32,7 @@
   },
   "devDependencies": {
     "@fnioc/core": "workspace:*",
-    "ts-patch": "^4.0.0"
+    "ts-patch": "^3.3.0"
   },
   "publishConfig": {
     "access": "public",
