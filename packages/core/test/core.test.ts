@@ -7,6 +7,7 @@ import {
   signature,
   forCtor,
 } from "@fnioc/core";
+import type { FactoryRef, DepSlot } from "@fnioc/core";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -246,5 +247,86 @@ describe("forCtor", () => {
     const builder = forCtor(ForCtorChainId);
     const returned = builder.signature("fc:IFoo");
     expect(returned).toBe(builder);
+  });
+});
+
+// ── FactoryRef slot ─────────────────────────────────────────────────────────
+
+describe("FactoryRef dep slot", () => {
+  test("FactoryRef and DepSlot are exported (type-level)", () => {
+    // If these annotations compile, the types are exported. The runtime values
+    // are only here so the references aren't elided.
+    const ref: FactoryRef = { factory: "exp:IFoo" };
+    const slots: ReadonlyArray<DepSlot> = ["exp:IBar", null, ref];
+    expect(ref.factory).toBe("exp:IFoo");
+    expect(slots).toHaveLength(3);
+  });
+
+  test("a FactoryRef slot is stored verbatim in the DepRecord", () => {
+    class FactorySlotCtor {}
+
+    defineDeps(FactorySlotCtor, [["slot:ILogger", { factory: "slot:IFoo" }]]);
+
+    const rec = getDeps(FactorySlotCtor);
+    expect(rec!.signatures[0]).toEqual([
+      "slot:ILogger",
+      { factory: "slot:IFoo" },
+    ]);
+  });
+
+  describe("structural dedup", () => {
+    test("two identical { factory } slots dedup to one signature", () => {
+      class FactoryDedupSame {}
+
+      defineDeps(FactoryDedupSame, [["dedup:IA", { factory: "dedup:IX" }]]);
+      defineDeps(FactoryDedupSame, [["dedup:IA", { factory: "dedup:IX" }]]);
+
+      const rec = getDeps(FactoryDedupSame);
+      expect(rec!.signatures).toHaveLength(1);
+    });
+
+    test("{factory:'x'} vs {factory:'y'} stay distinct signatures", () => {
+      class FactoryDedupDiff {}
+
+      defineDeps(FactoryDedupDiff, [["dedup:IA", { factory: "dedup:IX" }]]);
+      defineDeps(FactoryDedupDiff, [["dedup:IA", { factory: "dedup:IY" }]]);
+
+      const rec = getDeps(FactoryDedupDiff);
+      expect(rec!.signatures).toHaveLength(2);
+    });
+
+    test("a string slot and a FactoryRef slot stay distinct", () => {
+      class FactoryVsStringCtor {}
+
+      // Same arity, same first slot; differ only in the second slot's KIND
+      // (string token vs FactoryRef). Must NOT dedup.
+      defineDeps(FactoryVsStringCtor, [["kind:IA", "kind:IFoo"]]);
+      defineDeps(FactoryVsStringCtor, [["kind:IA", { factory: "kind:IFoo" }]]);
+
+      const rec = getDeps(FactoryVsStringCtor);
+      expect(rec!.signatures).toHaveLength(2);
+    });
+  });
+
+  test("authoring a factory slot via @signature writes the expected record", () => {
+    @signature("dec:ILogger", { factory: "dec:IFoo" })
+    class DecoratedFactory {}
+
+    const rec = getDeps(DecoratedFactory);
+    expect(rec!.signatures).toHaveLength(1);
+    expect(rec!.signatures[0]).toEqual([
+      "dec:ILogger",
+      { factory: "dec:IFoo" },
+    ]);
+  });
+
+  test("authoring a factory slot via forCtor writes the expected record", () => {
+    class ForCtorFactory {}
+
+    forCtor(ForCtorFactory).signature("fc:ILogger", { factory: "fc:IFoo" });
+
+    const rec = getDeps(ForCtorFactory);
+    expect(rec!.signatures).toHaveLength(1);
+    expect(rec!.signatures[0]).toEqual(["fc:ILogger", { factory: "fc:IFoo" }]);
   });
 });

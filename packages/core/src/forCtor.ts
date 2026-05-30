@@ -1,4 +1,4 @@
-import type { Token } from "./types.js";
+import type { DepSlot } from "./types.js";
 import { defineDeps } from "./defineDeps.js";
 
 /**
@@ -7,13 +7,14 @@ import { defineDeps } from "./defineDeps.js";
  */
 export interface ForCtorBuilder {
   /**
-   * Appends one constructor signature (a positional array of Token | null) to
-   * the ctor's dependency metadata. Returns `this` for chaining.
+   * Appends one constructor signature (a positional array of DepSlot —
+   * Token | null | FactoryRef) to the ctor's dependency metadata. Returns
+   * `this` for chaining.
    *
    * Each `.signature(...)` call is one overload. Chaining two calls is
    * equivalent to stacking two `@signature` decorators.
    */
-  signature(...tokens: ReadonlyArray<Token | null>): ForCtorBuilder;
+  signature(...tokens: ReadonlyArray<DepSlot>): ForCtorBuilder;
 }
 
 /**
@@ -29,7 +30,7 @@ export interface ForCtorBuilder {
  */
 export function forCtor(ctor: Function): ForCtorBuilder {
   const builder: ForCtorBuilder = {
-    signature(...tokens: ReadonlyArray<Token | null>): ForCtorBuilder {
+    signature(...tokens: ReadonlyArray<DepSlot>): ForCtorBuilder {
       defineDeps(ctor, [tokens.slice()]);
       return builder;
     },

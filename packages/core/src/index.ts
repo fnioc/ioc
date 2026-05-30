@@ -3,6 +3,8 @@
  *
  * Exports:
  *   - `Token`          — string alias for a DI key
+ *   - `FactoryRef`     — marks a signature slot as a factory-injected parameter
+ *   - `DepSlot`        — one positional slot: Token | null | FactoryRef
  *   - `hole`           — null sentinel for caller-supplied constructor parameters
  *   - `ABI_VERSION`    — integer compatibility guard for the global WeakMap key
  *   - `DepRecord`      — shape of per-constructor metadata in the WeakMap
@@ -13,7 +15,7 @@
  *   - `forCtor`        — fluent free-function for third-party classes
  */
 
-export type { Token, DepRecord } from "./types.js";
+export type { Token, FactoryRef, DepSlot, DepRecord } from "./types.js";
 export { ABI_VERSION, hole } from "./store.js";
 export { defineDeps, getDeps } from "./defineDeps.js";
 export { signature } from "./signature.js";
