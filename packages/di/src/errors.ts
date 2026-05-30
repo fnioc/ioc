@@ -110,6 +110,33 @@ export class CircularDependencyError extends DiError {
 }
 
 /**
+ * A constructor parameter is typed as a factory of some token (a `FactoryRef`),
+ * but that token cannot be turned into a factory: either it is not registered,
+ * or it is registered as a `useValue` / `useFactory` override rather than a
+ * class. A factory injects a callable that constructs the target class on
+ * demand, so the target must be a class registration.
+ */
+export class FactoryTargetError extends DiError {
+  public constructor(
+    public readonly factoryToken: Token,
+    public readonly reason: "unregistered" | "not-a-class",
+  ) {
+    super(
+      reason === "unregistered"
+        ? `Cannot inject a factory for "${factoryToken}": no registration ` +
+            `found for it. A factory parameter (typed \`() => IFoo\`) needs ` +
+            `the target registered as a class with ` +
+            `services.add(...) before it can build instances.`
+        : `Cannot inject a factory for "${factoryToken}": it is registered ` +
+            `as a useValue/useFactory override, not a class. A factory builds ` +
+            `its target with \`new\`, so the target must be a class ` +
+            `registration. Resolve it directly instead of as a factory, or ` +
+            `register the class with services.add(...).`,
+    );
+  }
+}
+
+/**
  * Sync `dispose()` was called on a scope that owns a Promise-valued (thenable)
  * cached instance. A pending Promise cannot be disposed synchronously — the
  * caller must use `disposeAsync()`.

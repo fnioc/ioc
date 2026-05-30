@@ -12,11 +12,12 @@
 // one fail loudly instead of silently capturing it.
 
 import { getDeps } from "@fnioc/core";
-import type { DepSlot, Token } from "@fnioc/core";
+import type { DepSlot, FactoryRef, Token } from "@fnioc/core";
 
 import {
   AsyncDisposalRequiredError,
   CircularDependencyError,
+  FactoryTargetError,
   MissingMetadataError,
   MissingScopeError,
   NoSatisfiableSignatureError,
@@ -56,6 +57,18 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
     value != null &&
     (typeof value === "object" || typeof value === "function") &&
     typeof (value as { then?: unknown }).then === "function"
+  );
+}
+
+/**
+ * True when a `DepSlot` is a `FactoryRef` — a factory-injected parameter. A
+ * slot is a string token, the `null` hole sentinel, or this object form.
+ */
+function isFactoryRef(slot: DepSlot): slot is FactoryRef {
+  return (
+    slot !== null &&
+    typeof slot === "object" &&
+    typeof (slot as { factory?: unknown }).factory === "string"
   );
 }
 
@@ -258,9 +271,16 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
   }
 
   /**
-   * Constructs a class instance, resolving its constructor dependencies
-   * relative to THIS scope (the owning scope). Performs greedy signature
-   * selection over the ctor's DepRecord.
+   * Constructs a class instance on a DIRECT resolve, resolving its constructor
+   * dependencies relative to THIS scope (the owning scope). Performs greedy
+   * signature selection over the ctor's DepRecord, then fills each slot:
+   *
+   *   - a string token → resolved through this scope's chain (selection
+   *     guarantees every string-token slot here is resolvable);
+   *   - a `FactoryRef` → injected as a callable (see `makeFactory`);
+   *   - a `null` hole → there is no caller on a direct resolve, so it lands as
+   *     `undefined`. Holes are meaningfully filled only when the class is a
+   *     factory target — see `constructPartitioned`.
    */
   private construct<T>(token: Token, ctor: Ctor, stack: Token[]): T {
     const record = getDeps(ctor);
@@ -275,22 +295,145 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
     }
 
     const signature = this.selectSignature(token, ctor, record.signatures);
-    const args = signature.map((dep) =>
-      // All-token by selection — signatures containing a hole or a FactoryRef
-      // are skipped this phase (Phase 2D.2 fills holes / injects factories).
-      this.resolveWith<unknown>(dep as Token, stack),
-    );
+
+    const args = signature.map((slot) => {
+      if (isFactoryRef(slot)) {
+        // A factory-injected parameter: a callable that builds `slot.factory`'s
+        // target on demand, resolving the target's own deps relative to THIS
+        // scope (the owner) so §5.4 still holds at call time.
+        return this.makeFactory(slot);
+      }
+      if (slot === null) {
+        // A hole with no caller on a direct resolve ⇒ unfilled (`undefined`).
+        return undefined;
+      }
+      // A string token — resolve it through this scope's chain.
+      return this.resolveWith<unknown>(slot, stack);
+    });
+
+    return new ctor(...(args as never[])) as T;
+  }
+
+  /**
+   * Builds the callable injected for a `FactoryRef` parameter.
+   *
+   * The target ctor's signature is partitioned at CALL time against the live
+   * registration map: each slot that is a registered token is resolved; each
+   * slot that is an unregistered token or a `null` hole takes the next
+   * caller-supplied argument, positionally. The injected callable therefore
+   * exposes only the target's unregistered parameters, in their relative order
+   * — no Ramda-style placeholders, no leaked constructor arity.
+   *
+   * Lifetime semantics:
+   *   - A ZERO-ARG factory (the target ctor has no holes / unregistered params)
+   *     routes the build through the normal `resolve` path, so it RESPECTS the
+   *     target's registered lifetime: a singleton target yields the same
+   *     instance on every call; a transient target yields a fresh one.
+   *   - A PARAMETERIZED factory (the target has holes / unregistered params
+   *     filled per call) constructs a FRESH instance on every call and BYPASSES
+   *     the instance cache. Caller args differ per call, so caching would be
+   *     wrong — two calls with different arguments must not collapse to one
+   *     cached instance.
+   *
+   * The closure captures `this` as the owning scope. §5.4 holds at call time:
+   * the target's deps resolve relative to the scope that owns the
+   * factory-holding instance, exactly as a direct resolve would — so a factory
+   * captured by a singleton that tries to build a request-scoped target still
+   * throws `MissingScopeError` when invoked.
+   */
+  private makeFactory(ref: FactoryRef): (...callArgs: unknown[]) => unknown {
+    const owningScope = this;
+    const target = this.lookup(ref.factory);
+
+    if (target === undefined) {
+      throw new FactoryTargetError(ref.factory, "unregistered");
+    }
+    // A factory builds its target with `new` — the target must be a class
+    // registration, not a useValue/useFactory override.
+    if (target.kind !== "class") {
+      throw new FactoryTargetError(ref.factory, "not-a-class");
+    }
+
+    const targetCtor = target.ctor;
+    const record = getDeps(targetCtor);
+    const targetSignature =
+      record === undefined || record.signatures.length === 0
+        ? undefined
+        : owningScope.selectTargetSignature(record.signatures);
+
+    // A target slot is caller-supplied when it is a hole or a string token NOT
+    // in the live registration map (a nested FactoryRef is itself injected, not
+    // caller-supplied). If the target has any such slot the factory is
+    // parameterized; otherwise it is a bare zero-arg factory.
+    const parameterized =
+      targetSignature !== undefined &&
+      targetSignature.some(
+        (slot) =>
+          slot === null || (!isFactoryRef(slot) && !owningScope.isResolvable(slot)),
+      );
+
+    if (!parameterized) {
+      return () => owningScope.resolveWith<unknown>(ref.factory, []);
+    }
+
+    // Parameterized factory: construct a fresh instance each call, partitioning
+    // the target signature against the live registration map and threading the
+    // caller args into the holes / unregistered slots. A fresh cycle stack per
+    // call — the factory runs outside the resolve that created it.
+    return (...callArgs: unknown[]) =>
+      owningScope.constructPartitioned(
+        ref.factory,
+        targetCtor,
+        targetSignature as ReadonlyArray<DepSlot>,
+        callArgs,
+      );
+  }
+
+  /**
+   * Constructs a factory target, partitioning its already-selected signature
+   * against the live registration map: a registered token is resolved; an
+   * unregistered token or a `null` hole takes the next caller-supplied argument
+   * positionally. Always a fresh instance — a parameterized factory bypasses
+   * the instance cache (caller args differ per call). Runs on a fresh cycle
+   * stack since the factory is invoked outside the original resolve.
+   */
+  private constructPartitioned<T>(
+    token: Token,
+    ctor: Ctor,
+    signature: ReadonlyArray<DepSlot>,
+    callerArgs: readonly unknown[],
+  ): T {
+    const stack: Token[] = [];
+    let nextCallerArg = 0;
+    const args = signature.map((slot) => {
+      if (isFactoryRef(slot)) {
+        return this.makeFactory(slot);
+      }
+      // An unregistered token or a hole is caller-supplied: take the next arg.
+      if (slot === null || !this.isResolvable(slot)) {
+        return callerArgs[nextCallerArg++];
+      }
+      return this.resolveWith<unknown>(slot, stack);
+    });
     return new ctor(...(args as never[])) as T;
   }
 
   /**
    * Greedy signature selection. Scans signatures longest → shortest and returns
-   * the first DIRECTLY satisfiable one: every slot is a string token whose
-   * registration is resolvable in this (the owning) scope's chain.
+   * the first SATISFIABLE one. A slot is satisfiable when it is:
    *
-   * - A `null` hole or a `FactoryRef` slot is NOT directly satisfiable this
-   *   phase — signatures containing either are skipped (Phase 2D.2 fills holes
-   *   and injects factories).
+   *   - a `null` hole — always satisfiable; filled by a caller arg (a direct
+   *     resolve supplies nothing, so it lands as `undefined`);
+   *   - a `FactoryRef` — always satisfiable; injected as a callable. The
+   *     factory's target need not be resolvable for the slot to count (an
+   *     unregistered target surfaces a `FactoryTargetError` when the factory is
+   *     built / called, not here); or
+   *   - a string token whose registration is resolvable in this (the owning)
+   *     scope's chain.
+   *
+   * Only string tokens can be UNsatisfiable. A signature is satisfiable iff
+   * every string-token slot is resolvable.
+   *
    * - Equal-arity ties break by registration order (the order signatures appear
    *   in the DepRecord), which `sort`'s stability preserves.
    * - None satisfiable ⇒ throw naming the unsatisfiable tokens.
@@ -312,23 +455,40 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
 
     const unsatisfiable = new Set<Token>();
     for (const { sig } of ordered) {
-      // Phase 2D.2: a hole (null) becomes a caller-supplied param and a
-      // FactoryRef becomes an injected factory. Until then, a signature with
-      // either kind of slot is not directly satisfiable — skip it. Only an
-      // all-string-token signature is directly resolvable this phase.
-      if (sig.some((dep) => typeof dep !== "string")) continue;
-
       let satisfiable = true;
-      for (const dep of sig) {
-        if (!this.isResolvable(dep as Token)) {
+      for (const slot of sig) {
+        // A hole or a FactoryRef is always satisfiable — only an unresolvable
+        // string token blocks a signature.
+        if (slot === null || isFactoryRef(slot)) continue;
+        if (!this.isResolvable(slot)) {
           satisfiable = false;
-          unsatisfiable.add(dep as Token);
+          unsatisfiable.add(slot);
         }
       }
       if (satisfiable) return sig;
     }
 
     throw new NoSatisfiableSignatureError(token, ctor.name, [...unsatisfiable]);
+  }
+
+  /**
+   * Greedy signature selection for a FACTORY TARGET. Unlike `selectSignature`,
+   * there is no resolvability gate: a target's unregistered tokens are not
+   * unsatisfiable — they are the factory's caller-supplied parameters. So the
+   * choice is purely the longest signature, equal-arity ties broken by
+   * registration order (`sort` stability). Always returns a signature (the
+   * caller has already checked `signatures.length > 0`).
+   */
+  private selectTargetSignature(
+    signatures: ReadonlyArray<ReadonlyArray<DepSlot>>,
+  ): ReadonlyArray<DepSlot> {
+    return signatures
+      .map((sig, index) => ({ sig, index }))
+      .sort((a, b) =>
+        b.sig.length !== a.sig.length
+          ? b.sig.length - a.sig.length
+          : a.index - b.index,
+      )[0]!.sig;
   }
 
   /** True when `token` has a registration somewhere in this scope's chain. */
