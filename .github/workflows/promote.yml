@@ -1,0 +1,37 @@
+name: promote
+
+# Promote the current @next build of each package to @latest. OIDC trusted
+# publishing covers `npm publish` but not `npm dist-tag`, so this authenticates
+# with a token (NPM_TOKEN secret).
+on:
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: "Space-separated packages to promote"
+        required: false
+        default: "@fnioc/core @fnioc/di @fnioc/transformer"
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          registry-url: https://registry.npmjs.org
+      - name: Promote @next → @latest
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          for pkg in ${{ inputs.packages }}; do
+            ver=$(npm dist-tag ls "$pkg" | sed -n 's/^next: //p')
+            if [ -z "$ver" ]; then
+              echo "::error::$pkg has no @next dist-tag — nothing to promote"
+              exit 1
+            fi
+            echo "Promoting $pkg@$ver -> latest"
+            npm dist-tag add "$pkg@$ver" latest
+          done
+          echo "Result:"
+          for pkg in ${{ inputs.packages }}; do npm dist-tag ls "$pkg"; done

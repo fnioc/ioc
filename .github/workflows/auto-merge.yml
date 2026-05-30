@@ -4,6 +4,10 @@ name: auto-merge
 # Branch protection on main requires the `verify` check to be green, so the
 # actual merge happens when CI is green, not immediately.
 #
+# release-please PRs (`release-please--*` head branches) are intentionally
+# EXCLUDED: they're the @next release trigger and are merged deliberately at
+# wrap-up, not auto-merged. They stand open and accumulate until then.
+#
 # This workflow itself is NOT a required status check — its success isn't a
 # gate; it just registers intent to merge. If it fails (transient network),
 # the PR is unblocked but auto-merge isn't enabled, and the author can enable
@@ -19,7 +23,7 @@ permissions:
 
 jobs:
   enable-auto-merge:
-    if: github.event.pull_request.draft == false
+    if: github.event.pull_request.draft == false && !startsWith(github.head_ref, 'release-please--')
     runs-on: ubuntu-latest
     steps:
       - name: Enable auto-merge (squash)
