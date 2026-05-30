@@ -1,8 +1,30 @@
 import { test, expect, describe } from "bun:test";
 import { transform, fixture, type VirtualFiles } from "./harness.js";
+import { nameof } from "../src/nameof.js";
 
 // `nameof<T>()` rewriting (PRD §8): a `nameof<IFoo>()` call in source is
 // replaced by its string token at compile time.
+
+describe("nameof<T>() runtime body (transformer absent)", () => {
+  test("throws a tight, instructive message naming the plugin + how to add it", () => {
+    // The runtime body only runs when the transformer did not rewrite the call.
+    expect(() => nameof<unknown>()).toThrow(
+      'nameof<T>() requires the @fnioc/transformer plugin. Add { "transform": ' +
+        '"@fnioc/transformer" } to your tsconfig "plugins", or pass a token string.',
+    );
+    let message = "";
+    try {
+      nameof<unknown>();
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    // Instructive, short, and free of "lowering" jargon.
+    expect(message).toContain("@fnioc/transformer plugin");
+    expect(message).toContain("plugins");
+    expect(message.toLowerCase()).not.toContain("lower");
+    expect(message.split("\n").length).toBe(1);
+  });
+});
 
 describe("nameof<T>() rewriting", () => {
   test("rewrites nameof<IFoo>() to the app-internal token", () => {
