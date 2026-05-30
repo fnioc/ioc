@@ -22,8 +22,24 @@ import type {
  * compile-time captive-misconfiguration guard at the registration site.
  */
 export interface AddBuilder<Scopes extends string> {
-  /** Attaches the lifetime tag. Must name a declared scope. */
-  as<S extends Scopes>(scope: S): void;
+  /**
+   * Attaches the lifetime tag. Must name a declared scope.
+   *
+   * Two call shapes, by design (PRD §7):
+   *   - AUTHORED   `.as<"singleton">()` — the scope name is a TYPE argument; the
+   *     `S extends Scopes` bound is the compile-time captive-misconfiguration
+   *     guard. No value argument is passed; this form is never executed (the
+   *     transformer rewrites it before it runs).
+   *   - LOWERED    `.as("singleton")` — the transformer rewrites the type
+   *     argument to a value argument. This is the form the engine executes; the
+   *     runtime reads the tag from the value arg.
+   *
+   * `scope` is therefore OPTIONAL at the type level: the authored form supplies
+   * it as a type arg only, the lowered form as a value. A bare `.as()` with no
+   * type arg leaves `S = Scopes` and is a degenerate (untagged) call — use the
+   * type arg.
+   */
+  as<S extends Scopes>(scope?: S): void;
 }
 
 /**
@@ -83,7 +99,12 @@ export class DiBuilder<Scopes extends string = string> {
     const token = tokenOrCtor;
     const registrations = this.registrations;
     return {
-      as<S extends Scopes>(scope: S): void {
+      as<S extends Scopes>(scope?: S): void {
+        // The lowered form always passes a value arg; the authored type-arg-only
+        // form never executes (the transformer rewrites it first). A no-arg call
+        // at runtime would leave the registration transient — guard so it is a
+        // no-op rather than overwriting the tag with `undefined`.
+        if (scope === undefined) return;
         registrations.set(token, { ...registration, tag: scope });
       },
     };
