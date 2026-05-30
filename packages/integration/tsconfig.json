@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["bun"],
+    // Integration tests cross a dynamic-module-load boundary (`import()` of the
+    // transformer-compiled output) and index token maps heavily. Relaxing
+    // `noUncheckedIndexedAccess` here keeps the assertions readable without
+    // `!`-littering every token lookup; the production packages keep it on.
+    "noUncheckedIndexedAccess": false
+  },
+  "include": ["test/**/*"],
+  "references": [{ "path": "../core" }, { "path": "../di" }, { "path": "../transformer" }]
+}
