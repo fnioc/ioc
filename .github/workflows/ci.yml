@@ -220,6 +220,31 @@ jobs:
             echo "::endgroup::"
           done
 
+      # Strip the dev-only `bun` export condition before publishing. Each package
+      # publishes dist-only (files: ["dist"]), but its committed `exports["."]`
+      # carries a `bun` condition pointing at `./src/index.ts` so the local dev
+      # loop resolves TypeScript source directly. That src path is NOT in the
+      # tarball, so the `bun` condition would dangle for any consumer resolving
+      # under the `bun` runtime. Delete it only in the runner tree, right before
+      # `npm publish`; the committed package.json keeps `bun` for the dev loop.
+      # `jq 'del(.exports["."].bun)'` preserves the types/import/default
+      # conditions (all dist-pointing).
+      - name: Strip dev-only `bun` export condition before publish
+        if: ${{ steps.release.outputs.releases_created == 'true' }}
+        env:
+          SORTED: ${{ steps.sorted.outputs.sorted }}
+        run: |
+          set -euo pipefail
+          echo "$SORTED" | jq -r '.[]' | while read -r pkg_path; do
+            pkg_json="$pkg_path/package.json"
+            echo "::group::Stripping bun export condition in $pkg_json"
+            tmp=$(mktemp)
+            jq 'del(.exports["."].bun)' "$pkg_json" > "$tmp"
+            mv "$tmp" "$pkg_json"
+            jq '.exports' "$pkg_json"
+            echo "::endgroup::"
+          done
+
       # Refresh bun.lock against the freshly-bumped package.jsons. release-please
       # bumps package.json but not bun.lock; re-syncing keeps the runner tree
       # consistent. Not committed back (would re-trigger this job).
