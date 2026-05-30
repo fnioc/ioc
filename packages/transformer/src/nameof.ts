@@ -21,9 +21,8 @@
 export function nameof<T>(): string {
   void (0 as unknown as T);
   throw new Error(
-    "nameof<T>() was called without the @fnioc/transformer ts-patch plugin. " +
-      "Add it to your tsconfig `plugins` (see @fnioc/transformer README), or " +
-      "use a hand-authored token string instead.",
+    'nameof<T>() requires the @fnioc/transformer plugin. Add { "transform": ' +
+      '"@fnioc/transformer" } to your tsconfig "plugins", or pass a token string.',
   );
 }
 

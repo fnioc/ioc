@@ -105,6 +105,24 @@ export function tokenForType(type: ts.Type, ctx: TokenContext): TokenResult {
 }
 
 /**
+ * The token for an inline function type's RETURN type — the factory's product.
+ * Used for factory params (`() => IFoo` → token for `IFoo`). Unwraps a single
+ * `Promise<X>` layer exactly as the normal path does (an `async () => IFoo`
+ * factory returns `Promise<IFoo>`). Returns `undefined` when the return type has
+ * no derivable token (e.g. a primitive return), in which case the caller treats
+ * the param as a normal hole rather than a factory.
+ */
+export function tokenForReturnType(
+  signature: ts.Signature,
+  ctx: TokenContext,
+): string | undefined {
+  const returnType = ctx.checker.getReturnTypeOfSignature(signature);
+  const unwrapped = unwrapPromise(returnType, ctx.checker);
+  if (isHoleType(unwrapped)) return undefined;
+  return deriveToken(unwrapped, ctx);
+}
+
+/**
  * Derive the token string for a (already Promise-unwrapped, non-primitive)
  * type. Returns `undefined` when no declaration with a name is reachable (an
  * anonymous / structural type with no symbol — treated as a hole by the caller).

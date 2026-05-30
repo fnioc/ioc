@@ -26,6 +26,12 @@ export const enum DiagnosticCode {
   AlreadyAnnotated = 990001,
   /** A registration's concrete argument could not be statically resolved. */
   DynamicRegistration = 990002,
+  /** A factory param's call signature doesn't match the target ctor's holes. */
+  FactorySignatureMismatch = 990003,
+  /** A bare dep that should be declared `Promise<T>` (async-registered value). */
+  AsyncMismatch = 990004,
+  /** Two overload signatures of equal length for the same constructor. */
+  OverloadAmbiguity = 990005,
 }
 
 const SOURCE = "@fnioc/transformer";
