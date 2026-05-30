@@ -21,16 +21,13 @@ job `if:` skips any PR whose head branch starts with `release-please--`. So
 release PRs are *not* auto-merged; they stand open and accumulate until
 deliberately merged at wrap-up.
 
-## Wrap-up cuts the `@next` release
+## Merging the release PR cuts the `@next` release
 
-At `/getitdone`, **merge the standing release PR.** It goes through the merge
-queue, release-please cuts the per-package tag(s) + GitHub Release, and `ci.yml`
-publishes the released packages to `@next`. Then monitor the full chain: merge →
-release-please tag/Release → `@next` publish.
-
-This is a deliberate deviation from `/getitdone`'s default "don't merge shared
-PRs" — merging the release PR is project policy here, because it's the release
-trigger and nothing else cuts the `@next` build.
+The standing release PR is the release trigger. Merging it sends it through the
+merge queue; release-please cuts the per-package tag(s) + GitHub Release, and
+`ci.yml` publishes the released packages to `@next`. Nothing else cuts a `@next`
+build — and because release PRs are excluded from auto-merge (above), cutting a
+release is always a deliberate manual merge, never automatic.
 
 ## main is merge-queue governed
 
