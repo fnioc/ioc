@@ -58,11 +58,15 @@ jobs:
   # Runs on every push to main. release-please-action either opens/updates a
   # per-package release PR or, when one is merged, tags the release and surfaces
   # the released paths via `paths_released`. For each released path we build and
-  # publish that package to npm at the default `@latest` dist-tag.
+  # publish that package to npm at the `@next` dist-tag.
+  #
+  # Two-stage publish: every release publishes to `@next` automatically here.
+  # Promotion to `@latest` is a separate, manual step — see promote.yml. A
+  # release never lands on `@latest` automatically.
   #
   # Flow: feature PR merges → release-please opens/updates a release PR →
-  # release PR merges (auto-merge gated on `verify`) → this job fires again and
-  # publishes the just-released packages.
+  # release PR merges (gated on `verify` via the merge queue) → this job fires
+  # again and publishes the just-released packages to `@next`.
   #
   # Auth: npm trusted-publisher OIDC (id-token: write). No NPM_TOKEN secret.
   # Trusted-publisher config on npmjs.com pins provider=GitHub Actions,
@@ -119,6 +123,12 @@ jobs:
         with:
           node-version: lts/*
           registry-url: https://registry.npmjs.org
+
+      # OIDC trusted publishing requires npm >= 11.5.1, but setup-node ships
+      # npm 10.x. Upgrade to latest before any publish step runs.
+      - name: Upgrade npm for OIDC trusted publishing
+        if: ${{ steps.release.outputs.releases_created == 'true' }}
+        run: npm install -g npm@latest
 
       - uses: jdx/mise-action@v2
         if: ${{ steps.release.outputs.releases_created == 'true' }}
@@ -303,18 +313,18 @@ jobs:
             exit 1
           fi
 
-      # Publish each package to the default `@latest` dist-tag, in topo order.
-      # --provenance attaches an OIDC-signed provenance attestation; the same
-      # OIDC token authenticates the publish via the trusted-publisher config.
+      # Publish each package to the `@next` dist-tag, in topo order. `@latest` is
+      # promoted separately by promote.yml (manual). --provenance attaches an
+      # OIDC-signed provenance attestation; the same OIDC token authenticates the
+      # publish via the trusted-publisher config (no token needed).
       - name: Publish released packages
         if: ${{ steps.release.outputs.releases_created == 'true' }}
         env:
           SORTED: ${{ steps.sorted.outputs.sorted }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           echo "$SORTED" | jq -r '.[]' | while read -r pkg_path; do
             echo "::group::Publishing $pkg_path"
-            (cd "$pkg_path" && npm publish --provenance)
+            (cd "$pkg_path" && npm publish --provenance --tag next)
             echo "::endgroup::"
           done
