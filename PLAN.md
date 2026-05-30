@@ -21,7 +21,7 @@
 
 | Phase / Track | Status | Notes |
 |---|---|---|
-| **Phase 0** — Scaffold (main checkout) | 🟡 | In progress — local scaffold
+| **Phase 0** — Scaffold (main checkout) | 🟡 | Scaffold pushed to `fnioc/ioc`; verifying first green CI run
 | **Phase 1** — `@fnioc/core` (ABI + WeakMap + authoring surfaces) | ⬜ | BARRIER: di + transformer both block on this |
 | **Phase 2A** — `@fnioc/di` runtime | ⬜ | Parallel with 2B + 2C after Phase 1 |
 | **Phase 2B** — `@fnioc/transformer` | ⬜ | Parallel with 2A + 2C after Phase 1 |
@@ -383,6 +383,7 @@ Per user prefs: whenever a branch is pushed, a PR is opened, or a workflow is tr
 *(Append-only. Newest entries at the bottom.)*
 
 - **2026-05-30** — Design locked (see `ioc-locked-design.md`). PRD drafted to `PRD.md`. PLAN drafted to `PLAN.md`. Repo directory exists at `~/src/ioc@rhombus-toolkit` (empty; no git init yet). All phases at ⬜.
+- **2026-05-30** — Phase 0 scaffold complete locally: Bun + Moon + release-please, three package skeletons, real `tsc -b` → `dist` build, smoke tests. `moon run :lint :test :build` green locally. Repo created at `fnioc/ioc`, pushed to `main`; squash auto-merge + branch protection (require `verify`) enabled; publish job no-ops cleanly until `AUTOMERGE_PAT` is set. First CI run hit moon's genesis single-commit `HEAD~1` baseline error (no parent commit) — resolved by this second commit; every future push sits on existing history so it won't recur. **Blocker:** bw Vault server `hass4150.duckdns.org` unreachable → npm god token + `AUTOMERGE_PAT` retrieval deferred (only needed at Phase 4 publish).
 
 ---
 
