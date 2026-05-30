@@ -1,14 +1,8 @@
 {
   "name": "@fnioc/core",
-  "version": "1.0.0",
+  "version": "0.0.0",
   "description": "ioc substrate: the dependency-metadata ABI, the global-symbol WeakMap, defineDeps, and the @signature / forCtor authoring surfaces.",
-  "keywords": [
-    "dependency-injection",
-    "di",
-    "ioc",
-    "typescript",
-    "abi"
-  ],
+  "keywords": ["dependency-injection", "di", "ioc", "typescript", "abi"],
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -26,9 +20,7 @@
       "default": "./dist/index.js"
     }
   },
-  "files": [
-    "dist"
-  ],
+  "files": ["dist"],
   "scripts": {
     "build": "tsc -b",
     "test": "bun test",
