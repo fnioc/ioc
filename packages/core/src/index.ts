@@ -1,14 +1,21 @@
-// @fnioc/core — the ioc substrate and dependency-metadata ABI.
-//
-// Full implementation lands in Phase 1 (see PLAN.md): the global-symbol
-// WeakMap, `defineDeps`, the `@signature` decorator, the `forCtor` fluent
-// API, the `Token` type, and the `hole` sentinel. For now this exports only
-// the ABI version constant so the package has a real, importable surface and
-// the cross-package wiring can be smoke-tested.
-
 /**
- * Coarse runtime-compatibility guard for the dependency-metadata wire format.
- * Bumped only on an actual ABI break — far rarer than a `@fnioc/core` semver
- * major. Also version-suffixes the global-symbol WeakMap key.
+ * @fnioc/core — the immutable substrate and dependency-metadata ABI.
+ *
+ * Exports:
+ *   - `Token`          — string alias for a DI key
+ *   - `hole`           — null sentinel for caller-supplied constructor parameters
+ *   - `ABI_VERSION`    — integer compatibility guard for the global WeakMap key
+ *   - `DepRecord`      — shape of per-constructor metadata in the WeakMap
+ *   - `defineDeps`     — the single write path into the global WeakMap
+ *   - `getDeps`        — the read path (consumed by @fnioc/di)
+ *   - `signature`      — TC39 class decorator factory
+ *   - `ForCtorBuilder` — return type of `forCtor`
+ *   - `forCtor`        — fluent free-function for third-party classes
  */
-export const ABI_VERSION = 1;
+
+export type { Token, DepRecord } from "./types.js";
+export { ABI_VERSION, hole } from "./store.js";
+export { defineDeps, getDeps } from "./defineDeps.js";
+export { signature } from "./signature.js";
+export type { ForCtorBuilder } from "./forCtor.js";
+export { forCtor } from "./forCtor.js";
