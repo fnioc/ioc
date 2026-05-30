@@ -44,12 +44,14 @@ export interface LowerContext extends CheckContext {
   readonly forCtorAnnotated: ReadonlySet<ts.Symbol>;
   /**
    * Mint a fresh identifier for an emitted `defineDeps(...)` call. Each call
-   * gets its OWN identifier node (a node may appear once in the tree), but all
-   * are linked to the same injected import specifier so the downstream module
-   * transformer rewrites them consistently with the import in BOTH ESM (bare
-   * `defineDeps(...)`) and CJS (`core_1.defineDeps(...)`) output. A plain
-   * `createIdentifier` would dangle in CJS, where the named import becomes a
-   * namespace property access.
+   * gets its OWN identifier node (a node may appear once in the tree). The
+   * lowered form targets ESM output, where a bare `defineDeps(...)` call paired
+   * with the injected named import is exactly correct. CJS output is NOT
+   * supported: TypeScript's module transformer rewrites a named import to a
+   * namespace property access (`core_1.defineDeps`) only for references it
+   * resolved through the binder, and these synthesized calls were never bound,
+   * so they would dangle. See transformer.ts (`injectDefineDepsImport`) for the
+   * full caveat — until that is resolved, compile to ESM.
    */
   makeDefineDepsRef(): ts.Identifier;
   /** Set true whenever a registration is lowered (so we inject the import). */
