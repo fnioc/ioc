@@ -1,0 +1,33 @@
+# https://moonrepo.dev/docs/config/project
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+layer: 'library'
+language: 'typescript'
+
+# Build-time only. Shares the ABI/token format from @fnioc/core (project
+# reference); does NOT depend on @fnioc/di.
+dependsOn:
+  - 'core'
+
+tasks:
+  build:
+    command: 'bun run build'
+    deps:
+      - 'core:build'
+    inputs:
+      - 'src/**/*'
+      - 'tsconfig.json'
+      - '/tsconfig.base.json'
+    outputs:
+      - 'dist'
+  test:
+    command: 'bun run test'
+    inputs:
+      - 'src/**/*'
+      - 'test/**/*'
+      - 'tsconfig.json'
+      - 'package.json'
+  lint:
+    command: 'bun run lint'
+    options:
+      cache: false

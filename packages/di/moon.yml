@@ -1,0 +1,34 @@
+# https://moonrepo.dev/docs/config/project
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+layer: 'library'
+language: 'typescript'
+
+# @fnioc/di builds against @fnioc/core's emitted types (project reference).
+# moon must build core first; `deps: ['core:build']` serializes that so di's
+# `tsc -b` never races core:build over packages/core/dist.
+dependsOn:
+  - 'core'
+
+tasks:
+  build:
+    command: 'bun run build'
+    deps:
+      - 'core:build'
+    inputs:
+      - 'src/**/*'
+      - 'tsconfig.json'
+      - '/tsconfig.base.json'
+    outputs:
+      - 'dist'
+  test:
+    command: 'bun run test'
+    inputs:
+      - 'src/**/*'
+      - 'test/**/*'
+      - 'tsconfig.json'
+      - 'package.json'
+  lint:
+    command: 'bun run lint'
+    options:
+      cache: false

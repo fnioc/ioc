@@ -1,0 +1,9 @@
+#!/usr/bin/env sh
+# Fast pre-commit gate. Runs moon's :lint task across affected packages.
+# Skipped silently if moon isn't on PATH (e.g. a non-mise shell) so commits
+# never hard-fail on a missing toolchain. Real linting expands as packages
+# grow; today :lint is a typecheck stub (the real typecheck runs in :build).
+set -e
+if command -v moon >/dev/null 2>&1; then
+  moon run :lint
+fi

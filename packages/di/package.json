@@ -1,0 +1,39 @@
+{
+  "name": "@fnioc/di",
+  "version": "0.0.0",
+  "description": "The ioc runtime engine: DiBuilder, scopes, resolution, captive-dependency protection, factories, and native disposal.",
+  "keywords": ["dependency-injection", "di", "ioc", "typescript", "scope", "container"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fnioc/ioc.git",
+    "directory": "packages/di"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "bun": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "bun test",
+    "lint": "echo 'lint: typecheck runs in build (tsc -b)' && exit 0"
+  },
+  "peerDependencies": {
+    "@fnioc/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@fnioc/core": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

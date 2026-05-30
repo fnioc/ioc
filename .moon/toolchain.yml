@@ -1,0 +1,15 @@
+# https://moonrepo.dev/docs/config/toolchain
+#
+# Bun is pinned at the system level via mise.toml. moon's `bun` toolchain
+# plugin handles dependency installation, lockfile awareness, and task
+# scheduling. moon's `javascript` toolchain is enabled alongside `bun`
+# because `bun` is a JavaScript runtime — moon needs both to understand
+# package.json semantics (workspaces, deps) and to drive the JS-flavoured
+# task runner. Source of truth for tool versions stays in mise.toml.
+$schema: 'https://moonrepo.dev/schemas/toolchain.json'
+
+javascript:
+  packageManager: 'bun'
+
+bun:
+  version: null

@@ -1,0 +1,8 @@
+# Monorepo-root Bun config.
+#
+# Bun reads bunfig.toml from the invocation directory only — there's no
+# ancestor walk and no per-package merge. Kept minimal here; add a per-package
+# bunfig.toml if a package ever needs a test preload or install override.
+[install]
+# Resolve workspace cross-deps from the local tree, not the registry.
+linkWorkspacePackages = true

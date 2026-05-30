@@ -1,0 +1,13 @@
+# Mise config — pin Bun + moon, plus the pre-commit hook installer.
+# https://mise.jdx.dev/configuration.html
+#
+# Auto-install the pre-commit hook on directory entry. Idempotent (git
+# overwrites the same value on each fire); skipped silently if mise isn't
+# active. Non-mise users: run `git config core.hooksPath .githooks` once.
+[hooks]
+enter = "git config core.hooksPath .githooks"
+
+[tools]
+bun = "latest"
+# moon's task runner — drives build/test/lint across the workspace.
+"aqua:moonrepo/moon" = "latest"

@@ -1,0 +1,294 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  merge_group:
+
+# On PRs and merge queue: cancel stale runs when new commits arrive.
+# On push to main: never cancel — a publish mid-flight must complete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+
+jobs:
+
+  # ── Verify ────────────────────────────────────────────────────────────────
+  # Make this job a required status check on main in branch protection settings.
+  #
+  # Toolchain: Bun (runtime + package manager + test runner) and moon (task
+  # orchestration). Both pinned in mise.toml — mise-action installs whatever
+  # mise.toml asks for, keeping one source of truth between local dev and CI.
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout@v4 intermittently fails with
+      # `fatal: could not read Username for 'https://github.com'`. Three-attempt
+      # retry absorbs the flake; the final attempt has no continue-on-error so a
+      # real failure still fails the job.
+      - uses: actions/checkout@v4
+        id: checkout-1
+        continue-on-error: true
+        with:
+          # moon resolves a touched-files baseline against the default branch
+          # for incremental task scheduling. Without fetching it, moon errors
+          # with `fatal: ambiguous argument 'main': unknown revision`.
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        if: steps.checkout-1.outcome == 'failure'
+        id: checkout-2
+        continue-on-error: true
+        with:
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        if: steps.checkout-1.outcome == 'failure' && steps.checkout-2.outcome == 'failure'
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@v2
+        with:
+          experimental: true
+      - run: bun install --frozen-lockfile
+      - run: moon run :lint
+      - run: moon run :test
+      - run: moon run :build
+
+  # ── Publish ───────────────────────────────────────────────────────────────
+  # Runs on every push to main. release-please-action either opens/updates a
+  # per-package release PR or, when one is merged, tags the release and surfaces
+  # the released paths via `paths_released`. For each released path we build and
+  # publish that package to npm at the default `@latest` dist-tag.
+  #
+  # Flow: feature PR merges → release-please opens/updates a release PR →
+  # release PR merges (auto-merge gated on `verify`) → this job fires again and
+  # publishes the just-released packages.
+  #
+  # Auth: npm trusted-publisher OIDC (id-token: write). No NPM_TOKEN secret.
+  # Trusted-publisher config on npmjs.com pins provider=GitHub Actions,
+  # repo=fnioc/ioc, workflow=ci.yml — so this file must stay named ci.yml.
+  publish:
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write       # release-please creates tags + GitHub releases
+      pull-requests: write  # release-please opens/updates release PRs
+      id-token: write       # OIDC — npm trusted-publisher auth + provenance
+    steps:
+      # The release-please + publish chain needs AUTOMERGE_PAT. Until that
+      # secret is set, no-op cleanly with a notice instead of failing CI red —
+      # the moment the PAT lands, releases flow with no further change.
+      - name: Detect release automation token
+        id: token_check
+        env:
+          AUTOMERGE_PAT: ${{ secrets.AUTOMERGE_PAT }}
+        run: |
+          if [ -n "$AUTOMERGE_PAT" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::AUTOMERGE_PAT not set — skipping release-please/publish. Set the secret to enable releases."
+          fi
+
+      - uses: googleapis/release-please-action@v4
+        id: release
+        if: steps.token_check.outputs.present == 'true'
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          # PAT (not GITHUB_TOKEN) so release-please's PRs fire downstream
+          # workflow events (auto-merge.yml, CI). PRs opened by GITHUB_TOKEN are
+          # suppressed from triggering workflows — that would leave release PRs
+          # sitting open forever waiting for a `verify` run that never starts.
+          token: ${{ secrets.AUTOMERGE_PAT }}
+
+      - uses: actions/checkout@v4
+        if: ${{ steps.release.outputs.releases_created == 'true' }}
+        id: checkout-1
+        continue-on-error: true
+      - uses: actions/checkout@v4
+        if: ${{ steps.release.outputs.releases_created == 'true' && steps.checkout-1.outcome == 'failure' }}
+        id: checkout-2
+        continue-on-error: true
+      - uses: actions/checkout@v4
+        if: ${{ steps.release.outputs.releases_created == 'true' && steps.checkout-1.outcome == 'failure' && steps.checkout-2.outcome == 'failure' }}
+
+      - uses: actions/setup-node@v4
+        if: ${{ steps.release.outputs.releases_created == 'true' }}
+        with:
+          node-version: lts/*
+          registry-url: https://registry.npmjs.org
+
+      - uses: jdx/mise-action@v2
+        if: ${{ steps.release.outputs.releases_created == 'true' }}
+        with:
+          experimental: true
+
+      - name: Install dependencies
+        if: ${{ steps.release.outputs.releases_created == 'true' }}
+        run: bun install
+
+      # Unlike fnclaude (a Bun-run app that publishes its TS source), ioc is a
+      # library consumed under node/webpack/vite/tsc. Each package ships built
+      # JS + .d.ts from dist/. Build before publish so the tarball has dist/.
+      - name: Build all packages
+        if: ${{ steps.release.outputs.releases_created == 'true' }}
+        run: moon run :build
+
+      # Resolve Bun's `workspace:*` protocol to concrete sibling versions before
+      # publishing. npm publish does NOT rewrite `workspace:` — the literal
+      # string would ship in the tarball and break consumers. bun publish would
+      # rewrite it but lacks --provenance / OIDC trusted-publisher support
+      # (oven-sh/bun#15601). So we rewrite ourselves before `npm publish`.
+      # First, build a { name → version } map from every workspace package.json
+      # (release-please has bumped them — the release PR's merge commit IS the
+      # bump).
+      - name: Build sibling version map
+        id: siblings
+        if: ${{ steps.release.outputs.releases_created == 'true' }}
+        run: |
+          set -euo pipefail
+          map=$(jq -s 'map({(.name): .version}) | add' \
+            packages/core/package.json \
+            packages/di/package.json \
+            packages/transformer/package.json)
+          echo "Resolved siblings:"
+          echo "$map" | jq .
+          {
+            echo "map<<EOF"
+            echo "$map"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # Topo-sort `paths_released` so dependencies publish before dependents.
+      # core has no internal deps; di and transformer peer-depend on core.
+      # Publish core FIRST so a dependent never references a core version that
+      # isn't on npm yet.
+      - name: Topo-sort paths_released (dependencies first)
+        id: sorted
+        if: ${{ steps.release.outputs.releases_created == 'true' }}
+        env:
+          PATHS_RELEASED: ${{ steps.release.outputs.paths_released }}
+        run: |
+          set -euo pipefail
+          sorted=$(echo "$PATHS_RELEASED" | jq -c '
+            sort_by(if . == "packages/core" then 0 else 1 end)
+          ')
+          echo "Original order: $PATHS_RELEASED"
+          echo "Sorted order:   $sorted"
+          echo "sorted=${sorted}" >> "$GITHUB_OUTPUT"
+
+      # Translation follows Bun's documented rules:
+      #   workspace:*       → ^<version>
+      #   workspace:^       → ^<version>
+      #   workspace:~       → ~<version>
+      #   workspace:<x.y.z> → <x.y.z>
+      - name: Resolve workspace:* deps to concrete versions
+        if: ${{ steps.release.outputs.releases_created == 'true' }}
+        env:
+          SORTED: ${{ steps.sorted.outputs.sorted }}
+          SIBLINGS: ${{ steps.siblings.outputs.map }}
+        run: |
+          set -euo pipefail
+          echo "$SORTED" | jq -r '.[]' | while read -r pkg_path; do
+            pkg_json="$pkg_path/package.json"
+            echo "::group::Rewriting workspace:* deps in $pkg_json"
+            tmp=$(mktemp)
+            jq --argjson siblings "$SIBLINGS" '
+              def rewrite_deps:
+                with_entries(
+                  if (.value | type == "string" and startswith("workspace:")) then
+                    .value as $spec
+                    | .key as $dep
+                    | ($siblings[$dep]
+                        // error("no sibling version for workspace dep " + $dep)) as $sv
+                    | if   $spec == "workspace:*" then .value = "^" + $sv
+                      elif $spec == "workspace:^" then .value = "^" + $sv
+                      elif $spec == "workspace:~" then .value = "~" + $sv
+                      else .value = ($spec | sub("^workspace:"; ""))
+                      end
+                  else . end
+                );
+              (if has("dependencies")         then .dependencies         |= rewrite_deps else . end)
+              | (if has("devDependencies")      then .devDependencies      |= rewrite_deps else . end)
+              | (if has("peerDependencies")     then .peerDependencies     |= rewrite_deps else . end)
+              | (if has("optionalDependencies") then .optionalDependencies |= rewrite_deps else . end)
+            ' "$pkg_json" > "$tmp"
+            mv "$tmp" "$pkg_json"
+            jq '{name, version, dependencies, devDependencies, peerDependencies, optionalDependencies} | with_entries(select(.value != null))' "$pkg_json"
+            echo "::endgroup::"
+          done
+
+      # Refresh bun.lock against the freshly-bumped package.jsons. release-please
+      # bumps package.json but not bun.lock; re-syncing keeps the runner tree
+      # consistent. Not committed back (would re-trigger this job).
+      - name: Refresh bun.lock workspace versions
+        if: ${{ steps.release.outputs.releases_created == 'true' }}
+        run: bun install
+
+      # Invariant: after the rewrite, every sibling dep in every to-be-published
+      # package.json must resolve to a version that is either (a) about to be
+      # published earlier in this topo-sorted run, or (b) already on npm. Refuses
+      # to publish a broken chain rather than shipping it and needing a republish.
+      - name: Verify rewritten workspace deps resolve
+        if: ${{ steps.release.outputs.releases_created == 'true' }}
+        env:
+          SORTED: ${{ steps.sorted.outputs.sorted }}
+        run: |
+          set -euo pipefail
+          about_to_publish=$(echo "$SORTED" | jq -r '.[]' \
+            | while read -r p; do jq -r '.name' "$p/package.json"; done \
+            | sort -u)
+          echo "About to publish: $(echo $about_to_publish | tr '\n' ' ')"
+
+          fail=0
+          for pkg_path in $(echo "$SORTED" | jq -r '.[]'); do
+            pkg_json="$pkg_path/package.json"
+            pkg_name=$(jq -r '.name' "$pkg_json")
+            echo "::group::Verifying deps for $pkg_name ($pkg_path)"
+            while read -r dep_name dep_range; do
+              if [[ "$dep_range" == workspace:* ]]; then
+                echo "::error::$pkg_name still has unrewritten $dep_name=$dep_range after rewrite step"
+                fail=1
+                continue
+              fi
+              version=$(echo "$dep_range" | sed -E 's/^[\^~]?([0-9]+\.[0-9]+\.[0-9]+).*/\1/')
+              if echo "$about_to_publish" | grep -qx "$dep_name"; then
+                echo "  ok: $pkg_name -> $dep_name@$version (publishing earlier this run)"
+                continue
+              fi
+              if npm view "$dep_name@$version" version >/dev/null 2>&1; then
+                echo "  ok: $pkg_name -> $dep_name@$version (already on npm)"
+              else
+                echo "::error::$pkg_name depends on $dep_name@$version, which is neither in this release nor on npm. Refusing to publish."
+                fail=1
+              fi
+            done < <(jq -r '
+              [.dependencies // {}, .devDependencies // {}, .peerDependencies // {}, .optionalDependencies // {}]
+              | map(to_entries) | add
+              | .[]
+              | select(.key | IN("@fnioc/core","@fnioc/di","@fnioc/transformer"))
+              | "\(.key) \(.value)"
+            ' "$pkg_json")
+            echo "::endgroup::"
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::One or more workspace deps would not resolve. Refusing to publish."
+            exit 1
+          fi
+
+      # Publish each package to the default `@latest` dist-tag, in topo order.
+      # --provenance attaches an OIDC-signed provenance attestation; the same
+      # OIDC token authenticates the publish via the trusted-publisher config.
+      - name: Publish released packages
+        if: ${{ steps.release.outputs.releases_created == 'true' }}
+        env:
+          SORTED: ${{ steps.sorted.outputs.sorted }}
+        run: |
+          set -euo pipefail
+          echo "$SORTED" | jq -r '.[]' | while read -r pkg_path; do
+            echo "::group::Publishing $pkg_path"
+            (cd "$pkg_path" && npm publish --provenance)
+            echo "::endgroup::"
+          done

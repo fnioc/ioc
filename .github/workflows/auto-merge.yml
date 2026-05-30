@@ -1,0 +1,36 @@
+name: auto-merge
+
+# Enable auto-merge (squash) on every non-draft PR as soon as it opens.
+# Branch protection on main requires the `verify` check to be green, so the
+# actual merge happens when CI is green, not immediately.
+#
+# This workflow itself is NOT a required status check — its success isn't a
+# gate; it just registers intent to merge. If it fails (transient network),
+# the PR is unblocked but auto-merge isn't enabled, and the author can enable
+# it manually.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  enable-auto-merge:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enable auto-merge (squash)
+        env:
+          # PAT (not GITHUB_TOKEN) so the eventual merge fires downstream
+          # workflows. GitHub suppresses workflow triggers for GITHUB_TOKEN-
+          # actored events to prevent loops; that suppression would stop the
+          # post-merge `push` event from triggering the `publish` job — meaning
+          # no release would ship.
+          GH_TOKEN: ${{ secrets.AUTOMERGE_PAT }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        # --repo is required: gh otherwise tries to detect the repo from a local
+        # checkout, but this job has none and bails with "not a git repository".
+        run: gh pr merge --auto --squash --repo "$GITHUB_REPOSITORY" "$PR_NUMBER"

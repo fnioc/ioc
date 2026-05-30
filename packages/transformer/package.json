@@ -1,0 +1,41 @@
+{
+  "name": "@fnioc/transformer",
+  "version": "0.0.0",
+  "description": "The ioc ts-patch transformer: token generation, dependency extraction, registration lowering, and the factory-signature diagnostic.",
+  "keywords": ["dependency-injection", "di", "ioc", "typescript", "ts-patch", "transformer", "compiler"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fnioc/ioc.git",
+    "directory": "packages/transformer"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "bun": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -b",
+    "test": "bun test",
+    "lint": "echo 'lint: typecheck runs in build (tsc -b)' && exit 0"
+  },
+  "peerDependencies": {
+    "@fnioc/core": "workspace:*",
+    "typescript": ">=5.2"
+  },
+  "devDependencies": {
+    "@fnioc/core": "workspace:*",
+    "ts-patch": "^4.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}
