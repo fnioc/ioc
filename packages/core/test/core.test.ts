@@ -62,6 +62,64 @@ describe("global-symbol WeakMap anchor", () => {
   });
 });
 
+// ── Two-copies-share-one-WeakMap (PRD §5) ────────────────────────────────────
+//
+// A second independent copy of @fnioc/core at the same ABI_VERSION recomputes
+// `Symbol.for(`@fnioc/core:deps@${ABI_VERSION}`)` and lands on the SAME entry
+// in the global symbol registry — and therefore the SAME WeakMap. This describe
+// block simulates "copy B" by accessing globalThis via the independently-
+// recomputed key, without going through the module's exported `store` binding.
+
+describe("two-copies-share-one-WeakMap (PRD §5)", () => {
+  // "Copy B" independently derives the same key — this is the whole point of
+  // Symbol.for: any code that knows the string gets the same symbol.
+  const COPY_B_KEY = Symbol.for(`@fnioc/core:deps@${ABI_VERSION}`);
+  type RawStore = WeakMap<Function, { abi: number; signatures: unknown[][] }>;
+
+  test("copy-A write (defineDeps) is visible via copy-B direct-global read", () => {
+    // copy A: write through the public API
+    class CopyAWriteCtor {}
+    defineDeps(CopyAWriteCtor, [["share:IFoo"]]);
+
+    // copy B: read by reaching into globalThis with an independently-derived key
+    const copyBStore = (globalThis as Record<symbol, unknown>)[
+      COPY_B_KEY
+    ] as RawStore;
+    const viaGlobal = copyBStore.get(CopyAWriteCtor);
+
+    // Must be the SAME object reference (not a clone) — same WeakMap
+    expect(viaGlobal).toBe(getDeps(CopyAWriteCtor));
+    expect(viaGlobal).toBeDefined();
+    expect(viaGlobal!.abi).toBe(ABI_VERSION);
+  });
+
+  test("copy-B write (direct-global put) is visible via copy-A public read (getDeps)", () => {
+    // copy B: write directly into the shared WeakMap, bypassing the module's API
+    class CopyBWriteCtor {}
+    const copyBStore = (globalThis as Record<symbol, unknown>)[
+      COPY_B_KEY
+    ] as RawStore;
+    const fakeRecord = { abi: ABI_VERSION, signatures: [["share:IBar"]] };
+    copyBStore.set(CopyBWriteCtor, fakeRecord);
+
+    // copy A: read through the public API — must see what copy B wrote
+    const viaApi = getDeps(CopyBWriteCtor);
+    expect(viaApi).toBe(fakeRecord);
+  });
+
+  test("a different ABI version uses a separate WeakMap (version isolation)", () => {
+    const differentVersionKey = Symbol.for("@fnioc/core:deps@999");
+    const liveStore = (globalThis as Record<symbol, unknown>)[COPY_B_KEY];
+    const otherStore = (globalThis as Record<symbol, unknown>)[
+      differentVersionKey
+    ];
+
+    // The v999 slot is either absent or a distinct WeakMap — it must not be the
+    // same object as the live ABI_VERSION store.
+    expect(otherStore).not.toBe(liveStore);
+  });
+});
+
 // ── defineDeps ────────────────────────────────────────────────────────────────
 
 describe("defineDeps", () => {
