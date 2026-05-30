@@ -19,6 +19,7 @@
 import ts from "typescript";
 import { lowerStatement, type LowerContext } from "./lower.js";
 import { deriveToken, type TokenContext } from "./tokens.js";
+import { collectAsyncTokens } from "./checks.js";
 import type { DiagnosticSink } from "./diagnostics.js";
 import { NAMEOF_NAME } from "./nameof.js";
 
@@ -59,6 +60,7 @@ function transformSourceFile(
   ctx: FileContext,
 ): ts.SourceFile {
   const forCtorAnnotated = collectForCtorAnnotations(sourceFile, ctx.checker);
+  const asyncTokens = collectAsyncTokens(sourceFile, ctx.checker);
 
   // The local name every emitted `defineDeps(...)` call uses, and whether we
   // need to inject the import. When the file already imports `defineDeps`, we
@@ -75,6 +77,7 @@ function transformSourceFile(
     ...ctx,
     sourceFile,
     forCtorAnnotated,
+    asyncTokens,
     makeDefineDepsRef,
     markUsedDefineDeps() {
       usedDefineDeps = true;

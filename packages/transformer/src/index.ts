@@ -7,10 +7,9 @@
 // and the basic edge-case behaviour (already-annotated skip + info diagnostic,
 // dynamic-class no-emission).
 //
-// Phase 2D adds factory detection (`() => IFoo` ctor params becoming factory
-// markers) and the factory-signature / async-mismatch / overload-ambiguity
-// diagnostics. Those are intentionally NOT implemented here — see the
-// `// Phase 2D:` markers in `tokens.ts` and `lower.ts`.
+// Phase 2D adds factory detection (`() => IFoo` ctor params become
+// `{ factory: "<token>" }` slots) and the factory-signature / async-mismatch /
+// overload-ambiguity diagnostics (see `deps.ts` + `checks.ts`).
 
 import { ABI_VERSION } from "@fnioc/core";
 
@@ -37,9 +36,13 @@ export {
   extractSignatureFromClass,
   extractFromExpression,
   hasSignatureDecorator,
+  isFactorySlot,
   type Signature,
+  type Slot,
+  type FactorySlot,
   type ConstructorExtraction,
 } from "./deps.js";
+export { collectAsyncTokens, type CheckContext } from "./checks.js";
 export {
   DiagnosticCode,
   type Diagnostic,

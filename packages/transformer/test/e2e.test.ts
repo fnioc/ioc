@@ -44,21 +44,26 @@ beforeAll(() => {
 export interface ILogger {}
 export interface IDbConnection {}
 export interface IUserRepo {}
+export interface IWidget {}
 export class ConsoleLogger implements ILogger {}
 export class SqlUserRepo implements IUserRepo {
   constructor(log: ILogger, db: IDbConnection, table: string) {}
+}
+export class WidgetHost implements IWidget {
+  constructor(makeRepo: () => IUserRepo) {}
 }
 `,
   );
   writeFileSync(
     join(projDir, "src", "main.ts"),
     `
-import { SqlUserRepo, ConsoleLogger, ILogger, IUserRepo } from "./services.js";
+import { SqlUserRepo, ConsoleLogger, WidgetHost, ILogger, IUserRepo, IWidget } from "./services.js";
 declare const services: {
   add<I>(c: new (...a: any[]) => I): { as<S extends string>(): void };
 };
 services.add<ILogger>(ConsoleLogger).as<"singleton">();
 services.add<IUserRepo>(SqlUserRepo).as<"request">();
+services.add<IWidget>(WidgetHost).as<"singleton">();
 `,
   );
   writeFileSync(
@@ -107,6 +112,15 @@ describe("ts-patch production e2e (ESM)", () => {
     );
     expect(emitted).toContain(
       'services.add("./services/IUserRepo", SqlUserRepo).as("request");',
+    );
+
+    // An inline `() => IUserRepo` ctor param lowers to a FactoryRef slot keyed
+    // on the return type's token (PRD §7).
+    expect(emitted).toContain(
+      'defineDeps(WidgetHost, [[{ factory: "./services/IUserRepo" }]]);',
+    );
+    expect(emitted).toContain(
+      'services.add("./services/IWidget", WidgetHost).as("singleton");',
     );
   }, 30_000);
 });

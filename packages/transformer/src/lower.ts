@@ -20,15 +20,22 @@ import { deriveToken, type TokenContext } from "./tokens.js";
 import {
   extractFromExpression,
   hasSignatureDecorator,
+  isFactorySlot,
   type Signature,
+  type Slot,
 } from "./deps.js";
+import {
+  checkExtractedRegistration,
+  checkOverloads,
+  type CheckContext,
+} from "./checks.js";
 import {
   DiagnosticCode,
   info,
   type DiagnosticSink,
 } from "./diagnostics.js";
 
-export interface LowerContext extends TokenContext {
+export interface LowerContext extends CheckContext {
   readonly factory: ts.NodeFactory;
   readonly sink: DiagnosticSink;
   readonly sourceFile: ts.SourceFile;
@@ -132,6 +139,11 @@ function buildDefineDeps(
   // pattern, and the runtime owns the "has params but no metadata" error.
   if (!extraction) return undefined;
 
+  // Equal-arity overload ambiguity runs for every registration, including
+  // manually-annotated ones (overloads only ever come from stacked @signature /
+  // chained forCtor, which the annotated path below skips for emission).
+  checkOverloads(extraction.classSymbol, reg.concreteArg, ctx);
+
   // Already-annotated: a manual `@signature` / `forCtor` is authoritative.
   // Skip emission and surface an info diagnostic (never silent, never
   // double-write).
@@ -154,11 +166,10 @@ function buildDefineDeps(
     return undefined;
   }
 
-  // Phase 2D: the factory-signature diagnostic validates a registration's
-  // factory call signature (and hand-declared @signature/forCtor factory
-  // params) against the target ctor's UNREGISTERED params in order; the
-  // async-mismatch (`IDb` vs `Promise<IDb>`) and equal-arity overload-ambiguity
-  // diagnostics also belong here. None are emitted in this phase.
+  // Validate the extracted ctor where statically visible: factory call
+  // signatures against the produced ctor's unregistered params (PRD §4.5) and
+  // the bare-`IDb`-vs-`Promise<IDb>` async mismatch.
+  checkExtractedRegistration(extraction, ctx);
 
   ctx.markUsedDefineDeps();
   return defineDepsStatement(
@@ -176,13 +187,9 @@ function defineDepsStatement(
   factory: ts.NodeFactory,
   defineDepsRef: ts.Identifier,
 ): ts.Statement {
-  const tokenLiterals = signature.map((tok) =>
-    tok === null
-      ? factory.createNull()
-      : factory.createStringLiteral(tok),
-  );
+  const slotLiterals = signature.map((slot) => slotLiteral(slot, factory));
   const signatureArray = factory.createArrayLiteralExpression(
-    [factory.createArrayLiteralExpression(tokenLiterals, false)],
+    [factory.createArrayLiteralExpression(slotLiterals, false)],
     false,
   );
   const call = factory.createCallExpression(defineDepsRef, undefined, [
@@ -190,6 +197,28 @@ function defineDepsStatement(
     signatureArray,
   ]);
   return factory.createExpressionStatement(call);
+}
+
+/**
+ * Render one signature slot as its emitted literal: `null` for a hole, a string
+ * literal for a token, and a `{ factory: "<token>" }` object literal for a
+ * factory ref (the `FactoryRef` ABI shape the di runtime partitions at resolve
+ * time).
+ */
+function slotLiteral(slot: Slot, factory: ts.NodeFactory): ts.Expression {
+  if (slot === null) return factory.createNull();
+  if (isFactorySlot(slot)) {
+    return factory.createObjectLiteralExpression(
+      [
+        factory.createPropertyAssignment(
+          "factory",
+          factory.createStringLiteral(slot.factory),
+        ),
+      ],
+      false,
+    );
+  }
+  return factory.createStringLiteral(slot);
 }
 
 /**
