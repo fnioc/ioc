@@ -23,13 +23,13 @@
 |---|---|---|
 | **Phase 0** — Scaffold (main checkout) | ✅ | Green on `main`; repo + branch protection (`verify`) + squash auto-merge configured
 | **Phase 1** — `@fnioc/core` (ABI + WeakMap + authoring surfaces) | ✅ | Merged (PR #1) — 22 tests; ABI, global WeakMap, `defineDeps`/`getDeps`, `@signature`, `forCtor` |
-| **Phase 2A** — `@fnioc/di` runtime (base; no factories) | 🟡 | `feat-di` worktree (subagent) |
-| **Phase 2B** — `@fnioc/transformer` (base; no factory detection) | 🟡 | `feat-transformer` worktree (subagent) |
-| **Phase 2C** — Docs (README + API reference) | 🟡 | `feat-docs` worktree (subagent) |
-| **Phase 2D** — Factories (coordinated: core ABI + di + transformer) | ⬜ | After 2A + 2B; factory injection couples all three packages |
+| **Phase 2A** — `@fnioc/di` runtime (base; no factories) | ✅ | Merged (PR #3) — 59 tests; DiBuilder, scopes, §5.4 captive-dep rule, greedy selection, cycle detection, `useFactory`/`useValue`, native disposal, async-as-values; factory injection deferred to 2D |
+| **Phase 2B** — `@fnioc/transformer` (base; no factory detection) | ✅ | Merged (PR #4) — 28 tests + `tspc` ESM e2e; rebased onto current `main` + fixed `transformer:test` missing build-dep |
+| **Phase 2C** — Docs (README + API reference) | ✅ | Merged (PR #2) — root + 3 package advertisement READMEs |
+| **Phase 2D** — Factories (coordinated: core ABI + di + transformer) | 🟡 | 2D.1 (FactoryRef ABI slot + di type-adaptation) in flight (`feat-factory-abi`); 2D.2 di-injection ∥ 2D.3 transformer-detection fan out after 2D.1 |
 | **Phase 3** — Integration & verification | ⬜ | BARRIER: needs 2A + 2B green |
 | **Phase 4** — Packaging & publish | ⬜ | Sequential after Phase 3 |
-| **Phase 5** — Dir rename + session transfer | ⬜ | Deferred to end; keep cwd stable throughout |
+| **Phase 5** — Dir rename + session transfer | ✅ | Rename `ioc@rhombus-toolkit`→`ioc@fnioc` done early (mid-build recovery); session re-anchored |
 | **Standing** — `rhombus-toolkit/ts` issue filing | ⬜ | Ongoing; high bar for filing |
 
 ---
@@ -386,6 +386,7 @@ Per user prefs: whenever a branch is pushed, a PR is opened, or a workflow is tr
 - **2026-05-30** — Design locked (see `ioc-locked-design.md`). PRD drafted to `PRD.md`. PLAN drafted to `PLAN.md`. Repo directory exists at `~/src/ioc@rhombus-toolkit` (empty; no git init yet). All phases at ⬜.
 - **2026-05-30** — Phase 1 (`@fnioc/core`) merged via PR #1 (22 tests). **Restructured factories into a coordinated Phase 2D** (core ABI element extension for a factory descriptor + di injection + transformer detection + the §4.5 factory-signature diagnostic), to run AFTER the base di + transformer land — factory injection couples all three packages and shouldn't be crammed into the first di PR. The ABI `signatures` element type stays `Token | null` for v1 base; 2D extends it to `Token | null | FactoryRef` (still ABI v1 — pre-release, no published consumers). Dispatched Phase 2 in parallel: di base engine, transformer base, docs.
 - **2026-05-30** — Phase 0 scaffold complete locally: Bun + Moon + release-please, three package skeletons, real `tsc -b` → `dist` build, smoke tests. `moon run :lint :test :build` green locally. Repo created at `fnioc/ioc`, pushed to `main`; squash auto-merge + branch protection (require `verify`) enabled; publish job no-ops cleanly until `AUTOMERGE_PAT` is set. First CI run hit moon's genesis single-commit `HEAD~1` baseline error (no parent commit) — resolved by this second commit; every future push sits on existing history so it won't recur. **Blocker:** bw Vault server `hass4150.duckdns.org` unreachable → npm god token + `AUTOMERGE_PAT` retrieval deferred (only needed at Phase 4 publish).
+- **2026-05-30** — **Recovery + Phase 2 close-out.** Repo rename to `ioc@fnioc` confirmed; `bun install` re-linked the workspace; `main` green. **Phase 2B fixed & merged (PR #4, squash → `518e586`):** rebased `feat-transformer` (cut from stale pre-di `main`) onto current `main` — conflict-free (disjoint files) — and fixed a real `transformer:test` task-graph bug (no build dep, so on a cold checkout `tspc`'s e2e exited 1 resolving `@fnioc/core`'s `dist`; added `deps: [build, core:build]`). 28 transformer tests + `tspc` ESM e2e green; branch + worktree cleaned, remote branch deleted. **Env gotcha:** git SSH commit-signing/push runs through the Bitwarden Desktop agent — prefix git with `SSH_AUTH_SOCK=$HOME/.bitwarden-ssh-agent.sock` (agent was down briefly mid-session; came back). **Phase 2D launched:** 2D.1 (`feat-factory-abi`, in flight) extends the ABI slot `Token|null`→`Token|null|FactoryRef` (`{factory: Token}`) + di type-adaptation (skips factory/hole sigs, no injection yet) + simplified the `DiBuilder.add` plugin-required error message (user: no "lowering" jargon — "requires the @fnioc/transformer plugin"). After 2D.1 merges: **2D.2 di factory-injection ∥ 2D.3 transformer factory-detection** fan out (both need 2D.1's `FactoryRef`; 2D.3 also needs PR #4, now merged).
 
 ---
 
