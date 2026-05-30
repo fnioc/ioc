@@ -1,0 +1,36 @@
+# https://moonrepo.dev/docs/config/project
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+layer: 'application'
+language: 'typescript'
+
+# Integration verification — runs the transformer-compiled sample against the di
+# engine. The test gate needs all three packages' dist present: the tspc step
+# loads core + transformer from dist, and the lowered output is executed against
+# di's dist. `dependsOn` + per-task `deps` serialize those builds first.
+dependsOn:
+  - 'core'
+  - 'di'
+  - 'transformer'
+
+tasks:
+  test:
+    command: 'bun run test'
+    deps:
+      - 'core:build'
+      - 'di:build'
+      - 'transformer:build'
+    inputs:
+      - 'test/**/*'
+      - 'tsconfig.json'
+      - 'package.json'
+  lint:
+    command: 'bun run lint'
+    deps:
+      - 'core:build'
+      - 'di:build'
+      - 'transformer:build'
+    inputs:
+      - 'test/**/*'
+      - 'tsconfig.json'
+      - '/tsconfig.base.json'

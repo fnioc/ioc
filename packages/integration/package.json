@@ -1,0 +1,18 @@
+{
+  "name": "@fnioc/integration",
+  "private": true,
+  "version": "0.0.0",
+  "description": "End-to-end integration tests: transformer-compiled output running against the di engine, plus progressive-enhancement parity. Not published.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@fnioc/core": "workspace:*",
+    "@fnioc/di": "workspace:*",
+    "@fnioc/transformer": "workspace:*",
+    "ts-patch": "^3.3.0"
+  }
+}

@@ -23,6 +23,16 @@
         "@fnioc/core": "workspace:*",
       },
     },
+    "packages/integration": {
+      "name": "@fnioc/integration",
+      "version": "0.0.0",
+      "devDependencies": {
+        "@fnioc/core": "workspace:*",
+        "@fnioc/di": "workspace:*",
+        "@fnioc/transformer": "workspace:*",
+        "ts-patch": "^3.3.0",
+      },
+    },
     "packages/transformer": {
       "name": "@fnioc/transformer",
       "version": "0.0.0",
@@ -40,6 +50,8 @@
     "@fnioc/core": ["@fnioc/core@workspace:packages/core"],
 
     "@fnioc/di": ["@fnioc/di@workspace:packages/di"],
+
+    "@fnioc/integration": ["@fnioc/integration@workspace:packages/integration"],
 
     "@fnioc/transformer": ["@fnioc/transformer@workspace:packages/transformer"],
 
