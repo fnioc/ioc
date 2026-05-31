@@ -37,11 +37,12 @@
     "lint": "echo 'lint: typecheck runs in build (tsc -b)' && exit 0"
   },
   "peerDependencies": {
-    "@fnioc/core": "workspace:*",
+    "@fnioc/di": "workspace:^",
     "typescript": ">=5.2"
   },
   "devDependencies": {
     "@fnioc/core": "workspace:*",
+    "@fnioc/di": "workspace:*",
     "ts-patch": "^3.3.0"
   },
   "publishConfig": {
