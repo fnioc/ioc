@@ -1,9 +1,10 @@
 import { test, expect } from "bun:test";
-import { TARGET_ABI_VERSION } from "@fnioc/transformer";
+import { transform, createTransformerFactory } from "@fnioc/transformer";
 
-// Smoke test: @fnioc/transformer resolves @fnioc/core and exposes its target
-// ABI. Real coverage (token gen, dep extraction, lowering, diagnostics) lands
-// with Phase 2B.
-test("@fnioc/transformer targets the @fnioc/core ABI", () => {
-  expect(TARGET_ABI_VERSION).toBe(1);
+// Smoke test: @fnioc/transformer resolves and exposes its ts-patch entry points.
+// Real coverage (token gen, dep extraction, lowering, diagnostics) lives in the
+// sibling test files.
+test("@fnioc/transformer exposes its ts-patch entry points", () => {
+  expect(typeof transform).toBe("function");
+  expect(typeof createTransformerFactory).toBe("function");
 });
