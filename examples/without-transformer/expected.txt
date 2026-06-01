@@ -1,0 +1,11 @@
+=== @fnioc/di — without transformer ===
+greeter is a shared singleton: true
+Greeter instances built: 1
+ConsoleLogger instances built: 1
+SystemClock instances built: 1
+logged lines:
+  [2026-01-01T00:00:00Z] Hello, Ada!
+  [2026-01-01T00:00:00Z] Hello, Linus!
+request 1 id stable within scope: true (value 1)
+request 2 id is distinct: true (value 2)
+RequestId instances built: 2

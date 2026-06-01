@@ -1,0 +1,20 @@
+{
+  "name": "@fnioc-examples/without-transformer",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Runnable @fnioc/di example wired by hand — explicit tokens + manual metadata, no transformer.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "test": "node dist/main.js > /tmp/fnioc-without-transformer.out && diff -u expected.txt /tmp/fnioc-without-transformer.out",
+    "lint": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@fnioc/di": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0"
+  }
+}

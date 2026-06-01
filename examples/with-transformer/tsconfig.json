@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "outDir": "dist",
+    "rootDir": "src",
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    // The @fnioc/transformer ts-patch plugin. Active under `tspc` (the build);
+    // plain `tsc` (the lint task) ignores it and type-checks the authored form.
+    "plugins": [{ "transform": "@fnioc/transformer", "import": "transform" }]
+  },
+  "include": ["src/**/*"]
+}
