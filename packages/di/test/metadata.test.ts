@@ -18,7 +18,7 @@ describe("missing metadata", () => {
     const services = new DiBuilder<"singleton">();
     services.add(T.Service, NoDeps).as("singleton");
 
-    const instance = services.createScope("singleton").resolve<NoDeps>(
+    const instance = services.build().resolve<NoDeps>(
       T.Service,
     );
     expect(instance.ok).toBe(true);
@@ -32,7 +32,7 @@ describe("missing metadata", () => {
     const services = new DiBuilder<"singleton">();
     services.add(T.Service, NeedsParams).as("singleton");
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     expect(() => root.resolve(T.Service)).toThrow(MissingMetadataError);
   });
 
@@ -44,7 +44,7 @@ describe("missing metadata", () => {
     services.add(T.Service, WidgetService).as("singleton");
 
     try {
-      services.createScope("singleton").resolve(T.Service);
+      services.build().resolve(T.Service);
       throw new Error("expected a throw");
     } catch (err) {
       expect(err).toBeInstanceOf(MissingMetadataError);
@@ -65,7 +65,7 @@ describe("missing metadata", () => {
     services.add(T.Service, EdgeCase).as("singleton");
 
     expect(() =>
-      services.createScope("singleton").resolve(T.Service),
+      services.build().resolve(T.Service),
     ).toThrow(MissingMetadataError);
   });
 });
@@ -85,7 +85,7 @@ describe("cycle detection", () => {
     services.add(T.A, A).as("singleton");
     services.add(T.B, B).as("singleton");
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     expect(() => root.resolve(T.A)).toThrow(CircularDependencyError);
 
     try {
@@ -107,7 +107,7 @@ describe("cycle detection", () => {
     const services = new DiBuilder<"singleton">();
     services.add(T.A, SelfRef).as("singleton");
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     expect(() => root.resolve(T.A)).toThrow(CircularDependencyError);
   });
 
@@ -131,7 +131,7 @@ describe("cycle detection", () => {
     services.add(T.C, C).as("singleton");
 
     try {
-      services.createScope("singleton").resolve(T.A);
+      services.build().resolve(T.A);
       throw new Error("expected a throw");
     } catch (err) {
       const e = err as CircularDependencyError;
@@ -168,7 +168,7 @@ describe("cycle detection", () => {
     services.add(T.C, C).as("singleton");
     services.add(T.A, A).as("singleton");
 
-    const a = services.createScope("singleton").resolve<A>(T.A);
+    const a = services.build().resolve<A>(T.A);
     expect(a.b.d).toBe(a.c.d); // shared singleton D, no false cycle
   });
 });

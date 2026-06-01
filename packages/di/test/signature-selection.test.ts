@@ -36,7 +36,7 @@ describe("greedy signature selection", () => {
     services.add(T.Db, DbImpl).as("singleton");
     services.add(T.Service, Svc).as("singleton");
 
-    const svc = services.createScope("singleton").resolve<Svc>(T.Service);
+    const svc = services.build().resolve<Svc>(T.Service);
     expect(svc.args).toHaveLength(2);
     expect(svc.args[0]).toBeInstanceOf(LoggerImpl);
     expect(svc.args[1]).toBeInstanceOf(DbImpl);
@@ -60,7 +60,7 @@ describe("greedy signature selection", () => {
     // T.Db deliberately NOT registered.
     services.add(T.Service, Svc).as("singleton");
 
-    const svc = services.createScope("singleton").resolve<Svc>(T.Service);
+    const svc = services.build().resolve<Svc>(T.Service);
     expect(svc.args).toHaveLength(1);
     expect(svc.args[0]).toBeInstanceOf(LoggerImpl);
   });
@@ -84,7 +84,7 @@ describe("greedy signature selection", () => {
     services.add(T.Logger, LoggerImpl).as("singleton");
     services.add(T.Service, Svc).as("singleton");
 
-    const svc = services.createScope("singleton").resolve<Svc>(T.Service);
+    const svc = services.build().resolve<Svc>(T.Service);
     expect(svc.args).toHaveLength(2);
     expect(svc.args[0]).toBeInstanceOf(LoggerImpl);
     expect(svc.args[1]).toBeUndefined(); // hole, unfilled on a direct resolve
@@ -107,7 +107,7 @@ describe("greedy signature selection", () => {
     services.add(T.Db, DbImpl).as("singleton");
     services.add(T.Service, Svc).as("singleton");
 
-    const svc = services.createScope("singleton").resolve<Svc>(T.Service);
+    const svc = services.build().resolve<Svc>(T.Service);
     expect(svc.args).toHaveLength(1);
     // First-declared signature ([Logger]) wins the equal-arity tie.
     expect(svc.args[0]).toBeInstanceOf(LoggerImpl);
@@ -123,7 +123,7 @@ describe("greedy signature selection", () => {
     // Neither Logger nor Db registered.
     services.add(T.Service, Svc).as("singleton");
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     expect(() => root.resolve(T.Service)).toThrow(NoSatisfiableSignatureError);
 
     try {
@@ -149,7 +149,7 @@ describe("greedy signature selection", () => {
     const services = new DiBuilder<"singleton">();
     services.add(T.Service, Svc).as("singleton");
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     const svc = root.resolve<Svc>(T.Service);
     expect(svc).toBeInstanceOf(Svc);
     expect(svc.a).toBeUndefined();
@@ -165,7 +165,7 @@ describe("greedy signature selection", () => {
     const services = new DiBuilder<"singleton">();
     services.add(T.Service, Svc).as("singleton"); // Db NOT registered
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     expect(() => root.resolve(T.Service)).toThrow(NoSatisfiableSignatureError);
     try {
       root.resolve(T.Service);

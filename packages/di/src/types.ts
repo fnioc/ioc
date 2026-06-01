@@ -2,16 +2,9 @@
 // registration kinds, and the resolver-facing scope contract.
 
 import type { Token } from "@fnioc/core";
+import type { Ctor, Func } from "@rhombus-toolkit/func";
 
-/**
- * A concrete, instantiable constructor producing `I`.
- *
- * Deliberately plain `new (...) => I`, NOT `abstract new (...) => I`: the
- * container instantiates the concrete type, and an `abstract` class cannot be
- * `new`ed. Passing an abstract class to `.add()` is therefore a type error —
- * exactly the desired rejection.
- */
-export type Ctor<I = unknown> = new (...args: never[]) => I;
+export type { Ctor };
 
 /**
  * A factory override: a closure that builds the instance, given the scope it is
@@ -21,24 +14,24 @@ export type Ctor<I = unknown> = new (...args: never[]) => I;
  * Promise flows through the sync resolution channel as a value (§"Async as
  * values"). A consumer that depends on it declares `Promise<T>` and awaits.
  */
-export type Factory<T = unknown> = (scope: ResolveScope) => T;
+export type Factory<T = unknown> = Func<[scope: ResolveScope], T>;
 
 /** A class registration: a token bound to a concrete constructor. */
 export interface ClassRegistration {
   readonly kind: "class";
   readonly ctor: Ctor;
   /**
-   * The lifetime tag — the scope name that owns and caches the instance.
+   * The lifetime — the scope name that owns and caches the instance.
    * `undefined` means transient (never cached; a fresh instance per resolve).
    */
-  readonly tag: string | undefined;
+  readonly scope: string | undefined;
 }
 
 /** A `useFactory` override registration. */
 export interface FactoryRegistration {
   readonly kind: "factory";
   readonly useFactory: Factory;
-  readonly tag: string | undefined;
+  readonly scope: string | undefined;
 }
 
 /** A `useValue` override registration — an already-built instance. */
@@ -61,7 +54,18 @@ export interface ResolveScope {
   resolve<T>(token: Token): T;
 }
 
-/** The override spec accepted by `.register(token, spec)`. */
-export type OverrideSpec<T> =
-  | { readonly useFactory: (scope: ResolveScope) => T; readonly tag?: string }
-  | { readonly useValue: T };
+/**
+ * A factory registration spec: a `useFactory` closure (which resolves its own
+ * deps from the scope passed to it) with an optional `scope` so its result is
+ * cached at a matching ancestor (singleton-style). Without a `scope` it runs on
+ * every resolve.
+ */
+export interface FactorySpec<T> {
+  readonly useFactory: (scope: ResolveScope) => T;
+  readonly scope?: string;
+}
+
+/** A value registration spec: an already-built instance, no lifetime. */
+export interface ValueSpec<T> {
+  readonly useValue: T;
+}

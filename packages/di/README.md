@@ -6,15 +6,17 @@ No decorators. No `reflect-metadata`. No runtime type introspection. Feed it str
 
 ---
 
-## `DiBuilder<Scopes>`
+## `DiBuilder<Root, Children>`
 
-The entry point. `Scopes` is your string union of scope names. Transient (no cache, fresh instance on every resolve) is the default — there is no `"transient"` tag; the absence of `.as()` is what makes a registration transient.
+The entry point. `Root` is the root scope's name (the app-lifetime scope singletons bind to, default `"singleton"`); `Children` is the union of declarable child-scope names. Scopes are `Root | Children`. Transient (no cache, fresh instance on every resolve) is the default — there is no `"transient"` scope; the absence of `.as()` is what makes a registration transient.
 
 ```typescript
 import { DiBuilder } from "@fnioc/di";
 
-const services = new DiBuilder<"singleton" | "request">();
+const services = new DiBuilder<"singleton", "request">();
 ```
+
+Registration is append-only: each token holds a **list** of registrations in registration order, and resolution picks the most-recent (last) one. A later `add` for the same token therefore overrides an earlier one without deleting it.
 
 ### `.add<Interface>(Concrete).as<"scope">()`
 
@@ -24,7 +26,7 @@ Register a concrete implementation against an interface token. The transformer r
 // With transformer (author form):
 services.add<ILogger>(ConsoleLogger).as<"singleton">();
 services.add<IUserRepo>(SqlUserRepo).as<"request">();
-services.add<IRequestId>(UuidRequestId>(); // no .as() → transient
+services.add<IRequestId>(UuidRequestId); // no .as() → transient
 
 // Without transformer (lowered form, or plugin-less):
 services.add("pkg:ILogger", ConsoleLogger).as("singleton");
@@ -36,39 +38,43 @@ The type constraint on `Concrete` is `new (...args: any[]) => Interface` — pla
 
 `.as<S>()` checks at compile time that `S` is a declared scope name. Passing an undeclared string is a type error.
 
-### `useFactory` and `useValue`
+### `add(token, { useFactory })` and `add(token, { useValue })`
 
-Override paths that bypass the dep-metadata system entirely. Recommended for test doubles, third-party instances, and plugin-less consumers.
+The same `add` surface also takes factory and value specs — registration paths that bypass the dep-metadata system entirely. Recommended for test doubles, third-party instances, and plugin-less consumers. Both return the builder for chaining.
 
 ```typescript
-// Factory: receives the scope's container, returns the instance
-container.register("pkg:IDb", {
+// Factory: receives the scope, returns the instance. An optional `scope`
+// caches the result at the matching ancestor (singleton-style).
+services.add("pkg:IDb", {
   useFactory: (c) => new PostgresDb(c.resolve<IConfig>("pkg:IConfig")),
+  scope: "singleton",
 });
 
-// Value: a pre-constructed instance (always singleton-like; re-used as-is)
-container.register("pkg:ICache", {
+// Value: a pre-constructed instance (re-used as-is, no lifetime)
+services.add("pkg:ICache", {
   useValue: new NullCache(),
 });
 ```
 
-`useFactory` with `.as("singleton")` on the parent builder makes the factory run once and cache the result. `useValue` is always cached.
+A `useFactory` with `scope: "singleton"` runs once and caches the result; without a `scope` it runs on every resolve (transient). `useValue` is always the same reference.
+
+The same two specs are available scope-locally via `scope.add(token, spec)`, so a single scope (e.g. a test scope) can swap an implementation without rebuilding the builder.
 
 ---
 
 ## Scope model
 
-Scopes form a parent-linked chain. The root scope is a real, app-lifetime object — never auto-created by the container.
+Scopes form a parent-linked chain. The root scope is a real, app-lifetime object — minted by `build()`, never auto-created by the container. Child scopes nest from a scope via `createScope`.
 
 ```typescript
-const root = services.createScope("singleton"); // app lifetime
-const req  = root.createScope("request");        // per HTTP request
+const root = services.build();             // app lifetime — named by Root
+const req  = root.createScope("request");  // per HTTP request
 ```
 
 **Resolution walks the parent chain** for two purposes:
 
-1. **Registration lookup** — walks up until the token is found. A child scope can shadow a parent registration.
-2. **Instance ownership** — the lifetime tag names which ancestor scope caches the instance. Walks up to the nearest matching ancestor and caches there.
+1. **Registration lookup** — walks up until the token is found, taking the most-recent registration at the nearest scope. A child scope can shadow a parent registration.
+2. **Instance ownership** — the lifetime scope names which ancestor scope caches the instance. Walks up to the nearest matching ancestor and caches there.
 
 **Lifetime rules:**
 
@@ -77,20 +83,20 @@ const req  = root.createScope("request");        // per HTTP request
 | No `.as()` (transient) | Fresh instance on every resolve. Never cached. |
 | `.as("singleton")` | Owned and cached by the nearest `"singleton"` ancestor in the chain. |
 | `.as("request")` | Owned and cached by the nearest `"request"` ancestor in the chain. |
-| Tag with no matching ancestor | **Throws.** The missing-ancestor error is intentional — see captive-dependency protection below. |
+| Scope with no matching ancestor | **Throws.** The missing-ancestor error is intentional — see captive-dependency protection below. |
 
 ### Captive-dependency protection
 
 The critical correctness rule: deps are resolved **relative to the scope that will own the instance**, not the scope that triggered the resolve.
 
 ```typescript
-const services = new DiBuilder<"singleton" | "request">();
+const services = new DiBuilder<"singleton", "request">();
 services.add<ICache>(RedisCache).as<"singleton">();
 services.add<IUserContext>(HttpUserContext).as<"request">();
 services.add<IUserService>(UserService).as<"singleton">();
 // UserService constructor: (cache: ICache, ctx: IUserContext)
 
-const root = services.createScope("singleton");
+const root = services.build();
 const req  = root.createScope("request");
 
 req.resolve<IUserService>("pkg:IUserService");
@@ -164,11 +170,12 @@ The container never awaits. Async is expressed as `Promise<T>` values through th
 
 ```typescript
 // Register an async factory
-container.register("pkg:IDb", {
+services.add("pkg:IDb", {
   useFactory: async (c) => {
     const pool = c.resolve<IConnectionPool>("pkg:IConnectionPool");
     return new PostgresDb(await pool.connect());
   },
+  scope: "singleton",
 });
 
 // Consume it — declare the dep as Promise<IDb>
@@ -258,21 +265,23 @@ Note: `FactoryTargetError` is thrown when the factory callable is constructed (a
 
 ## API reference
 
-### `DiBuilder<Scopes>`
+### `DiBuilder<Root, Children>`
 
 | Member | Signature | Description |
 |---|---|---|
-| `add<I>(Concrete)` | `(ctor: new (...) => I) => RegistrationBuilder` | Register a concrete class against interface `I`. |
-| `.as<S>()`| `(tag: S) → void` | Set the lifetime tag. No call → transient. |
-| `register(token, opts)` | `(token: string, { useFactory? useValue? }) => void` | Override path. No dep metadata required. |
-| `createScope(tag)` | `(tag: Scopes) => Scope<Scopes>` | Create the root scope. |
+| `add<I>(Concrete)` | `(ctor: new (...) => I) => AddBuilder` | Register a concrete class against interface `I`. |
+| `.as<S>()` | `(scope: S) → void` | Set the lifetime scope. No call → transient. |
+| `add(token, ctor)` | `(token: string, ctor) => AddBuilder` | Class registration (lowered form). |
+| `add(token, spec)` | `(token: string, { useFactory, scope? } \| { useValue }) => this` | Factory / value registration. No dep metadata required. |
+| `build()` | `() => Scope<Root \| Children>` | Mint the root scope (named `Root`). No argument. |
 
 ### `Scope<Scopes>`
 
 | Member | Signature | Description |
 |---|---|---|
-| `createScope(tag)` | `(tag: Scopes) => Scope<Scopes>` | Create a child scope. |
-| `resolve<T>(token)` | `(token: string) => T` | Resolve an instance. Throws on captive-dep violation, missing tag ancestor, or cycle. |
+| `createScope(name)` | `(name: Scopes) => Scope<Scopes>` | Create a nested child scope. |
+| `add(token, spec)` | `(token, { useFactory, scope? } \| { useValue }) => this` | Scope-local override registration. |
+| `resolve<T>(token)` | `(token: string) => T` | Resolve an instance. Throws on captive-dep violation, missing scope ancestor, or cycle. |
 | `dispose()` | `() => void` | Sync close. Throws if any owned instance has async-only disposal. |
 | `disposeAsync()` | `() => Promise<void>` | Async close. |
 | `[Symbol.dispose]()` | — | Native `using` support. |

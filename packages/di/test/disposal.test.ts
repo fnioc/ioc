@@ -16,20 +16,20 @@ describe("sync disposal", () => {
   test("disposes owned instances in reverse construction order", () => {
     const log = new DisposeLog();
     const services = new DiBuilder<"singleton">();
-    services.register(T.A, {
+    services.add(T.A, {
       useFactory: () => new SyncDisposable("A", log),
-      tag: "singleton",
+      scope: "singleton",
     });
-    services.register(T.B, {
+    services.add(T.B, {
       useFactory: () => new SyncDisposable("B", log),
-      tag: "singleton",
+      scope: "singleton",
     });
-    services.register(T.C, {
+    services.add(T.C, {
       useFactory: () => new SyncDisposable("C", log),
-      tag: "singleton",
+      scope: "singleton",
     });
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     root.resolve(T.A); // constructed first
     root.resolve(T.B);
     root.resolve(T.C); // constructed last
@@ -43,13 +43,13 @@ describe("sync disposal", () => {
     const log = new DisposeLog();
     const plain = new NonDisposable("plain");
     const services = new DiBuilder<"singleton">();
-    services.register(T.A, {
+    services.add(T.A, {
       useFactory: () => new SyncDisposable("A", log),
-      tag: "singleton",
+      scope: "singleton",
     });
-    services.register(T.B, { useFactory: () => plain, tag: "singleton" });
+    services.add(T.B, { useFactory: () => plain, scope: "singleton" });
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     const a = root.resolve<SyncDisposable>(T.A);
     root.resolve(T.B);
     root.dispose();
@@ -60,17 +60,17 @@ describe("sync disposal", () => {
 
   test("a child scope's dispose does NOT dispose ancestor-owned instances", () => {
     const log = new DisposeLog();
-    const services = new DiBuilder<"singleton" | "request">();
-    services.register(T.A, {
+    const services = new DiBuilder<"singleton", "request">();
+    services.add(T.A, {
       useFactory: () => new SyncDisposable("singleton-A", log),
-      tag: "singleton",
+      scope: "singleton",
     });
-    services.register(T.B, {
+    services.add(T.B, {
       useFactory: () => new SyncDisposable("request-B", log),
-      tag: "request",
+      scope: "request",
     });
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     const req = root.createScope("request");
     req.resolve(T.A); // owned by root
     req.resolve(T.B); // owned by req
@@ -85,12 +85,12 @@ describe("sync disposal", () => {
   test("dispose is idempotent — a second call is a no-op", () => {
     const log = new DisposeLog();
     const services = new DiBuilder<"singleton">();
-    services.register(T.A, {
+    services.add(T.A, {
       useFactory: () => new SyncDisposable("A", log),
-      tag: "singleton",
+      scope: "singleton",
     });
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     root.resolve(T.A);
     root.dispose();
     root.dispose();
@@ -100,12 +100,12 @@ describe("sync disposal", () => {
   test("transient (uncached) instances are NOT tracked for disposal", () => {
     const log = new DisposeLog();
     const services = new DiBuilder<"singleton">();
-    services.register(T.A, {
+    services.add(T.A, {
       useFactory: () => new SyncDisposable("transient", log),
       // no tag ⇒ transient, never cached, never owned
     });
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     root.resolve(T.A);
     root.dispose();
     expect(log.order).toEqual([]); // nothing owned ⇒ nothing disposed
@@ -116,16 +116,16 @@ describe("async disposal", () => {
   test("disposes AsyncDisposable instances in reverse construction order", async () => {
     const log = new DisposeLog();
     const services = new DiBuilder<"singleton">();
-    services.register(T.A, {
+    services.add(T.A, {
       useFactory: () => new AsyncDisposableThing("A", log),
-      tag: "singleton",
+      scope: "singleton",
     });
-    services.register(T.B, {
+    services.add(T.B, {
       useFactory: () => new AsyncDisposableThing("B", log),
-      tag: "singleton",
+      scope: "singleton",
     });
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     root.resolve(T.A);
     root.resolve(T.B);
     await root.disposeAsync();
@@ -136,16 +136,16 @@ describe("async disposal", () => {
   test("disposeAsync honors both Symbol.dispose and Symbol.asyncDispose", async () => {
     const log = new DisposeLog();
     const services = new DiBuilder<"singleton">();
-    services.register(T.A, {
+    services.add(T.A, {
       useFactory: () => new SyncDisposable("sync", log),
-      tag: "singleton",
+      scope: "singleton",
     });
-    services.register(T.B, {
+    services.add(T.B, {
       useFactory: () => new AsyncDisposableThing("async", log),
-      tag: "singleton",
+      scope: "singleton",
     });
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     root.resolve(T.A);
     root.resolve(T.B);
     await root.disposeAsync();
@@ -157,12 +157,12 @@ describe("async disposal", () => {
   test("disposeAsync awaits Promise-valued instances before disposing them", async () => {
     const log = new DisposeLog();
     const services = new DiBuilder<"singleton">();
-    services.register(T.A, {
+    services.add(T.A, {
       useFactory: async () => new AsyncDisposableThing("resolved", log),
-      tag: "singleton",
+      scope: "singleton",
     });
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     root.resolve<Promise<AsyncDisposableThing>>(T.A);
     await root.disposeAsync();
 
@@ -174,12 +174,12 @@ describe("async disposal", () => {
 describe("sync dispose with a Promise-valued instance", () => {
   test("throws AsyncDisposalRequiredError directing to disposeAsync", () => {
     const services = new DiBuilder<"singleton">();
-    services.register(T.A, {
+    services.add(T.A, {
       useFactory: async () => ({ ok: true }),
-      tag: "singleton",
+      scope: "singleton",
     });
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     root.resolve(T.A); // caches a Promise
 
     expect(() => root.dispose()).toThrow(AsyncDisposalRequiredError);
@@ -193,12 +193,12 @@ describe("sync dispose with a Promise-valued instance", () => {
   test("after the throw, disposeAsync still cleans up correctly", async () => {
     const log = new DisposeLog();
     const services = new DiBuilder<"singleton">();
-    services.register(T.A, {
+    services.add(T.A, {
       useFactory: async () => new AsyncDisposableThing("late", log),
-      tag: "singleton",
+      scope: "singleton",
     });
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     root.resolve(T.A);
     expect(() => root.dispose()).toThrow(AsyncDisposalRequiredError);
 
@@ -213,11 +213,11 @@ describe("native using / await using", () => {
   test("using calls Symbol.dispose on block exit", () => {
     const log = new DisposeLog();
     const services = new DiBuilder<"singleton">();
-    services.register(T.A, {
+    services.add(T.A, {
       useFactory: () => new SyncDisposable("scoped", log),
-      tag: "singleton",
+      scope: "singleton",
     });
-    const root = services.createScope("singleton");
+    const root = services.build();
 
     {
       using child = root.createScope("singleton");
@@ -231,12 +231,12 @@ describe("native using / await using", () => {
 
   test("await using calls Symbol.asyncDispose on block exit", async () => {
     const log = new DisposeLog();
-    const services = new DiBuilder<"singleton" | "request">();
-    services.register(T.A, {
+    const services = new DiBuilder<"singleton", "request">();
+    services.add(T.A, {
       useFactory: () => new AsyncDisposableThing("req", log),
-      tag: "request",
+      scope: "request",
     });
-    const root = services.createScope("singleton");
+    const root = services.build();
 
     {
       await using req = root.createScope("request");

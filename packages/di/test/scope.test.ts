@@ -20,37 +20,37 @@ class FakeDb {
 
 describe("scope chain + child-shadows-parent override", () => {
   test("a child-scope override shadows the builder's base registration", () => {
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new DiBuilder<"singleton", "request">();
     services.add(T.Db, RealDb).as("request");
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     const req = root.createScope("request");
     // Local override on the request scope: a fake DB just for this subtree.
-    req.registerValue(T.Db, new FakeDb());
+    req.add(T.Db, { useValue: new FakeDb() });
 
     const resolved = req.resolve<RealDb | FakeDb>(T.Db);
     expect(resolved.kind).toBe("fake");
   });
 
   test("a parent override is shadowed by a nearer child override", () => {
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new DiBuilder<"singleton", "request">();
     services.add(T.Db, RealDb).as("request");
 
-    const root = services.createScope("singleton");
-    root.registerValue(T.Db, new FakeDb()); // override at root...
+    const root = services.build();
+    root.add(T.Db, { useValue: new FakeDb() }); // override at root...
     const req = root.createScope("request");
     const realInstance = new RealDb();
-    req.registerValue(T.Db, realInstance); // ...shadowed nearer the leaf
+    req.add(T.Db, { useValue: realInstance }); // ...shadowed nearer the leaf
 
     expect(req.resolve<RealDb>(T.Db)).toBe(realInstance);
     expect(root.resolve<FakeDb>(T.Db).kind).toBe("fake");
   });
 
   test("lookup falls through to the builder base map when no local override", () => {
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new DiBuilder<"singleton", "request">();
     services.add(T.Db, RealDb).as("singleton");
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     const req = root.createScope("request");
 
     // No override anywhere in req's locals — resolves through to the base map,
@@ -62,7 +62,7 @@ describe("scope chain + child-shadows-parent override", () => {
 
   test("resolving an unregistered token throws UnregisteredTokenError", () => {
     const services = new DiBuilder<"singleton">();
-    const root = services.createScope("singleton");
+    const root = services.build();
     expect(() => root.resolve(T.Db)).toThrow(UnregisteredTokenError);
   });
 });
@@ -80,12 +80,12 @@ describe("captive-dependency protection", () => {
   }
 
   test("singleton depending on request throws MissingScopeError (§5.4)", () => {
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new DiBuilder<"singleton", "request">();
     defineDeps(SingletonNeedingRequest, [[T.Service]]);
     services.add(T.Service, RequestScoped).as("request");
     services.add(T.Repo, SingletonNeedingRequest).as("singleton");
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     const req = root.createScope("request");
 
     // Triggered FROM the request scope (which DOES have a request ancestor),
@@ -95,13 +95,13 @@ describe("captive-dependency protection", () => {
     expect(() => req.resolve(T.Repo)).toThrow(MissingScopeError);
   });
 
-  test("the MissingScopeError names the offending token and tag", () => {
-    const services = new DiBuilder<"singleton" | "request">();
+  test("the MissingScopeError names the offending token and scope", () => {
+    const services = new DiBuilder<"singleton", "request">();
     defineDeps(SingletonNeedingRequest, [[T.Service]]);
     services.add(T.Service, RequestScoped).as("request");
     services.add(T.Repo, SingletonNeedingRequest).as("singleton");
 
-    const req = services.createScope("singleton").createScope("request");
+    const req = services.build().createScope("request");
     try {
       req.resolve(T.Repo);
       throw new Error("expected a throw");
@@ -109,15 +109,15 @@ describe("captive-dependency protection", () => {
       expect(err).toBeInstanceOf(MissingScopeError);
       const e = err as MissingScopeError;
       expect(e.token).toBe(T.Service);
-      expect(e.tag).toBe("request");
+      expect(e.scope).toBe("request");
     }
   });
 
-  test("a tag with NO matching ancestor anywhere throws MissingScopeError", () => {
-    const services = new DiBuilder<"singleton" | "request" | "transaction">();
+  test("a scope with NO matching ancestor anywhere throws MissingScopeError", () => {
+    const services = new DiBuilder<"singleton", "request" | "transaction">();
     services.add(T.Db, RealDb).as("transaction"); // never created
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     const req = root.createScope("request");
 
     // "transaction" scope is never minted — must throw, never auto-create.
@@ -137,12 +137,12 @@ describe("THE critical rule — construct relative to the owning scope", () => {
   }
 
   test("request service depending on singleton gets the shared singleton", () => {
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new DiBuilder<"singleton", "request">();
     defineDeps(RequestService, [[T.Logger]]);
     services.add(T.Logger, Singleton).as("singleton");
     services.add(T.Service, RequestService).as("request");
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     const reqA = root.createScope("request");
     const reqB = root.createScope("request");
 
@@ -162,12 +162,12 @@ describe("THE critical rule — construct relative to the owning scope", () => {
     class A {
       public constructor(public readonly b: B) {}
     }
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new DiBuilder<"singleton", "request">();
     defineDeps(A, [[T.B]]);
     services.add(T.B, B).as("singleton");
     services.add(T.A, A).as("singleton");
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     const deepChild = root.createScope("request").createScope("request");
 
     const a = deepChild.resolve<A>(T.A);

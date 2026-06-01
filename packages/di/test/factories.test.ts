@@ -52,7 +52,7 @@ describe("bare zero-arg factory", () => {
     services.add(T.Service, Foo).as("singleton"); // Foo is a singleton
     services.add(T.Repo, Holder).as("singleton");
 
-    const holder = services.createScope("singleton").resolve<Holder>(T.Repo);
+    const holder = services.build().resolve<Holder>(T.Repo);
 
     const a = holder.makeFoo();
     const b = holder.makeFoo();
@@ -72,7 +72,7 @@ describe("bare zero-arg factory", () => {
     services.add(T.Service, Foo); // untagged ⇒ transient
     services.add(T.Repo, Holder).as("singleton");
 
-    const holder = services.createScope("singleton").resolve<Holder>(T.Repo);
+    const holder = services.build().resolve<Holder>(T.Repo);
 
     const a = holder.makeFoo();
     const b = holder.makeFoo();
@@ -106,7 +106,7 @@ describe("parameterized factory", () => {
     services.add(T.Service, Greeter).as("singleton"); // tag is irrelevant — parameterized bypasses the cache
     services.add(T.Repo, Holder).as("singleton");
 
-    const holder = services.createScope("singleton").resolve<Holder>(T.Repo);
+    const holder = services.build().resolve<Holder>(T.Repo);
 
     const ann = holder.make("ann");
     const bob = holder.make("bob");
@@ -145,7 +145,7 @@ describe("parameterized factory", () => {
     services.add(T.Service, Wide).as("singleton");
     services.add(T.Repo, Holder).as("singleton");
 
-    const holder = services.createScope("singleton").resolve<Holder>(T.Repo);
+    const holder = services.build().resolve<Holder>(T.Repo);
     const w = holder.make("BB", "DD");
 
     expect(w.args).toHaveLength(5);
@@ -179,7 +179,7 @@ describe("parameterized factory", () => {
     // T.Db deliberately NOT registered.
     services.add(T.Repo, Holder).as("singleton");
 
-    const holder = services.createScope("singleton").resolve<Holder>(T.Repo);
+    const holder = services.build().resolve<Holder>(T.Repo);
     const p = holder.make("supplied");
 
     expect(p.dep).toBeInstanceOf(Dep);
@@ -198,11 +198,11 @@ describe("§5.4 — owning-scope rule holds for factory targets", () => {
     }
     defineDeps(Holder, [[factoryOf(T.Service)]]);
 
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new DiBuilder<"singleton", "request">();
     services.add(T.Service, Foo).as("request"); // request-scoped target
     services.add(T.Repo, Holder).as("singleton"); // singleton holds the factory
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     const req = root.createScope("request");
 
     // Resolve the holder FROM a request scope — but the holder is a singleton,
@@ -219,11 +219,11 @@ describe("§5.4 — owning-scope rule holds for factory targets", () => {
     }
     defineDeps(Holder, [[factoryOf(T.Service)]]);
 
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new DiBuilder<"singleton", "request">();
     services.add(T.Service, Foo).as("request");
     services.add(T.Repo, Holder).as("request"); // holder is request-scoped now
 
-    const req = services.createScope("singleton").createScope("request");
+    const req = services.build().createScope("request");
     const holder = req.resolve<Holder>(T.Repo);
 
     const a = holder.makeFoo();
@@ -242,7 +242,7 @@ describe("factory target errors", () => {
     // T.Service (the factory target) deliberately NOT registered.
     services.add(T.Repo, Holder).as("singleton");
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     expect(() => root.resolve<Holder>(T.Repo)).toThrow(FactoryTargetError);
     try {
       root.resolve<Holder>(T.Repo);
@@ -260,10 +260,10 @@ describe("factory target errors", () => {
     defineDeps(Holder, [[factoryOf(T.Service)]]);
 
     const services = new DiBuilder<"singleton">();
-    services.register(T.Service, { useValue: new Foo() }); // not a class registration
+    services.add(T.Service, { useValue: new Foo() }); // not a class registration
     services.add(T.Repo, Holder).as("singleton");
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     expect(() => root.resolve<Holder>(T.Repo)).toThrow(FactoryTargetError);
     try {
       root.resolve<Holder>(T.Repo);
