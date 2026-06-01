@@ -347,8 +347,12 @@ function forCtorRoot(expr: ts.Expression): ts.CallExpression | undefined {
 /**
  * Scan a source file for tokens registered with an async `useFactory` (an
  * `async` arrow/function, or one whose annotated return type is `Promise<...>`)
- * via a `.register("token", { useFactory })` call. The token must be a string
+ * via an `.add("token", { useFactory })` call. The token must be a string
  * literal first argument for the correlation to be static.
+ *
+ * This matches the explicit factory-registration form `add(token, spec)`, not
+ * the type-driven `add<I>(C)` authoring form: only a two-argument call whose
+ * second argument is an object literal carrying an async `useFactory` qualifies.
  */
 export function collectAsyncTokens(
   sourceFile: ts.SourceFile,
@@ -359,7 +363,7 @@ export function collectAsyncTokens(
     if (
       ts.isCallExpression(node) &&
       ts.isPropertyAccessExpression(node.expression) &&
-      node.expression.name.text === "register" &&
+      node.expression.name.text === "add" &&
       node.arguments.length >= 2
     ) {
       const tokenArg = node.arguments[0]!;
@@ -378,7 +382,7 @@ export function collectAsyncTokens(
   return tokens;
 }
 
-/** True when a `.register` spec object's `useFactory` is async. */
+/** True when an `.add` spec object's `useFactory` is async. */
 function specIsAsyncFactory(
   spec: ts.ObjectLiteralExpression,
   checker: ts.TypeChecker,

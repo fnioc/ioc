@@ -20,8 +20,8 @@ import {
 
 /**
  * A factory slot in an extracted signature — the transformer's in-memory mirror
- * of `@fnioc/core`'s `FactoryRef`. Emitted as a `{ factory: "<token>" }` object
- * literal in the `defineDeps(...)` signature array.
+ * of the runtime `FactoryRef` shape. Emitted as a `{ factory: "<token>" }`
+ * object literal in the `defineDeps(...)` signature array.
  */
 export interface FactorySlot {
   readonly factory: string;
