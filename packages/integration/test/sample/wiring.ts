@@ -34,6 +34,11 @@ import {
 
 export type SampleScopes = "singleton" | "request";
 
+/** The root scope's lifetime tag (the `Root` type arg to `DiBuilder`). */
+export type SampleRoot = "singleton";
+/** The declarable child-scope names (the `Children` type arg to `DiBuilder`). */
+export type SampleChildren = "request";
+
 /** The token the di engine uses for the async config registration. */
 export const CONFIG_TOKEN = "./sample/contracts/IConfig";
 
@@ -57,7 +62,7 @@ export function makeConfig(): Promise<IConfig> {
   return Promise.resolve({ endpoint: "https://db.example/api" });
 }
 
-export const services = new DiBuilder<SampleScopes>();
+export const services = new DiBuilder<SampleRoot, SampleChildren>();
 
 // Type-driven registrations — TOP-LEVEL so the transformer lowers each type arg
 // to a string token and injects a `defineDeps(C, [...])` prelude per class.
@@ -78,12 +83,12 @@ services.add<IReportService>(ReportService).as<"request">();
 
 // Plugin-less path: async config via a Promise-returning factory, cached as a
 // singleton. This same closure is used identically in the parity test.
-services.register<Promise<IConfig>>(CONFIG_TOKEN, {
+services.add<Promise<IConfig>>(CONFIG_TOKEN, {
   useFactory: () => makeConfig(),
-  tag: "singleton",
+  scope: "singleton",
 });
 
 // The named-callable IThunk is provided plugin-less as a value (it is a plain
 // closure, not a class). ThunkConsumer's `IThunk` ctor param lowers to this
 // token — a plain string slot, NOT a factory — so di resolves THIS value.
-services.register<IThunk>(THUNK_TOKEN, { useValue: theThunk });
+services.add<IThunk>(THUNK_TOKEN, { useValue: theThunk });

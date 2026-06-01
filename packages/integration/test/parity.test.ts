@@ -1,8 +1,7 @@
 import { test, expect, describe, beforeAll, afterAll } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DiBuilder } from "@fnioc/di";
-import { forCtor, hole } from "@fnioc/core";
+import { DiBuilder, forCtor, hole } from "@fnioc/di";
 import { compileWithTransformer, type CompiledProject } from "./harness.js";
 
 // Coverage 2: progressive-enhancement parity — THE headline property.
@@ -50,7 +49,7 @@ let handFedConfigRuns = 0;
 const theThunk = () => "thunk-result";
 
 /** Build the identical graph WITHOUT the transformer — the plugin-less path. */
-function buildHandFed(): DiBuilder<"singleton" | "request"> {
+function buildHandFed(): DiBuilder<"singleton", "request"> {
   handFedConfigRuns = 0;
 
   // Path 2: hand-feed each class's ctor signature (forCtor / signature). These
@@ -63,7 +62,7 @@ function buildHandFed(): DiBuilder<"singleton" | "request"> {
   // bare `() => IRequestContext` and a partial `(ctx) => IReport`.
   forCtor(ReportService).signature({ factory: T.ctx }, { factory: T.report });
 
-  const services = new DiBuilder<"singleton" | "request">();
+  const services = new DiBuilder<"singleton", "request">();
   services.add(T.logger, ConsoleLogger).as("singleton");
   services.add(T.db, SqlDb).as("singleton");
   services.add(T.repo, SqlUserRepo).as("request");
@@ -74,14 +73,14 @@ function buildHandFed(): DiBuilder<"singleton" | "request"> {
   services.add(T.configConsumer, ConfigConsumer).as("singleton");
 
   // Path 1: plugin-less overrides for the async config + the named-callable.
-  services.register(T.config, {
+  services.add(T.config, {
     useFactory: () => {
       handFedConfigRuns += 1;
       return Promise.resolve({ endpoint: "https://db.example/api" });
     },
-    tag: "singleton",
+    scope: "singleton",
   });
-  services.register(T.thunk, { useValue: theThunk });
+  services.add(T.thunk, { useValue: theThunk });
 
   return services;
 }
@@ -89,7 +88,7 @@ function buildHandFed(): DiBuilder<"singleton" | "request"> {
 describe("progressive-enhancement parity — hand-fed graph (no transformer)", () => {
   test("the hand-fed graph resolves the same wiring + scoping as the compiled one", () => {
     const services = buildHandFed();
-    const root = services.createScope("singleton");
+    const root = services.build();
     const reqA = root.createScope("request");
     const reqB = root.createScope("request");
 
@@ -111,7 +110,7 @@ describe("progressive-enhancement parity — hand-fed graph (no transformer)", (
 
   test("factory behaviour matches: bare factory respects lifetime, partitioned fills the hole", () => {
     const services = buildHandFed();
-    const req = services.createScope("singleton").createScope("request");
+    const req = services.build().createScope("request");
     const rs = req.resolve<{
       makeCtx: () => unknown;
       makeReport: (ctx: { id: number }) => { ctx: { id: number } | undefined };
@@ -132,7 +131,7 @@ describe("progressive-enhancement parity — hand-fed graph (no transformer)", (
 
   test("async config parity: singleton caches the Promise; factory runs once", async () => {
     const services = buildHandFed();
-    const root = services.createScope("singleton");
+    const root = services.build();
 
     const p1 = root.resolve<Promise<{ endpoint: string }>>(T.config);
     const p2 = root.resolve<Promise<{ endpoint: string }>>(T.config);

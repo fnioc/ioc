@@ -3,8 +3,9 @@ import {
   DiBuilder,
   MissingScopeError,
   CircularDependencyError,
+  defineDeps,
+  signature,
 } from "@fnioc/di";
-import { defineDeps, signature } from "@fnioc/core";
 
 // Coverage 4 (captive dependency / §5.4), 5 (cycle detection), 9 (greedy
 // overload selection). Each drives the engine through the ABI the transformer
@@ -21,11 +22,11 @@ describe("captive dependency — a singleton may not depend on a request-scoped 
     defineDeps(RequestThing, [[]]);
     defineDeps(SingletonService, [["req:thing"]]);
 
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new DiBuilder<"singleton", "request">();
     services.add("req:thing", RequestThing).as("request");
     services.add("app:service", SingletonService).as("singleton");
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     // The singleton's deps resolve relative to the OWNING (root) scope, where no
     // "request" ancestor exists — so the request-scoped dep cannot be captured.
     let caught: unknown;
@@ -54,7 +55,7 @@ describe("captive dependency — a singleton may not depend on a request-scoped 
     services.add("app:dep", Dep).as("singleton");
     services.add("app:service", Service).as("singleton");
 
-    const svc = services.createScope("singleton").resolve<Service>("app:service");
+    const svc = services.build().resolve<Service>("app:service");
     expect(svc.dep).toBeInstanceOf(Dep);
   });
 });
@@ -78,7 +79,7 @@ describe("cycle detection — A → B → A throws with the full resolution path
 
     let caught: unknown;
     try {
-      services.createScope("singleton").resolve("cy:A");
+      services.build().resolve("cy:A");
     } catch (e) {
       caught = e;
     }
@@ -113,7 +114,7 @@ describe("cycle detection — A → B → A throws with the full resolution path
     services.add("cy3:B", B).as("singleton");
     services.add("cy3:C", C).as("singleton");
 
-    expect(() => services.createScope("singleton").resolve("cy3:A")).toThrow(
+    expect(() => services.build().resolve("cy3:A")).toThrow(
       /cy3:A → cy3:B → cy3:C → cy3:A/,
     );
   });
@@ -143,7 +144,7 @@ describe("greedy overload selection — longest satisfiable signature wins", () 
     services.add("ov:db", Db).as("singleton");
     services.add("ov:multi", Multi).as("singleton");
 
-    const m = services.createScope("singleton").resolve<Multi>("ov:multi");
+    const m = services.build().resolve<Multi>("ov:multi");
     expect(m.via).toBe("long"); // 2-arg form chosen — both deps registered
   });
 
@@ -164,7 +165,7 @@ describe("greedy overload selection — longest satisfiable signature wins", () 
     // fb:db is NOT registered → the 2-arg form is unsatisfiable.
     services.add("fb:multi", Multi).as("singleton");
 
-    const m = services.createScope("singleton").resolve<Multi>("fb:multi");
+    const m = services.build().resolve<Multi>("fb:multi");
     expect(m.arity).toBe(1); // longest satisfiable is the 1-arg form
   });
 
@@ -192,7 +193,7 @@ describe("greedy overload selection — longest satisfiable signature wins", () 
     services.add("tie:second", Second).as("singleton");
     services.add("tie:pick", Pick).as("singleton");
 
-    const p = services.createScope("singleton").resolve<Pick>("tie:pick");
+    const p = services.build().resolve<Pick>("tie:pick");
     expect(p.token).toBe("first"); // registration-order tie-break
   });
 
@@ -213,7 +214,7 @@ describe("greedy overload selection — longest satisfiable signature wins", () 
     // dec:db unregistered → falls back to the 1-arg overload.
     services.add("dec:decorated", Decorated).as("singleton");
 
-    const d = services.createScope("singleton").resolve<Decorated>("dec:decorated");
+    const d = services.build().resolve<Decorated>("dec:decorated");
     expect(d.arity).toBe(1);
   });
 });
