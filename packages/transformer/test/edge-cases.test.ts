@@ -62,7 +62,8 @@ describe("already-annotated classes", () => {
       services.add<IFoo>(Foo).as<"singleton">();
     `;
     const { output, diagnostics } = transform(fixture(src));
-    expect(output).toContain("defineDeps(Foo, [[]])");
+    // Non-annotated → transformer emits defineDeps against the hoisted const.
+    expect(output).toContain("defineDeps(ɵreg0, [[]])");
     expect(
       diagnostics.some((d) => d.code === DiagnosticCode.AlreadyAnnotated),
     ).toBe(false);

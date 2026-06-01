@@ -1,4 +1,15 @@
+import type { Ctor } from "@rhombus-toolkit/func";
+
 import type { hole } from "./store.js";
+
+/**
+ * Anything dependency metadata can be attached to: a class constructor (its
+ * deps are the ctor parameters) or a factory function (its deps are the call
+ * parameters). Both are objects, so both are valid global-WeakMap keys. The
+ * `never[]` rest keeps any concrete function assignable here regardless of its
+ * own parameter list.
+ */
+export type DepTarget = Ctor | ((...args: never[]) => unknown);
 
 /**
  * A stable string identifying an interface — the DI key.
@@ -19,12 +30,25 @@ export interface FactoryRef {
 }
 
 /**
- * One positional slot in a constructor signature:
- *   - a `Token` string  — a container-resolved dependency,
- *   - the `hole` sentinel — a caller-supplied parameter, or
- *   - a `FactoryRef` — a factory-injected parameter (see `FactoryRef`).
+ * Marks a parameter to be injected with the live resolution scope itself,
+ * rather than a resolved token. Emitted for a factory parameter whose type is
+ * `ResolveScope` — the engine fills the slot with the scope the factory is
+ * resolved into, so the factory body can `scope.resolve(...)` / `createScope`
+ * dynamically. Only meaningful on registration-level factory functions (a class
+ * ctor never receives the scope); on a ctor it would simply never match.
  */
-export type DepSlot = Token | typeof hole | FactoryRef;
+export interface ScopeRef {
+  readonly scope: true;
+}
+
+/**
+ * One positional slot in a constructor / factory signature:
+ *   - a `Token` string  — a container-resolved dependency,
+ *   - the `hole` sentinel — a caller-supplied parameter,
+ *   - a `FactoryRef` — a factory-injected parameter (see `FactoryRef`), or
+ *   - a `ScopeRef` — the live resolution scope (see `ScopeRef`).
+ */
+export type DepSlot = Token | typeof hole | FactoryRef | ScopeRef;
 
 /**
  * Per-constructor dependency metadata stored in the global WeakMap.

@@ -228,15 +228,20 @@ The verb `signature` is used consistently: the ABI field is `signatures`, the de
 export const hole = null as null;
 ```
 
-Marks a constructor parameter as caller-supplied rather than container-resolved. Used in partial factory signatures.
+Marks a constructor parameter as an **unresolvable slot** — not registered in the container, filled by the caller when the class is used as a factory target. A `hole` in a signature is the same as any other unregistered token: it **blocks** that signature on a direct `resolve()` call.
 
 ```typescript
 @signature("pkg:ILogger", hole, "pkg:IDb")
 class SqlRepo {
   constructor(log: ILogger, tableName: string, db: IDb) { ... }
-  // tableName is a hole: supplied by the factory caller at call time
+  // tableName is a hole: unresolvable, so this signature is unsatisfiable
+  // on a direct resolve — SqlRepo must be built via a factory that supplies tableName.
 }
 ```
+
+**No auto-holes.** The transformer emits `null` only for types that can never be tokens (primitives, `any`, `unknown`, `void`). Holes exist only when the type in question is inherently unresolvable — they are never injected automatically for unregistered services.
+
+**Optional/defaulted/`T|undefined` params → overload expansion.** When a trailing constructor parameter is optional (`?`), has a default initializer, or accepts `undefined`, the transformer emits TWO signatures: the full one (including the optional slot) and a shorter one without it. Greedy selection at resolve time tries the longest signature first; if the optional dep isn't registered, it falls to the shorter form and the parameter receives its default / `undefined`. A required unresolvable parameter has no shorter fallback and throws `NoSatisfiableSignatureError` — the fix is to register the dep, make the parameter optional, or build the class via `addFactory`.
 
 ### Canonical authoring → lowered example
 
@@ -247,8 +252,8 @@ const services = new DiBuilder<"singleton" | "request">();
 
 services.add<ILogger>(ConsoleLogger).as<"singleton">();
 services.add<IUserRepo>(SqlUserRepo).as<"request">();
-// SqlUserRepo ctor: constructor(log: ILogger, db: IDbConnection, table: string)
-// 'table' is a hole — not a registered service
+// SqlUserRepo ctor: constructor(log: ILogger, db: IDbConnection, table?: string)
+// 'table' is optional → overload expansion; a hole (null) in the full overload
 ```
 
 **Lowered output (emitted by transformer):**
@@ -256,12 +261,16 @@ services.add<IUserRepo>(SqlUserRepo).as<"request">();
 ```typescript
 const services = new DiBuilder();
 
-defineDeps(ConsoleLogger, [[]]);
-services.add("pkg:ILogger", ConsoleLogger).as("singleton");
+const ɵreg0 = ConsoleLogger;  // hoisted — defineDeps and add share the same reference
+defineDeps(ɵreg0, [[]]);       // zero-arg class: single empty signature
+services.add("pkg:ILogger", ɵreg0).as("singleton");
 
-defineDeps(SqlUserRepo, [["pkg:ILogger", "pkg:IDbConnection", null]]);
-// null = hole for 'table' (string, cannot be a token)
-services.add("pkg:IUserRepo", SqlUserRepo).as("request");
+const ɵreg1 = SqlUserRepo;
+defineDeps(ɵreg1, [
+  ["pkg:ILogger", "pkg:IDbConnection", null],  // full; null = hole for optional 'table'
+  ["pkg:ILogger", "pkg:IDbConnection"],          // shorter; table uses its default/undefined
+]);
+services.add("pkg:IUserRepo", ɵreg1).as("request");
 ```
 
 The lowered form is the ABI contract. Libraries publish this form. Consumers without the transformer use it directly. The emitted-call format is kept backward-compatible across `core` semver minors; a breaking change bumps `ABI_VERSION`.
@@ -272,17 +281,27 @@ The lowered form is the ABI contract. Libraries publish this form. Consumers wit
 
 ### Registration API
 
+Three registration methods on `DiBuilder`, each with a transformer-authored form and an explicit-token form:
+
 ```typescript
-const services = new DiBuilder<"singleton" | "request">();
+const services = new DiBuilder<"singleton", "request">();
 
-// add<Interface>(Concrete) — one type param; concrete passed as a value
-services.add<ILogger>(ConsoleLogger).as<"singleton">();
-services.add<IUserRepo>(SqlUserRepo).as<"request">();
+// Transformer-authored (type-driven):
+services.add<ILogger>(ConsoleLogger).as<"singleton">();   // class: token from ILogger
+services.add<IUserRepo>(SqlUserRepo).as<"request">();     // class: token from IUserRepo
+services.addValue<IConfig>(configInstance);               // value: token from IConfig
 
-// Concrete is typed: new (...args: any[]) => IInterface
-// Plain `new`, NOT `abstract new` — abstract classes are correctly rejected
-// (the container will instantiate the concrete; abstract classes cannot be instantiated)
+// Explicit-token (plugin-less / lowered form):
+services.add("pkg:ILogger", ConsoleLogger).as("singleton");           // class
+services.addFactory("pkg:IDb", (scope) => new PgDb(scope)).as("singleton"); // factory
+services.addValue("pkg:IConfig", configInstance);                     // value
 ```
+
+- `add(token, Ctor)` — class registration. The concrete is instantiated by the engine with injected deps.
+- `addFactory(token, fn)` — factory function. If `fn` has a `defineDeps` record, its parameters are injected; otherwise the engine calls `fn(scope)` so the factory can resolve its own deps.
+- `addValue(token, value)` — already-built instance. No deps, no lifetime.
+
+**Last registration wins.** A later `.add` / `.addFactory` / `.addValue` for the same token replaces the earlier one. This is how overrides, test doubles, and environment-specific wiring are done — no separate override API.
 
 `.as<S extends Scopes>()` gives compile-time checking that the tag is a declared scope name. An untagged registration (no `.as()`) is transient.
 
@@ -300,7 +319,7 @@ const services = new DiBuilder<"singleton" | "request">();
 Scopes form a parent chain. The root scope must be a real, app-lifetime object.
 
 ```typescript
-const root = services.createScope("singleton"); // lives for the application's lifetime
+const root = services.build();                   // mints the root scope (app lifetime)
 const req  = root.createScope("request");        // created per HTTP request (for example)
 const reqChild = req.createScope("request");     // nested if needed
 ```
@@ -325,7 +344,7 @@ This mirrors `Microsoft.Extensions.DependencyInjection`'s scope-validation disci
 
 ### Greedy overload selection
 
-When a constructor has multiple registered signatures (via `@signature` stacking or `forCtor` chaining), the engine selects by scanning longest → shortest and picking the first signature where every non-hole parameter token is satisfiable (registered in the container, a hole sentinel, or a factory-typed position). Equal-arity ties break by registration order. The transformer's factory-signature diagnostic (see §8) warns on genuine equal-arity ambiguity.
+When a constructor has multiple registered signatures (via `@signature` stacking or `forCtor` chaining, or from overload expansion of optional params), the engine selects by scanning longest → shortest and picking the first **satisfiable** signature. A slot is satisfiable when it is a `FactoryRef`, a `ScopeRef`, or a string token registered in the owning scope's chain. A `hole` (`null`) is NOT special — it is treated as an unregistered token and blocks the signature on a direct resolve. Equal-arity ties break by registration order. The transformer's factory-signature diagnostic (see §8) warns on genuine equal-arity ambiguity.
 
 ### Cycle detection
 
@@ -364,12 +383,10 @@ The container never awaits. Async is expressed as `Promise<T>` values flowing th
 
 ```typescript
 // An async factory returns Promise<IDb>
-container.register("pkg:IDb", {
-  useFactory: async (c) => {
-    const pool = c.resolve<IConnectionPool>("pkg:IConnectionPool");
-    return new PostgresDb(await pool.connect());
-  },
-});
+services.addFactory("pkg:IDb", async (scope) => {
+  const pool = scope.resolve<IConnectionPool>("pkg:IConnectionPool");
+  return new PostgresDb(await pool.connect());
+}).as("singleton");
 
 // A service that needs IDb declares the dep as Promise<IDb> and awaits itself
 class UserRepo {
@@ -417,21 +434,24 @@ The named-function-interface escape hatch is deliberate. When your function-type
 
 Ramda-style placeholder arguments exposed to callers are rejected — they leak constructor arity/structure. The factory caller sees only the unregistered parameters, in order.
 
-### Override paths — `useFactory` / `useValue`
+### Override / plugin-less registration — `addFactory` / `addValue`
 
-The recommended plugin-less override mechanism. No dep array, no decorator, no reflection.
+The recommended plugin-less registration mechanism. No dep array, no decorator, no reflection.
 
 ```typescript
-container.register("pkg:IFoo", {
-  useFactory: (c) => new TheirFoo(c.resolve<IBar>("pkg:IBar")),
-});
+// addFactory: a factory function called with the live scope (no defineDeps record
+// → scope-based escape hatch); or a pre-annotated factory whose deps are injected.
+services.addFactory("pkg:IFoo", (scope) =>
+  new TheirFoo(scope.resolve<IBar>("pkg:IBar")),
+).as("singleton");
 
-container.register("pkg:IFoo", {
-  useValue: cachedFooInstance,
-});
+// addValue: an already-built instance, no lifetime (values are always immediate).
+services.addValue("pkg:IFoo", cachedFooInstance);
 ```
 
-Useful for test doubles, third-party instances, and cases where the transformer isn't available.
+**Last registration wins** — a later `add` / `addFactory` / `addValue` for the same token shadows all earlier ones, so any form can override any other. No separate "override" mechanism: overrides are just registrations that happen after the baseline.
+
+Useful for test doubles, third-party instances, async factories (`addFactory` returning `Promise<T>`), and cases where the transformer isn't available.
 
 ---
 
@@ -465,21 +485,31 @@ For each class being registered, the transformer:
 2. Computes a token per parameter (§ token generation above).
 3. Emits `null` only for parameter types that can never be tokens — primitives (`string`, `number`, `boolean`, `symbol`, `bigint`), `unknown`, `any`, `void`. All others get a string token (even if the type is not registered — the runtime decides at resolve time whether a parameter is a hole or an error).
 4. For `Promise<X>` parameters: emits the token for `X` (not a `Promise<X>` token).
-5. Emits `defineDeps(CtorName, [[...tokens]])` immediately before the registration site.
+5. Applies **overload expansion** for trailing optional/defaulted/`T|undefined` parameters: emits the full signature PLUS one shorter "without that arg" overload per droppable trailing parameter.
+6. Hoists the class reference to a `const ɵregN = ClassName` declaration and uses that identifier in both `defineDeps(ɵregN, ...)` and the registration call — ensuring the class is evaluated once and both calls reference the same object.
+7. Emits `defineDeps(ɵregN, [[...full], [...shorter]...])` immediately before the lowered registration call.
 
-The transformer normally emits exactly one signature per class. The engine's multi-signature DepRecord is the format; the transformer only ever writes one signature because it sees the single canonical ctor signature statically.
+The `signatures` array therefore has one entry when all parameters are required (no overloads), and `1 + N` entries when N trailing parameters are optional/defaulted. The engine's greedy selection tries longest-first and falls back when the optional dep is unregistered.
 
 ### Lowered output / ABI contract
 
 The lowered form is a contract. Libraries compile with the transformer and publish the lowered JS; consumers run it without the transformer. The emitted-call format is versioned via `ABI_VERSION` and kept backward-compatible.
 
 ```typescript
-// Author code
+// Author code — `table?: string` is optional, so overload expansion applies
 services.add<IUserRepo>(SqlUserRepo).as<"request">();
 
-// Lowered (transformer emits)
-defineDeps(SqlUserRepo, [["pkg:ILogger", "pkg:IDbConnection", null]]);
-services.add("pkg:IUserRepo", SqlUserRepo).as("request");
+// Lowered (transformer emits) — the class is hoisted; two signatures emitted
+const ɵreg0 = SqlUserRepo;
+defineDeps(ɵreg0, [
+  ["pkg:ILogger", "pkg:IDbConnection", null],  // full: null = hole for string 'table'
+  ["pkg:ILogger", "pkg:IDbConnection"],          // shorter: omits the optional param
+]);
+services.add("pkg:IUserRepo", ɵreg0).as("request");
+// On direct resolve: greedy selection tries the 3-slot form first; null is
+// unresolvable → falls to the 2-slot form; table is undefined (its default).
+// When used as a factory target, the 3-slot (longest) is selected and the
+// null slot is caller-supplied positionally.
 ```
 
 ### Factory-signature diagnostic (originally §4.5)
@@ -521,7 +551,7 @@ The transformer is optional — the engine is always usable hand-fed. The relati
 
 **Three plugin-less paths for overrides and standalone use:**
 
-1. **`useFactory` / `useValue`** — recommended. Wire deps in a plain closure; no token, no array, no reflection.
+1. **`addFactory` / `addValue`** — recommended. Wire deps in a plain closure or provide a pre-built value; no token array, no reflection. A later registration for the same token overrides earlier ones (last wins).
 2. **`@signature` decorator** — for your own classes where you want constructor injection without the transformer. Hand-author the token array; unchecked (no transformer to verify tokens match params).
 3. **`forCtor(ctor).signature(...)`** — same as `@signature` but for classes you don't own.
 

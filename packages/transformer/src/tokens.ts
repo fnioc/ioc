@@ -49,37 +49,6 @@ export type TokenResult =
   | { readonly kind: "hole" }
   | { readonly kind: "resolvable"; readonly token: string };
 
-/**
- * Primitive and bottom/top types that can never carry a token. Maps to `null`
- * ("hole") in the emitted signature. The runtime — not the transformer —
- * decides whether a `null` is a genuine caller-supplied hole or an error.
- */
-function isHoleType(type: ts.Type): boolean {
-  const f = type.flags;
-  if (
-    f &
-    (ts.TypeFlags.String |
-      ts.TypeFlags.StringLiteral |
-      ts.TypeFlags.Number |
-      ts.TypeFlags.NumberLiteral |
-      ts.TypeFlags.Boolean |
-      ts.TypeFlags.BooleanLiteral |
-      ts.TypeFlags.ESSymbol |
-      ts.TypeFlags.UniqueESSymbol |
-      ts.TypeFlags.BigInt |
-      ts.TypeFlags.BigIntLiteral |
-      ts.TypeFlags.Any |
-      ts.TypeFlags.Unknown |
-      ts.TypeFlags.Void |
-      ts.TypeFlags.Undefined |
-      ts.TypeFlags.Null |
-      ts.TypeFlags.Never)
-  ) {
-    return true;
-  }
-  return false;
-}
-
 /** Unwrap a single `Promise<X>` layer, returning `X`'s type (or the input). */
 function unwrapPromise(type: ts.Type, checker: ts.TypeChecker): ts.Type {
   const symbol = type.getSymbol();
@@ -94,14 +63,21 @@ function unwrapPromise(type: ts.Type, checker: ts.TypeChecker): ts.Type {
 /**
  * Classify a constructor-parameter type into a hole or a token. Unwraps a
  * single `Promise<X>` layer first.
+ *
+ * There is NO pre-emptive "primitive → hole" mask: the type is looked up exactly
+ * as written, and a slot is a hole ONLY when its type is unresolvable — i.e.
+ * `deriveToken` finds no token (a wide primitive / top / bottom type has no
+ * symbol, an anonymous structural type has no name). A literal type IS a token
+ * (`"dev"` → `"dev"`), since it resolves. This mirrors the manual surface, where
+ * a hole is something the author marks explicitly, never something inferred from
+ * a parameter being "primitive-shaped".
  */
 export function tokenForType(type: ts.Type, ctx: TokenContext): TokenResult {
   const unwrapped = unwrapPromise(type, ctx.checker);
-  if (isHoleType(unwrapped)) return { kind: "hole" };
-
   const token = deriveToken(unwrapped, ctx);
-  if (token === undefined) return { kind: "hole" };
-  return { kind: "resolvable", token };
+  return token === undefined
+    ? { kind: "hole" }
+    : { kind: "resolvable", token };
 }
 
 /**
@@ -118,7 +94,6 @@ export function tokenForReturnType(
 ): string | undefined {
   const returnType = ctx.checker.getReturnTypeOfSignature(signature);
   const unwrapped = unwrapPromise(returnType, ctx.checker);
-  if (isHoleType(unwrapped)) return undefined;
   return deriveToken(unwrapped, ctx);
 }
 
@@ -131,6 +106,13 @@ export function deriveToken(
   type: ts.Type,
   ctx: TokenContext,
 ): string | undefined {
+  // Literal types — string / number / boolean / bigint, and unions of them —
+  // derive a deterministic token from the literal text itself, enabling
+  // literal-level discrimination (`nameof<"a">()`, `add<1 | 2>(...)`,
+  // `resolve<"a" | "b">()`).
+  const literal = literalToken(type);
+  if (literal !== undefined) return literal;
+
   const symbol = type.aliasSymbol ?? type.getSymbol();
   if (!symbol) return undefined;
 
@@ -156,6 +138,61 @@ export function deriveToken(
 
   // App-internal: source-relative path token, `./`-prefixed, no extension.
   return appInternalToken(declPath, name, ctx.projectRoot);
+}
+
+/**
+ * Render a SINGLE literal type as its valid-TS text, or `undefined` if the type
+ * is not a renderable literal. Covers every literal kind we can stably stringify:
+ *   - string  → `"a"` (JSON-quoted)
+ *   - number  → `42`
+ *   - bigint  → `123n`
+ *   - boolean → `true` / `false`
+ * Enum members carry the underlying string/number-literal flag, so they render
+ * by their value here. Template-literal types and `unique symbol` have no fixed
+ * value and return `undefined` (they fall through to symbol-based derivation).
+ */
+function literalText(type: ts.Type): string | undefined {
+  if (type.isStringLiteral()) return JSON.stringify(type.value);
+  if (type.isNumberLiteral()) return String(type.value);
+  if (type.flags & ts.TypeFlags.BigIntLiteral) {
+    const value = (type as ts.BigIntLiteralType).value;
+    return `${value.negative ? "-" : ""}${value.base10Value}n`;
+  }
+  if (type.flags & ts.TypeFlags.BooleanLiteral) {
+    return (type as unknown as { intrinsicName: string }).intrinsicName;
+  }
+  return undefined;
+}
+
+/**
+ * A deterministic token for a literal type or a union of literal types. Members
+ * are rendered as valid TS (see `literalText`), SORTED (so member order is
+ * irrelevant), and ` | `-joined — e.g. `"asdf" | "qwer"`, `1 | 2`, `false | true`.
+ * Returns `undefined` for any type that is not a literal / pure-literal union, so
+ * non-literal types fall through to the symbol-based derivation. Governs every
+ * token position uniformly — nameof / add / resolve AND ctor/factory params — so
+ * a `mode: "dev"` param and an `add<"dev">(…)` registration unify on one token.
+ *
+ * Wide `boolean` is explicitly excluded: TypeScript models it as the union
+ * `false | true`, which would otherwise mint the bogus token `"false | true"`
+ * for a plain boolean param. A boolean is a scalar (a hole), not a discriminant;
+ * an intentional `true` / `false` LITERAL still resolves (it carries
+ * `BooleanLiteral`, not the wide `Boolean` flag).
+ */
+function literalToken(type: ts.Type): string | undefined {
+  if (type.flags & ts.TypeFlags.Boolean) return undefined;
+  const single = literalText(type);
+  if (single !== undefined) return single;
+  if (type.isUnion()) {
+    const parts: string[] = [];
+    for (const member of type.types) {
+      const text = literalText(member);
+      if (text === undefined) return undefined;
+      parts.push(text);
+    }
+    return parts.length > 0 ? parts.sort().join(" | ") : undefined;
+  }
+  return undefined;
 }
 
 /** The declaration we anchor a token on — prefer interface/class/type-alias. */

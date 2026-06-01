@@ -54,8 +54,14 @@ function buildHandFed(): DiBuilder<"singleton", "request"> {
 
   // Path 2: hand-feed each class's ctor signature (forCtor / signature). These
   // arrays are exactly what the transformer's defineDeps emits.
-  forCtor(SqlUserRepo).signature(T.logger, T.db, hole);
-  forCtor(Report).signature(T.repo, hole);
+  //
+  // SqlUserRepo: `table?: string` → overload expansion: full [logger, db, null]
+  // + shorter [logger, db]. Greedy selection falls to the 2-slot form on a
+  // direct resolve (null is unsatisfiable); table is undefined.
+  forCtor(SqlUserRepo).signature(T.logger, T.db, hole).signature(T.logger, T.db);
+  // Report: `requestId?: string` → overload expansion: [repo, null] + [repo].
+  // For factory partitioning, the longest [repo, null] is used → 1 caller arg.
+  forCtor(Report).signature(T.repo, hole).signature(T.repo);
   forCtor(ConfigConsumer).signature(T.config);
   forCtor(ThunkConsumer).signature(T.thunk);
   // ReportService's two inline factory params → FactoryRef slots, by hand: a
@@ -72,15 +78,14 @@ function buildHandFed(): DiBuilder<"singleton", "request"> {
   services.add(T.thunkConsumer, ThunkConsumer).as("singleton");
   services.add(T.configConsumer, ConfigConsumer).as("singleton");
 
-  // Path 1: plugin-less overrides for the async config + the named-callable.
-  services.add(T.config, {
-    useFactory: () => {
-      handFedConfigRuns += 1;
-      return Promise.resolve({ endpoint: "https://db.example/api" });
-    },
-    scope: "singleton",
-  });
-  services.add(T.thunk, { useValue: theThunk });
+  // Path 1: plugin-less registrations for the async config + the named-callable.
+  // addFactory (no defineDeps record) → engine calls factory(scope); factory
+  // ignores the scope arg and returns the Promise directly.
+  services.addFactory(T.config, () => {
+    handFedConfigRuns += 1;
+    return Promise.resolve({ endpoint: "https://db.example/api" });
+  }).as("singleton");
+  services.addValue(T.thunk, theThunk);
 
   return services;
 }
@@ -113,7 +118,7 @@ describe("progressive-enhancement parity — hand-fed graph (no transformer)", (
     const req = services.build().createScope("request");
     const rs = req.resolve<{
       makeCtx: () => unknown;
-      makeReport: (ctx: { id: number }) => { ctx: { id: number } | undefined };
+      makeReport: (requestId: string) => { requestId: string | undefined };
     }>(T.reportService);
 
     // Bare factory (hole-free target): same request-scoped instance within one
@@ -121,11 +126,11 @@ describe("progressive-enhancement parity — hand-fed graph (no transformer)", (
     expect(rs.makeCtx()).toBe(rs.makeCtx());
     expect(rs.makeCtx()).toBe(req.resolve(T.ctx));
 
-    // Partitioned factory: caller arg fills the hole; fresh per call.
-    const ctx = { id: 99 };
-    const r1 = rs.makeReport(ctx);
-    const r2 = rs.makeReport(ctx);
-    expect(r1.ctx).toBe(ctx);
+    // Partitioned factory: caller string fills the hole (string → null slot);
+    // a fresh instance is built per call since the target is parameterized.
+    const r1 = rs.makeReport("req-99");
+    const r2 = rs.makeReport("req-99");
+    expect(r1.requestId).toBe("req-99");
     expect(r1).not.toBe(r2);
   });
 

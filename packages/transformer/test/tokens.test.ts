@@ -5,6 +5,9 @@ import { transform, type VirtualFiles } from "./harness.js";
 //   - package-public type  →  `packageName:subpath/Symbol`  (version excluded)
 //   - app-internal type    →  source-relative `./...` token
 //   - `Promise<X>`         →  the token for `X`
+//
+// The transformer always hoists: `const ɵregN = Ctor;`. Assertions use ɵreg0
+// (first registration in file) or ɵreg1 (second), etc.
 
 // A library installed under node_modules with an `exports` subpath map.
 function withLib(appSource: string): VirtualFiles {
@@ -38,7 +41,7 @@ describe("token generation", () => {
     `);
     const { outputs } = transform(files, { entry: ["/proj/src/app.ts"] });
     const out = outputs["/proj/src/app.ts"]!;
-    expect(out).toContain('services.add("your-lib:contracts/IFoo", Foo)');
+    expect(out).toContain('services.add("your-lib:contracts/IFoo", ɵreg0)');
   });
 
   test("package-public root export → packageName:Symbol (no subpath)", () => {
@@ -50,7 +53,7 @@ describe("token generation", () => {
     `);
     const { outputs } = transform(files, { entry: ["/proj/src/app.ts"] });
     const out = outputs["/proj/src/app.ts"]!;
-    expect(out).toContain('services.add("your-lib:IRoot", RootImpl)');
+    expect(out).toContain('services.add("your-lib:IRoot", ɵreg0)');
   });
 
   test("token excludes the package version", () => {
@@ -84,7 +87,7 @@ describe("token generation", () => {
       compilerOptions: { rootDir: "/proj" },
     });
     const out = outputs["/proj/src/app.ts"]!;
-    expect(out).toContain('services.add("./src/services/IUserRepo", SqlUserRepo)');
+    expect(out).toContain('services.add("./src/services/IUserRepo", ɵreg0)');
   });
 
   test("app-internal token appends Symbol when file basename differs", () => {
@@ -103,7 +106,7 @@ describe("token generation", () => {
       compilerOptions: { rootDir: "/proj" },
     });
     const out = outputs["/proj/src/app.ts"]!;
-    expect(out).toContain('services.add("./src/contracts/IThing", Thing)');
+    expect(out).toContain('services.add("./src/contracts/IThing", ɵreg0)');
   });
 
   test("Promise<X> parameter → the token for X (Promise stripped)", () => {
@@ -120,10 +123,9 @@ describe("token generation", () => {
     `);
     const { outputs } = transform(files, { entry: ["/proj/src/app.ts"] });
     const out = outputs["/proj/src/app.ts"]!;
-    // NeedsAsync's ctor param Promise<IFoo> lowers to the IFoo token, not a
-    // Promise token. (The TS type annotation `Promise<IFoo>` still prints in
-    // this harness's output, but it carries no token of its own.)
-    expect(out).toContain('defineDeps(NeedsAsync, [["your-lib:contracts/IFoo"]])');
+    // NeedsAsync is the second registration → ɵreg1.
+    // Its ctor param Promise<IFoo> lowers to the IFoo token, not a Promise token.
+    expect(out).toContain('defineDeps(ɵreg1, [["your-lib:contracts/IFoo"]])');
     expect(out).not.toContain('"Promise');
     expect(out).not.toContain(":Promise");
   });

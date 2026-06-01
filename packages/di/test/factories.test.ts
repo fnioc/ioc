@@ -253,23 +253,23 @@ describe("factory target errors", () => {
     }
   });
 
-  test("clear error when the factory target is a useValue, not a class", () => {
+  test("a FactoryRef targeting a value registration yields a thunk returning the value", () => {
+    // Semantic change: the old engine threw FactoryTargetError("not-a-class") for
+    // a value target. The new engine treats a value target as a zero-arg factory
+    // that resolves and returns the stored instance — same identity every call.
+    const storedFoo = new Foo();
     class Holder {
-      public constructor(public readonly makeFoo: () => Foo) {}
+      public constructor(public readonly getFoo: () => Foo) {}
     }
     defineDeps(Holder, [[factoryOf(T.Service)]]);
 
     const services = new DiBuilder<"singleton">();
-    services.add(T.Service, { useValue: new Foo() }); // not a class registration
+    services.addValue(T.Service, storedFoo);
     services.add(T.Repo, Holder).as("singleton");
 
     const root = services.build();
-    expect(() => root.resolve<Holder>(T.Repo)).toThrow(FactoryTargetError);
-    try {
-      root.resolve<Holder>(T.Repo);
-    } catch (err) {
-      const e = err as FactoryTargetError;
-      expect(e.reason).toBe("not-a-class");
-    }
+    const holder = root.resolve<Holder>(T.Repo);
+    expect(holder.getFoo()).toBe(storedFoo); // thunk returns the exact registered value
+    expect(holder.getFoo()).toBe(storedFoo); // same reference every call
   });
 });

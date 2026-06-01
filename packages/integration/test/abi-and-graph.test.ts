@@ -37,47 +37,67 @@ afterAll(() => {
 
 // ── Coverage 1: ABI contract ────────────────────────────────────────────────
 
+// The transformer HOISTS every class arg to a `const ɵregN = Cls` declaration
+// and uses the identifier in both `defineDeps(ɵregN, ...)` and the `add` call.
+// Tests check (a) the hoist and (b) the dep signature content separately.
+//
+// Helper: find the ɵregN name for a class in the emitted wiring JS.
+function hoistName(wiring: string, className: string): string {
+  const m = wiring.match(new RegExp(`const (ɵreg\\d+) = ${className};`));
+  if (!m) throw new Error(`No hoist const found for ${className} in emitted wiring`);
+  return m[1]!;
+}
+
 describe("emit contract — transformer-emitted lowered output (PRD §8)", () => {
   test("emits the defineDeps import from @fnioc/di + bare calls (ESM contract)", () => {
     const wiring = project.emitted("sample/wiring.js");
     expect(wiring).toContain('import { defineDeps } from "@fnioc/di"');
   });
 
-  test("class with mixed deps lowers to [tokens..., null] (a hole for the unregistered ctor param)", () => {
+  test("class with optional table param emits two overloads: long [tokens..., null] + short [tokens...] (overload expansion)", () => {
     const wiring = project.emitted("sample/wiring.js");
+    // `table?: string` triggers overload expansion: the full [logger, db, null] overload
+    // AND the shorter [logger, db] fallback. Greedy selection tries longest first; the
+    // null slot is unsatisfiable on a direct resolve → falls to the 2-slot form.
+    const n = hoistName(wiring, "SqlUserRepo");
     expect(wiring).toContain(
-      'defineDeps(SqlUserRepo, [["./sample/contracts/ILogger", "./sample/contracts/IDbConnection", null]]);',
+      `defineDeps(${n}, [["./sample/contracts/ILogger", "./sample/contracts/IDbConnection", null], ["./sample/contracts/ILogger", "./sample/contracts/IDbConnection"]]);`,
     );
     expect(wiring).toContain(
-      'services.add("./sample/contracts/IUserRepo", SqlUserRepo).as("request");',
+      `services.add("./sample/contracts/IUserRepo", ${n}).as("request");`,
     );
   });
 
   test("zero-arg classes lower to an empty signature", () => {
     const wiring = project.emitted("sample/wiring.js");
-    expect(wiring).toContain("defineDeps(ConsoleLogger, [[]]);");
-    expect(wiring).toContain("defineDeps(SqlDb, [[]]);");
-    expect(wiring).toContain("defineDeps(RequestContext, [[]]);");
+    // Each zero-arg class is hoisted to a const; defineDeps uses the const identifier.
+    for (const cls of ["ConsoleLogger", "SqlDb", "RequestContext"]) {
+      const n = hoistName(wiring, cls);
+      expect(wiring).toContain(`defineDeps(${n}, [[]]);`);
+    }
   });
 
   test("inline `() => I` ctor params lower to `{ factory: token }` slots", () => {
     const wiring = project.emitted("sample/wiring.js");
+    const n = hoistName(wiring, "ReportService");
     expect(wiring).toContain(
-      'defineDeps(ReportService, [[{ factory: "./sample/contracts/IRequestContext" }, { factory: "./sample/contracts/IReport" }]]);',
+      `defineDeps(${n}, [[{ factory: "./sample/contracts/IRequestContext" }, { factory: "./sample/contracts/IReport" }]]);`,
     );
   });
 
   test("the type-driven type arg lowers to a string token; `.as<\"x\">()` → `.as(\"x\")`", () => {
     const wiring = project.emitted("sample/wiring.js");
+    const n = hoistName(wiring, "ConsoleLogger");
     expect(wiring).toContain(
-      'services.add("./sample/contracts/ILogger", ConsoleLogger).as("singleton");',
+      `services.add("./sample/contracts/ILogger", ${n}).as("singleton");`,
     );
   });
 
   test("Promise<IConfig> ctor dep unwraps to the bare IConfig token (async-as-values)", () => {
     const wiring = project.emitted("sample/wiring.js");
+    const n = hoistName(wiring, "ConfigConsumer");
     expect(wiring).toContain(
-      'defineDeps(ConfigConsumer, [["./sample/contracts/IConfig"]]);',
+      `defineDeps(${n}, [["./sample/contracts/IConfig"]]);`,
     );
   });
 
@@ -85,8 +105,9 @@ describe("emit contract — transformer-emitted lowered output (PRD §8)", () =>
     const wiring = project.emitted("sample/wiring.js");
     // ThunkConsumer(thunk: IThunk) — IThunk is `interface IThunk { (): string }`.
     // It must be a string-token slot, never `{ factory: ... }`.
+    const n = hoistName(wiring, "ThunkConsumer");
     expect(wiring).toContain(
-      'defineDeps(ThunkConsumer, [["./sample/contracts/IThunk"]]);',
+      `defineDeps(${n}, [["./sample/contracts/IThunk"]]);`,
     );
     expect(wiring).not.toContain('factory: "./sample/contracts/IThunk"');
   });
@@ -172,7 +193,7 @@ describe("factory injection e2e (transformer-emitted FactoryRef → di callable)
     expect(req.resolve<{ id: number }>(T.ctx)).toBe(a);
   });
 
-  test("a partitioned `(ctx) => IReport` factory fills the hole positionally; fresh per call", async () => {
+  test("a partitioned `(requestId) => IReport` factory fills the string hole positionally; fresh per call", async () => {
     const app = await project.load("sample/app.js");
     const rootScope = app.rootScope as () => {
       createScope: (n: string) => { resolve: <T>(t: string) => T };
@@ -181,19 +202,15 @@ describe("factory injection e2e (transformer-emitted FactoryRef → di callable)
 
     const req = rootScope().createScope("request");
     const reportService = req.resolve(T.reportService) as {
-      makeReport: (ctx: { id: number }) => {
-        repo: { db: unknown };
-        ctx: { id: number } | undefined;
-      };
+      makeReport: (requestId: string) => { repo: unknown; requestId: string | undefined };
     };
 
-    const myCtx = { id: 99 };
-    const report1 = reportService.makeReport(myCtx);
-    const report2 = reportService.makeReport(myCtx);
-
-    // The registered repo dep is resolved; the unregistered IRequestContext hole
-    // is filled positionally by the caller-supplied arg.
-    expect(report1.ctx).toBe(myCtx);
+    // The registered repo dep is resolved; the `requestId: string` hole (string
+    // is always null in the transformer output → always caller-supplied) is
+    // filled positionally by the caller-supplied string arg.
+    const report1 = reportService.makeReport("req-99");
+    const report2 = reportService.makeReport("req-99");
+    expect(report1.requestId).toBe("req-99");
     expect(report1.repo).toBeDefined();
     // A parameterized factory bypasses the cache: fresh instance per call.
     expect(report1).not.toBe(report2);

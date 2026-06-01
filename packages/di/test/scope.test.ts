@@ -25,8 +25,8 @@ describe("scope chain + child-shadows-parent override", () => {
 
     const root = services.build();
     const req = root.createScope("request");
-    // Local override on the request scope: a fake DB just for this subtree.
-    req.add(T.Db, { useValue: new FakeDb() });
+    // Local value override on the request scope: a fake DB just for this subtree.
+    req.addValue(T.Db, new FakeDb());
 
     const resolved = req.resolve<RealDb | FakeDb>(T.Db);
     expect(resolved.kind).toBe("fake");
@@ -37,10 +37,10 @@ describe("scope chain + child-shadows-parent override", () => {
     services.add(T.Db, RealDb).as("request");
 
     const root = services.build();
-    root.add(T.Db, { useValue: new FakeDb() }); // override at root...
+    root.addValue(T.Db, new FakeDb()); // override at root...
     const req = root.createScope("request");
     const realInstance = new RealDb();
-    req.add(T.Db, { useValue: realInstance }); // ...shadowed nearer the leaf
+    req.addValue(T.Db, realInstance); // ...shadowed nearer the leaf
 
     expect(req.resolve<RealDb>(T.Db)).toBe(realInstance);
     expect(root.resolve<FakeDb>(T.Db).kind).toBe("fake");

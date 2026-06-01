@@ -2,19 +2,23 @@
 // registration kinds, and the resolver-facing scope contract.
 
 import type { Token } from "@fnioc/core";
-import type { Ctor, Func } from "@rhombus-toolkit/func";
+import type { Ctor } from "@rhombus-toolkit/func";
 
 export type { Ctor };
 
 /**
- * A factory override: a closure that builds the instance, given the scope it is
- * being resolved into (so the factory can `scope.resolve(...)` its own deps).
+ * A registration-level factory function. Its parameters are filled by the
+ * engine at resolve time, the same way a class constructor's are: a factory
+ * WITH a `defineDeps` record has each parameter resolved by its slot (token →
+ * resolved instance, `ScopeRef` → the live scope, hole → caller-supplied); a
+ * factory WITHOUT a record is the plugin-less escape hatch and is called with
+ * the live scope as its single argument (`(scope) => …`).
  *
  * May be async — it can return a `Promise<T>`. The container never awaits; the
  * Promise flows through the sync resolution channel as a value (§"Async as
  * values"). A consumer that depends on it declares `Promise<T>` and awaits.
  */
-export type Factory<T = unknown> = Func<[scope: ResolveScope], T>;
+export type Factory = (...args: any[]) => unknown;
 
 /** A class registration: a token bound to a concrete constructor. */
 export interface ClassRegistration {
@@ -27,14 +31,19 @@ export interface ClassRegistration {
   readonly scope: string | undefined;
 }
 
-/** A `useFactory` override registration. */
+/** A factory-function registration — its params are injected like a ctor's. */
 export interface FactoryRegistration {
   readonly kind: "factory";
-  readonly useFactory: Factory;
+  readonly factory: Factory;
+  /**
+   * The lifetime — the scope name that owns and caches the result. `undefined`
+   * means transient (the factory runs on every resolve). Attached via `.as()`,
+   * exactly like a class registration.
+   */
   readonly scope: string | undefined;
 }
 
-/** A `useValue` override registration — an already-built instance. */
+/** A value registration — an already-built instance, no lifetime. */
 export interface ValueRegistration {
   readonly kind: "value";
   readonly useValue: unknown;
@@ -47,25 +56,25 @@ export type Registration =
   | ValueRegistration;
 
 /**
- * The resolution surface a factory closure receives. A structural subset of
- * `Scope` exposing only what an override needs — resolving further tokens.
+ * The resolution surface a factory receives — either as an injected `ScopeRef`
+ * parameter, or (plugin-less escape hatch) as the sole argument of a
+ * record-less factory. A structural subset of `Scope`: resolve further tokens
+ * and open child scopes.
+ *
+ * `resolve` has three shapes:
+ *   - `resolve<T>()`        — tokenless; the transformer lowers it to a token.
+ *   - `resolve<T>(token)`   — explicit token, typed return.
+ *   - `resolve(token)`      — explicit token, `unknown` return (dynamic).
  */
 export interface ResolveScope {
+  resolve<T>(): T;
   resolve<T>(token: Token): T;
-}
-
-/**
- * A factory registration spec: a `useFactory` closure (which resolves its own
- * deps from the scope passed to it) with an optional `scope` so its result is
- * cached at a matching ancestor (singleton-style). Without a `scope` it runs on
- * every resolve.
- */
-export interface FactorySpec<T> {
-  readonly useFactory: (scope: ResolveScope) => T;
-  readonly scope?: string;
-}
-
-/** A value registration spec: an already-built instance, no lifetime. */
-export interface ValueSpec<T> {
-  readonly useValue: T;
+  resolve(token: Token): unknown;
+  /**
+   * Returns a FACTORY for the token rather than an instance — the resolve-site
+   * mirror of a `FactoryRef` ctor param. The authored `resolve<(a: A) => T>()`
+   * (a function-typed type arg) lowers to this.
+   */
+  resolveFactory(token: Token): unknown;
+  createScope(name: string): ResolveScope;
 }

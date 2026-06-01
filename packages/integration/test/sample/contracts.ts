@@ -27,16 +27,20 @@ export interface IRequestContext {
   readonly id: number;
 }
 
-/** Built by a factory parameter; threads a request context the caller supplies. */
+/**
+ * Built by a factory parameter; carries a caller-supplied string request ID.
+ * `requestId?: string` is a primitive → always a hole in the transformer output,
+ * guaranteeing the factory's call signature is `(requestId: string) => IReport`.
+ */
 export interface IReport {
   readonly repo: IUserRepo;
-  readonly ctx: IRequestContext | undefined;
+  readonly requestId?: string;
 }
 
 /** Holds two factory params (a bare zero-arg factory and a partitioned factory). */
 export interface IReportService {
   readonly makeCtx: () => IRequestContext;
-  readonly makeReport: (ctx: IRequestContext) => IReport;
+  readonly makeReport: (requestId: string) => IReport;
 }
 
 /**

@@ -4,11 +4,13 @@ import { defineDeps, hole } from "@fnioc/core";
 import { T } from "./fixtures.js";
 
 // Greedy signature selection over Token|null|FactoryRef signatures from
-// getDeps. Scan longest → shortest; first SATISFIABLE wins. A null hole and a
-// FactoryRef are always satisfiable (Phase 2D.2: a hole is caller-supplied, a
-// FactoryRef is injected) — only an unregistered string token blocks a
-// signature. Equal-arity ties → registration order. None satisfiable → throw
-// naming the unsatisfiable tokens.
+// getDeps. Scan longest → shortest; first SATISFIABLE wins. A FactoryRef and
+// ScopeRef are always satisfiable (injected). A null hole is NOT satisfiable
+// on a direct resolve — it is an unresolvable slot that blocks the signature.
+// An unregistered string token also blocks. Equal-arity ties → registration
+// order. None satisfiable → throw naming the unsatisfiable tokens.
+// Optional/defaulted params are modeled as multiple overloads (longest first);
+// when the longer one can't be satisfied, selection falls to the shorter one.
 
 class LoggerImpl {
   public readonly kind = "logger";
@@ -65,10 +67,12 @@ describe("greedy signature selection", () => {
     expect(svc.args[0]).toBeInstanceOf(LoggerImpl);
   });
 
-  test("a hole-containing signature is satisfiable and the longest wins", () => {
-    // Longest is [Logger, hole] — a hole is satisfiable (caller-supplied), so
-    // this longer signature now wins over the shorter [Logger]. On a DIRECT
-    // resolve there is no caller, so the hole lands as `undefined`.
+  test("a hole in a required slot blocks the signature; falls to the shorter overload", () => {
+    // Semantic change: hole is no longer "satisfiable" on a direct resolve.
+    // A hole is an unresolvable slot — it blocks [Logger, hole] — so selection
+    // falls to the shorter [Logger] overload and constructs with one arg.
+    // (This models an optional/defaulted param: the transformer emits both
+    // overloads; the shorter one is chosen when the longer one can't be satisfied.)
     class Svc {
       public readonly args: unknown[];
       public constructor(...args: unknown[]) {
@@ -85,9 +89,9 @@ describe("greedy signature selection", () => {
     services.add(T.Service, Svc).as("singleton");
 
     const svc = services.build().resolve<Svc>(T.Service);
-    expect(svc.args).toHaveLength(2);
+    // Selection falls to [T.Logger] — the shorter satisfiable overload.
+    expect(svc.args).toHaveLength(1);
     expect(svc.args[0]).toBeInstanceOf(LoggerImpl);
-    expect(svc.args[1]).toBeUndefined(); // hole, unfilled on a direct resolve
   });
 
   test("equal-arity tie breaks by registration order (first declared wins)", () => {
@@ -135,9 +139,12 @@ describe("greedy signature selection", () => {
     }
   });
 
-  test("an all-hole signature is satisfiable; a direct resolve fills it undefined", () => {
-    // A hole is satisfiable on its own. On a direct resolve there is no caller,
-    // so the single hole lands as `undefined` — the class is still built.
+  test("an all-hole signature is unsatisfiable on direct resolve; throws NoSatisfiableSignatureError", () => {
+    // Semantic change: a hole is NOT satisfiable on a direct resolve. It is an
+    // unresolvable slot that blocks the signature. A class with only holes and no
+    // shorter fallback overload surfaces NoSatisfiableSignatureError.
+    // (To get the "undefined/default" behavior, model as an optional overload:
+    //  defineDeps(Svc, [[hole], []]) — the zero-arg overload is the fallback.)
     class Svc {
       public readonly a: unknown;
       public constructor(a: unknown) {
@@ -150,9 +157,7 @@ describe("greedy signature selection", () => {
     services.add(T.Service, Svc).as("singleton");
 
     const root = services.build();
-    const svc = root.resolve<Svc>(T.Service);
-    expect(svc).toBeInstanceOf(Svc);
-    expect(svc.a).toBeUndefined();
+    expect(() => root.resolve<Svc>(T.Service)).toThrow(NoSatisfiableSignatureError);
   });
 
   test("throws naming only the unsatisfiable token, ignoring holes", () => {

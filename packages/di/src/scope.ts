@@ -11,9 +11,10 @@
 // resolve. That is what makes a long-lived service depending on a shorter-lived
 // one fail loudly instead of silently capturing it.
 
-import { getDeps, hole } from "@fnioc/core";
-import type { DepSlot, FactoryRef, Token } from "@fnioc/core";
+import { getDeps } from "@fnioc/core";
+import type { DepSlot, FactoryRef, ScopeRef, Token } from "@fnioc/core";
 
+import type { AddBuilder } from "./builder.js";
 import {
   AsyncDisposalRequiredError,
   CircularDependencyError,
@@ -26,10 +27,10 @@ import {
 import type {
   ClassRegistration,
   Ctor,
-  FactorySpec,
+  Factory,
+  FactoryRegistration,
   Registration,
   ResolveScope,
-  ValueSpec,
 } from "./types.js";
 
 /** True when a value implements the native synchronous `Disposable`. */
@@ -73,6 +74,20 @@ function isFactoryRef(slot: DepSlot): slot is FactoryRef {
     slot !== null &&
     typeof slot === "object" &&
     typeof (slot as { factory?: unknown }).factory === "string"
+  );
+}
+
+/**
+ * True when a `DepSlot` is a `ScopeRef` — a parameter to be filled with the live
+ * resolution scope itself (emitted for a factory/ctor param typed
+ * `ResolveScope`). Distinguished from a `FactoryRef` by the `scope === true`
+ * marker rather than a `.factory` token.
+ */
+function isScopeRef(slot: DepSlot): slot is ScopeRef {
+  return (
+    slot !== null &&
+    typeof slot === "object" &&
+    (slot as { scope?: unknown }).scope === true
   );
 }
 
@@ -133,31 +148,59 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
   }
 
   /**
-   * Registers a scope-local override. Shadows any ancestor or base registration
-   * for the same token, for this scope and its descendants only — and, like the
-   * builder, appends to the token's local list so the most-recent override wins
-   * while earlier ones are retained.
-   *
-   * Both registration shapes are accepted so a single scope (e.g. a test scope)
-   * can swap an implementation without rebuilding the builder:
-   *   - `add(token, { useFactory, scope? })` — a closure resolving its own deps
-   *     from the scope passed to it, with an optional `scope` caching its result
-   *     at the matching ancestor;
-   *   - `add(token, { useValue })` — the instance itself, no lifetime.
+   * Appends a scopeless `class`/`factory` LOCAL override and returns the
+   * `.as(scope?)` continuation (mirrors `DiBuilder.appendScoped`). Local
+   * overrides shadow any ancestor or base registration for the same token, for
+   * this scope and its descendants only, most-recent-wins.
    */
-  public add<T>(token: Token, spec: FactorySpec<T> | ValueSpec<T>): this {
-    if ("useValue" in spec) {
-      Scope.appendTo(this.localRegistrations, token, {
-        kind: "value",
-        useValue: spec.useValue,
-      });
-    } else {
-      Scope.appendTo(this.localRegistrations, token, {
-        kind: "factory",
-        useFactory: spec.useFactory as (scope: ResolveScope) => unknown,
-        scope: spec.scope,
-      });
-    }
+  private appendScopedLocal(
+    token: Token,
+    base: ClassRegistration | FactoryRegistration,
+  ): AddBuilder<Scopes> {
+    Scope.appendTo(this.localRegistrations, token, base);
+    const map = this.localRegistrations;
+    return {
+      as<S extends Scopes>(scope?: S): void {
+        if (scope === undefined) return;
+        Scope.appendTo(map, token, { ...base, scope });
+      },
+    };
+  }
+
+  /**
+   * Registers a scope-local CLASS override — shadows ancestors for this scope
+   * and its descendants. Returns the `.as(scope?)` continuation.
+   */
+  public add(token: Token, ctor: Ctor): AddBuilder<Scopes> {
+    return this.appendScopedLocal(token, {
+      kind: "class",
+      ctor,
+      scope: undefined,
+    });
+  }
+
+  /**
+   * Registers a scope-local FACTORY override. Parameter injection follows the
+   * same metadata rule as a builder factory (record → inject; record-less →
+   * called with the live scope). Returns the `.as(scope?)` continuation.
+   */
+  public addFactory(
+    token: Token,
+    factory: (scope: ResolveScope) => unknown,
+  ): AddBuilder<Scopes> {
+    return this.appendScopedLocal(token, {
+      kind: "factory",
+      factory: factory as Factory,
+      scope: undefined,
+    });
+  }
+
+  /** Registers a scope-local VALUE override — the instance itself, no lifetime. */
+  public addValue(token: Token, value: unknown): this {
+    Scope.appendTo(this.localRegistrations, token, {
+      kind: "value",
+      useValue: value,
+    });
     return this;
   }
 
@@ -166,8 +209,30 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
    * registration and the owning scope. The public entry point starts a fresh
    * cycle-detection stack.
    */
-  public resolve<T>(token: Token): T {
+  public resolve<T>(): T;
+  public resolve<T>(token: Token): T;
+  public resolve(token: Token): unknown;
+  public resolve<T>(token?: Token): T {
+    if (token === undefined) {
+      throw new TypeError(
+        "resolve<T>() requires the @fnioc/transformer plugin (no token at " +
+          'runtime). Without it, resolve with an explicit token: ' +
+          'resolve<T>("my:token").',
+      );
+    }
     return this.resolveWith<T>(token, []);
+  }
+
+  /**
+   * Returns a FACTORY for `token` rather than an instance — the resolve-site
+   * mirror of a `FactoryRef` ctor param. The authored `resolve<(a: A) => T>()`
+   * lowers here. The returned callable exposes the target's UNREGISTERED /
+   * caller-supplied parameters in order (PRD §7 "Partial / positional
+   * factories"); a fully-resolvable target yields a zero-arg lazy factory that
+   * respects the target's registered lifetime.
+   */
+  public resolveFactory(token: Token): unknown {
+    return this.makeFactory({ factory: token });
   }
 
   // ── Registration lookup ─────────────────────────────────────────────────────
@@ -287,21 +352,72 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
    */
   private instantiate<T>(
     token: Token,
-    registration: ClassRegistration | Extract<Registration, { kind: "factory" }>,
+    registration: ClassRegistration | FactoryRegistration,
     owningScope: Scope<Scopes>,
     stack: Token[],
   ): T {
     if (registration.kind === "factory") {
-      // The factory resolves its own deps relative to the owning scope, but the
-      // closure only sees a `resolve` that continues the active cycle stack.
-      const scopeView: ResolveScope = {
-        resolve: <U>(depToken: Token): U =>
-          owningScope.resolveWith<U>(depToken, stack),
-      };
-      return registration.useFactory(scopeView) as T;
+      return owningScope.invokeFactory<T>(token, registration.factory, stack);
     }
 
     return owningScope.construct<T>(token, registration.ctor, stack);
+  }
+
+  /**
+   * The resolution view a factory receives — `resolve` (overloaded; a tokenless
+   * authored `resolve<T>()` is lowered to a token before runtime),
+   * `resolveFactory`, and `createScope`, all continuing the active cycle
+   * `stack` and resolving relative to THIS (the owning) scope.
+   */
+  private makeScopeView(stack: Token[]): ResolveScope {
+    const owner = this;
+    const view = {
+      resolve: <U>(depToken?: Token): U => {
+        if (depToken === undefined) {
+          throw new TypeError(
+            "resolve<T>() requires the @fnioc/transformer plugin (no token at " +
+              "runtime).",
+          );
+        }
+        return owner.resolveWith<U>(depToken, stack);
+      },
+      resolveFactory: (depToken: Token): unknown =>
+        owner.makeFactory({ factory: depToken }),
+      createScope: (name: string): ResolveScope =>
+        owner.createScope(name as Scopes),
+    };
+    return view as ResolveScope;
+  }
+
+  /**
+   * Invokes a factory registration under the metadata-vs-scope rule:
+   *   - factory WITH a `defineDeps` record → resolve each slot (token →
+   *     resolved instance, `ScopeRef` → the live scope, `FactoryRef` → an
+   *     injected callable) and call `factory(...args)`;
+   *   - factory WITHOUT a record (the plugin-less escape hatch) → call
+   *     `factory(scopeView)` with the live scope as its sole argument.
+   * Deps resolve relative to `this` (the owning scope) — §5.4.
+   */
+  private invokeFactory<T>(token: Token, factory: Factory, stack: Token[]): T {
+    const scopeView = this.makeScopeView(stack);
+    const record = getDeps(factory);
+    if (record === undefined || record.signatures.length === 0) {
+      return factory(scopeView) as T;
+    }
+
+    const signature = this.selectSignature(
+      token,
+      factory.name,
+      record.signatures,
+    );
+    const args = signature.map((slot) => {
+      if (isScopeRef(slot)) return scopeView;
+      if (isFactoryRef(slot)) return this.makeFactory(slot);
+      // Selection guarantees every remaining slot is a resolvable token (a hole
+      // would have made this signature unsatisfiable).
+      return this.resolveWith<unknown>(slot as Token, stack);
+    });
+    return factory(...args) as T;
   }
 
   /**
@@ -312,9 +428,12 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
    *   - a string token → resolved through this scope's chain (selection
    *     guarantees every string-token slot here is resolvable);
    *   - a `FactoryRef` → injected as a callable (see `makeFactory`);
-   *   - a `hole` → there is no caller on a direct resolve, so it lands as
-   *     `undefined`. Holes are meaningfully filled only when the class is a
-   *     factory target — see `constructPartitioned`.
+   *   - a `ScopeRef` → the live scope.
+   *
+   * A hole never reaches here on a direct resolve: it is an unresolvable token,
+   * so selection rejects any signature carrying one (falling to a shorter
+   * optional-overload, or throwing). Holes are filled by the caller only when
+   * the class is a factory target — see `buildPartitioned`.
    */
   private construct<T>(token: Token, ctor: Ctor, stack: Token[]): T {
     const record = getDeps(ctor);
@@ -328,22 +447,23 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
       return new ctor() as T;
     }
 
-    const signature = this.selectSignature(token, ctor, record.signatures);
+    const signature = this.selectSignature(token, ctor.name, record.signatures);
 
     const args = signature.map((slot) => {
+      if (isScopeRef(slot)) {
+        // A `ResolveScope`-typed parameter: inject the live scope (this owner).
+        return this.makeScopeView(stack);
+      }
       if (isFactoryRef(slot)) {
         // A factory-injected parameter: a callable that builds `slot.factory`'s
         // target on demand, resolving the target's own deps relative to THIS
         // scope (the owner) so §5.4 still holds at call time.
         return this.makeFactory(slot);
       }
-      if (slot === hole) {
-        // A hole with no caller on a direct resolve ⇒ unfilled (`undefined`).
-        // Compared by identity against the imported sentinel, never `=== null`.
-        return undefined;
-      }
-      // A string token — resolve it through this scope's chain.
-      return this.resolveWith<unknown>(slot, stack);
+      // A string token — resolve it through this scope's chain. (Selection
+      // guarantees no hole reaches here: a hole is unresolvable, so a signature
+      // containing one is never chosen for a direct resolve.)
+      return this.resolveWith<unknown>(slot as Token, stack);
     });
 
     return new ctor(...(args as never[])) as T;
@@ -383,91 +503,105 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
     if (target === undefined) {
       throw new FactoryTargetError(ref.factory, "unregistered");
     }
-    // A factory builds its target with `new` — the target must be a class
-    // registration, not a useValue/useFactory override.
-    if (target.kind !== "class") {
-      throw new FactoryTargetError(ref.factory, "not-a-class");
+
+    // A value target has no construction step — the "factory" is a thunk that
+    // returns the stored instance (its lifetime is moot: a value is itself).
+    if (target.kind === "value") {
+      return () => owningScope.resolveWith<unknown>(ref.factory, []);
     }
 
-    const targetCtor = target.ctor;
-    const record = getDeps(targetCtor);
+    // The dep-metadata target is the ctor (class) or the factory function. Both
+    // partition the same way; only the final build step differs (new vs call).
+    const depTarget = target.kind === "class" ? target.ctor : target.factory;
+    const record = getDeps(depTarget);
     const targetSignature =
       record === undefined || record.signatures.length === 0
         ? undefined
         : owningScope.selectTargetSignature(record.signatures);
 
     // A target slot is caller-supplied when it is a hole or a string token NOT
-    // in the live registration map (a nested FactoryRef is itself injected, not
-    // caller-supplied). If the target has any such slot the factory is
-    // parameterized; otherwise it is a bare zero-arg factory.
+    // in the live registration map. A nested FactoryRef / ScopeRef is itself
+    // injected, never caller-supplied. If the target has any caller-supplied
+    // slot the factory is parameterized; otherwise it is a bare zero-arg factory.
     const parameterized =
       targetSignature !== undefined &&
       targetSignature.some(
         (slot) =>
-          slot === hole || (!isFactoryRef(slot) && !owningScope.isResolvable(slot)),
+          !isFactoryRef(slot) &&
+          !isScopeRef(slot) &&
+          !owningScope.isResolvable(slot),
       );
 
     if (!parameterized) {
       return () => owningScope.resolveWith<unknown>(ref.factory, []);
     }
 
-    // Parameterized factory: construct a fresh instance each call, partitioning
-    // the target signature against the live registration map and threading the
-    // caller args into the holes / unregistered slots. A fresh cycle stack per
-    // call — the factory runs outside the resolve that created it.
+    // Parameterized factory: build a fresh instance each call, partitioning the
+    // target signature against the live registration map and threading caller
+    // args into the holes / unregistered slots. A fresh cycle stack per call —
+    // the factory runs outside the resolve that created it.
     return (...callArgs: unknown[]) =>
-      owningScope.constructPartitioned(
-        ref.factory,
-        targetCtor,
+      owningScope.buildPartitioned(
+        target,
         targetSignature as ReadonlyArray<DepSlot>,
         callArgs,
       );
   }
 
   /**
-   * Constructs a factory target, partitioning its already-selected signature
-   * against the live registration map: a registered token is resolved; an
-   * unregistered token or a `hole` takes the next caller-supplied argument
-   * positionally. Always a fresh instance — a parameterized factory bypasses
-   * the instance cache (caller args differ per call). Runs on a fresh cycle
-   * stack since the factory is invoked outside the original resolve.
+   * Builds a factory target, partitioning its already-selected signature
+   * against the live registration map: a registered token is resolved; a
+   * `ScopeRef` is the live scope; a `FactoryRef` is injected; an unregistered
+   * token or a `hole` takes the next caller-supplied argument positionally. A
+   * class target is `new`ed, a factory target is called. Always a fresh result
+   * — a parameterized factory bypasses the instance cache (caller args differ
+   * per call). Runs on a fresh cycle stack since the factory is invoked outside
+   * the original resolve.
    */
-  private constructPartitioned<T>(
-    token: Token,
-    ctor: Ctor,
+  private buildPartitioned<T>(
+    target: ClassRegistration | FactoryRegistration,
     signature: ReadonlyArray<DepSlot>,
     callerArgs: readonly unknown[],
   ): T {
     const stack: Token[] = [];
     let nextCallerArg = 0;
     const args = signature.map((slot) => {
-      if (isFactoryRef(slot)) {
-        return this.makeFactory(slot);
-      }
-      // An unregistered token or a hole is caller-supplied: take the next arg.
-      if (slot === hole || !this.isResolvable(slot)) {
+      if (isScopeRef(slot)) return this.makeScopeView(stack);
+      if (isFactoryRef(slot)) return this.makeFactory(slot);
+      // An unregistered token (a hole is just one) is caller-supplied: take the
+      // next arg. A registered token resolves through the chain.
+      if (!this.isResolvable(slot)) {
         return callerArgs[nextCallerArg++];
       }
-      return this.resolveWith<unknown>(slot, stack);
+      return this.resolveWith<unknown>(slot as Token, stack);
     });
-    return new ctor(...(args as never[])) as T;
+    return (
+      target.kind === "class"
+        ? new target.ctor(...(args as never[]))
+        : target.factory(...args)
+    ) as T;
   }
 
   /**
    * Greedy signature selection. Scans signatures longest → shortest and returns
    * the first SATISFIABLE one. A slot is satisfiable when it is:
    *
-   *   - a `hole` — always satisfiable; filled by a caller arg (a direct
-   *     resolve supplies nothing, so it lands as `undefined`);
    *   - a `FactoryRef` — always satisfiable; injected as a callable. The
    *     factory's target need not be resolvable for the slot to count (an
    *     unregistered target surfaces a `FactoryTargetError` when the factory is
-   *     built / called, not here); or
+   *     built / called, not here);
+   *   - a `ScopeRef` — always satisfiable; filled with the live scope; or
    *   - a string token whose registration is resolvable in this (the owning)
    *     scope's chain.
    *
-   * Only string tokens can be UNsatisfiable. A signature is satisfiable iff
-   * every string-token slot is resolvable.
+   * A `hole` (`null`) is NOT special — it is an unregistered token, so it is
+   * unsatisfiable on a direct resolve. A class with an optional/defaulted param
+   * carries a shorter "without that arg" overload (emitted by the transformer);
+   * greedy selection falls to it when the longer one can't be satisfied, so the
+   * default / `undefined` applies. A required unfilled param has no such shorter
+   * overload and surfaces a `NoSatisfiableSignatureError` (build it via a
+   * factory instead). A signature is satisfiable iff every string-token slot is
+   * resolvable.
    *
    * - Equal-arity ties break by registration order (the order signatures appear
    *   in the DepRecord), which `sort`'s stability preserves.
@@ -475,7 +609,7 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
    */
   private selectSignature(
     token: Token,
-    ctor: Ctor,
+    targetName: string,
     signatures: ReadonlyArray<ReadonlyArray<DepSlot>>,
   ): ReadonlyArray<DepSlot> {
     // Stable sort by descending length; index keeps equal-arity ties in
@@ -492,18 +626,21 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
     for (const { sig } of ordered) {
       let satisfiable = true;
       for (const slot of sig) {
-        // A hole or a FactoryRef is always satisfiable — only an unresolvable
-        // string token blocks a signature.
-        if (slot === hole || isFactoryRef(slot)) continue;
+        // A FactoryRef or ScopeRef is always satisfiable (injected). A hole
+        // (`null`) is just an unregistered token — it falls through to the
+        // resolvability check and blocks the signature, so a class with an
+        // unfilled param can only be built via the factory form (its shorter
+        // optional-overload, if any, is what makes a default/optional resolve).
+        if (isFactoryRef(slot) || isScopeRef(slot)) continue;
         if (!this.isResolvable(slot)) {
           satisfiable = false;
-          unsatisfiable.add(slot);
+          if (typeof slot === "string") unsatisfiable.add(slot);
         }
       }
       if (satisfiable) return sig;
     }
 
-    throw new NoSatisfiableSignatureError(token, ctor.name, [...unsatisfiable]);
+    throw new NoSatisfiableSignatureError(token, targetName, [...unsatisfiable]);
   }
 
   /**
@@ -526,9 +663,13 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
       )[0]!.sig;
   }
 
-  /** True when `token` has a registration somewhere in this scope's chain. */
-  private isResolvable(token: Token): boolean {
-    return this.lookup(token) !== undefined;
+  /**
+   * True when `slot` is a registered string token somewhere in this scope's
+   * chain. A hole (`null`), `FactoryRef`, or `ScopeRef` is not a registered
+   * token, so it is never "resolvable" in this sense.
+   */
+  private isResolvable(slot: DepSlot): boolean {
+    return typeof slot === "string" && this.lookup(slot) !== undefined;
   }
 
   // ── Disposal ────────────────────────────────────────────────────────────────
