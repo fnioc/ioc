@@ -9,6 +9,5 @@
     // `!`-littering every token lookup; the production packages keep it on.
     "noUncheckedIndexedAccess": false
   },
-  "include": ["test/**/*"],
-  "references": [{ "path": "../core" }, { "path": "../di" }, { "path": "../transformer" }]
+  "include": ["test/**/*"]
 }

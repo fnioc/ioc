@@ -21,7 +21,6 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "bun": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
@@ -31,18 +30,16 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc --noEmit -p tsconfig.json && bun build.ts",
     "test": "bun test",
-    "lint": "echo 'lint: typecheck runs in build (tsc -b)' && exit 0"
-  },
-  "peerDependencies": {
-    "@fnioc/core": "workspace:*"
-  },
-  "devDependencies": {
-    "@fnioc/core": "workspace:*"
+    "lint": "tsc --noEmit -p tsconfig.json"
   },
   "publishConfig": {
     "access": "public",
     "provenance": true
+  },
+  "devDependencies": {
+    "@fnioc/core": "workspace:*",
+    "@rhombus-toolkit/func": "3.5.3"
   }
 }
