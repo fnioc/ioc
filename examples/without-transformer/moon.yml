@@ -1,0 +1,44 @@
+# https://moonrepo.dev/docs/config/project
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+id: 'examples-without-transformer'
+layer: 'application'
+language: 'typescript'
+
+# A real external consumer: imports @fnioc/di as a bare specifier via a
+# workspace:* dep, resolved at runtime through the symlink to its built dist.
+# No transformer / ts-patch — registration and metadata are hand-written.
+dependsOn:
+  - 'di'
+
+tasks:
+  build:
+    command: 'bun run build'
+    deps:
+      - 'di:build'
+    inputs:
+      - 'src/**/*'
+      - 'tsconfig.json'
+      - 'package.json'
+      - '/tsconfig.base.json'
+    outputs:
+      - 'dist'
+  test:
+    command: 'bun run test'
+    deps:
+      - 'build'
+    inputs:
+      - 'src/**/*'
+      - 'expected.txt'
+      - 'tsconfig.json'
+      - 'package.json'
+  lint:
+    command: 'bun run lint'
+    deps:
+      - 'di:build'
+    inputs:
+      - 'src/**/*'
+      - 'tsconfig.json'
+      - '/tsconfig.base.json'
+    options:
+      cache: false

@@ -23,6 +23,16 @@
         "typescript": "^5.9.0",
       },
     },
+    "examples/without-transformer": {
+      "name": "@fnioc-examples/without-transformer",
+      "version": "0.0.0",
+      "dependencies": {
+        "@fnioc/di": "workspace:*",
+      },
+      "devDependencies": {
+        "typescript": "^5.9.0",
+      },
+    },
     "packages/core": {
       "name": "@fnioc/core",
       "version": "1.0.0",
@@ -68,6 +78,8 @@
     "@babel/helper-validator-identifier": ["@babel/helper-validator-identifier@7.29.7", "", {}, "sha512-qehxGkRj55h/ff8EMaJ+cYhyaKlHIxqYDn682wQD7RNp9UujOQsHog2uS0r2vzr4pW+sXf90NeeayjcNaX3fFg=="],
 
     "@fnioc-examples/with-transformer": ["@fnioc-examples/with-transformer@workspace:examples/with-transformer"],
+
+    "@fnioc-examples/without-transformer": ["@fnioc-examples/without-transformer@workspace:examples/without-transformer"],
 
     "@fnioc/core": ["@fnioc/core@workspace:packages/core"],
 
