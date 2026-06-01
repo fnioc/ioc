@@ -1,0 +1,22 @@
+{
+  "name": "@fnioc-examples/with-transformer",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Runnable @fnioc/di example using the @fnioc/transformer ts-patch plugin (type-driven authoring).",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "node node_modules/ts-patch/bin/tspc.js -p tsconfig.json",
+    "start": "node dist/main.js",
+    "test": "node dist/main.js > /tmp/fnioc-with-transformer.out && diff -u expected.txt /tmp/fnioc-with-transformer.out",
+    "lint": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@fnioc/di": "workspace:*"
+  },
+  "devDependencies": {
+    "@fnioc/transformer": "workspace:*",
+    "ts-patch": "^3.3.0",
+    "typescript": "^5.9.0"
+  }
+}
