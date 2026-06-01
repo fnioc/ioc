@@ -26,7 +26,7 @@ describe("registration + basic resolution", () => {
     const services = new DiBuilder<"singleton">();
     services.add(T.Logger, ConsoleLogger).as("singleton");
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     const logger = root.resolve<ConsoleLogger>(T.Logger);
 
     expect(logger).toBeInstanceOf(ConsoleLogger);
@@ -40,7 +40,7 @@ describe("registration + basic resolution", () => {
     services.add(T.Db, SqlDb).as("singleton");
     services.add(T.Repo, Repo).as("singleton");
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     const repo = root.resolve<Repo>(T.Repo);
 
     expect(repo).toBeInstanceOf(Repo);
@@ -48,10 +48,10 @@ describe("registration + basic resolution", () => {
     expect(repo.db).toBeInstanceOf(SqlDb);
   });
 
-  test("the .add() / .register() / .createScope() surface is chainable", () => {
+  test("a useValue add returns the builder for chaining; class add returns AddBuilder", () => {
     const services = new DiBuilder<"singleton">();
-    // .register returns the builder for chaining; .add returns an AddBuilder.
-    const ret = services.register(T.Config, { useValue: { v: 1 } });
+    // The factory/value add shapes return the builder for chaining.
+    const ret = services.add(T.Config, { useValue: { v: 1 } });
     expect(ret).toBe(services);
   });
 });
@@ -61,7 +61,7 @@ describe("transient vs singleton caching", () => {
     const services = new DiBuilder<"singleton">();
     services.add(T.Logger, ConsoleLogger).as("singleton");
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     const a = root.resolve<ConsoleLogger>(T.Logger);
     const b = root.resolve<ConsoleLogger>(T.Logger);
 
@@ -72,7 +72,7 @@ describe("transient vs singleton caching", () => {
     const services = new DiBuilder<"singleton">();
     services.add(T.Logger, ConsoleLogger); // no .as() ⇒ transient
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     const a = root.resolve<ConsoleLogger>(T.Logger);
     const b = root.resolve<ConsoleLogger>(T.Logger);
 
@@ -82,10 +82,10 @@ describe("transient vs singleton caching", () => {
   });
 
   test("singleton is shared across child scopes (owned by the ancestor)", () => {
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new DiBuilder<"singleton", "request">();
     services.add(T.Logger, ConsoleLogger).as("singleton");
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     const reqA = root.createScope("request");
     const reqB = root.createScope("request");
 
@@ -100,10 +100,10 @@ describe("transient vs singleton caching", () => {
 
 describe(".as tagging", () => {
   test("request-tagged: one instance per request scope, distinct across them", () => {
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new DiBuilder<"singleton", "request">();
     services.add(T.Db, SqlDb).as("request");
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     const reqA = root.createScope("request");
     const reqB = root.createScope("request");
 
@@ -119,7 +119,7 @@ describe(".as tagging", () => {
     const services = new DiBuilder<"request">();
     services.add(T.Service, ConsoleLogger);
 
-    const root = services.createScope("request");
+    const root = services.build();
     expect(root.resolve(T.Service)).not.toBe(root.resolve(T.Service));
   });
 });

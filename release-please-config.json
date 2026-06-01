@@ -4,11 +4,6 @@
   "include-v-in-tag": true,
   "separate-pull-requests": true,
   "packages": {
-    "packages/core": {
-      "release-type": "node",
-      "package-name": "@fnioc/core",
-      "changelog-path": "CHANGELOG.md"
-    },
     "packages/di": {
       "release-type": "node",
       "package-name": "@fnioc/di",

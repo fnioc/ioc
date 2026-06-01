@@ -60,7 +60,7 @@ describe("registration lowering", () => {
     // the real tsc emitter elides the redundant alias to `{ defineDeps }` (see
     // the ts-patch e2e). Assert the binding regardless of the alias form.
     expect(output).toMatch(
-      /import \{ defineDeps( as \w+)? \} from "@fnioc\/core"/,
+      /import \{ defineDeps( as \w+)? \} from "@fnioc\/di"/,
     );
     // And the emitted call references that same binding.
     expect(output).toContain("defineDeps(Foo, [[]])");

@@ -22,7 +22,6 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "bun": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
@@ -32,16 +31,17 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc --noEmit -p tsconfig.json && bun build.ts",
     "test": "bun test",
-    "lint": "echo 'lint: typecheck runs in build (tsc -b)' && exit 0"
+    "lint": "tsc --noEmit -p tsconfig.json"
   },
   "peerDependencies": {
-    "@fnioc/core": "workspace:*",
+    "@fnioc/di": "workspace:^",
     "typescript": ">=5.2"
   },
   "devDependencies": {
     "@fnioc/core": "workspace:*",
+    "@fnioc/di": "workspace:*",
     "ts-patch": "^3.3.0"
   },
   "publishConfig": {

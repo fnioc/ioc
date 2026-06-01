@@ -7,10 +7,10 @@ import { compileWithTransformer, type CompiledProject } from "./harness.js";
 // enhancement parity), 3 (factory e2e + named-callable opt-out).
 //
 // The sample under `test/sample/` is compiled ONCE with the real ts-patch
-// transformer; we assert the emitted ABI shape (string tokens, null holes,
+// transformer; we assert the emitted shape (string tokens, null holes,
 // `{factory}` slots) and then LOAD the lowered output to run it against the live
 // `@fnioc/di` engine. The parity test rebuilds the identical graph by hand
-// (string tokens via `defineDeps` + the plugin-less `register` path) and asserts
+// (string tokens via `defineDeps` + the plugin-less `add` path) and asserts
 // behavioural equivalence.
 
 const SAMPLE_DIR = join(import.meta.dir, "sample");
@@ -37,10 +37,10 @@ afterAll(() => {
 
 // ── Coverage 1: ABI contract ────────────────────────────────────────────────
 
-describe("ABI contract — transformer-emitted lowered output (PRD §8)", () => {
-  test("emits the defineDeps import + bare calls (ESM contract)", () => {
+describe("emit contract — transformer-emitted lowered output (PRD §8)", () => {
+  test("emits the defineDeps import from @fnioc/di + bare calls (ESM contract)", () => {
     const wiring = project.emitted("sample/wiring.js");
-    expect(wiring).toContain('import { defineDeps } from "@fnioc/core"');
+    expect(wiring).toContain('import { defineDeps } from "@fnioc/di"');
   });
 
   test("class with mixed deps lowers to [tokens..., null] (a hole for the unregistered ctor param)", () => {

@@ -23,24 +23,25 @@ export class UnregisteredTokenError extends DiError {
   public constructor(public readonly token: Token) {
     super(
       `No registration found for token "${token}". Register it with ` +
-        `services.add(...)/.register(...) before resolving.`,
+        `services.add(...) before resolving.`,
     );
   }
 }
 
 /**
- * A registration carries a lifetime tag, but no ancestor scope in the resolving
- * chain has a matching name. This is the captive-dependency / misconfiguration
- * detector — the engine never auto-creates a scope to satisfy the tag.
+ * A registration carries a lifetime scope, but no ancestor scope in the
+ * resolving chain has a matching name. This is the captive-dependency /
+ * misconfiguration detector — the engine never auto-creates a scope to satisfy
+ * the lifetime.
  */
 export class MissingScopeError extends DiError {
   public constructor(
     public readonly token: Token,
-    public readonly tag: string,
+    public readonly scope: string,
     public readonly availableScopes: readonly string[],
   ) {
     super(
-      `Cannot resolve "${token}": its lifetime is tagged "${tag}", but no ` +
+      `Cannot resolve "${token}": its lifetime is tagged "${scope}", but no ` +
         `ancestor scope with that name exists in the resolving chain ` +
         `(available: ${
           availableScopes.length > 0

@@ -1,7 +1,6 @@
 // @fnioc/transformer — the ioc ts-patch compiler transformer.
 //
-// Build-time only. Shares the ABI/token format from @fnioc/core and never
-// depends on the @fnioc/di runtime. It provides token generation, dependency
+// Build-time only. It provides token generation, dependency
 // extraction via the TypeChecker, `defineDeps` emission, registration lowering
 // (`add<I>(C).as<"x">()` → string-token form), `nameof<T>()` rewriting, and the
 // edge-case behaviour (already-annotated skip + info diagnostic, dynamic-class
@@ -10,8 +9,6 @@
 // It also performs factory detection (`() => IFoo` ctor params become
 // `{ factory: "<token>" }` slots) and emits the factory-signature /
 // async-mismatch / overload-ambiguity diagnostics (see `deps.ts` + `checks.ts`).
-
-import { ABI_VERSION } from "@fnioc/core";
 
 // ts-patch entry point (default + named `transform`) and the test-drivable
 // factory.
@@ -48,6 +45,3 @@ export {
   type Diagnostic,
   type DiagnosticSink,
 } from "./diagnostics.js";
-
-/** The ABI version this transformer emits lowered calls for. */
-export const TARGET_ABI_VERSION: number = ABI_VERSION;

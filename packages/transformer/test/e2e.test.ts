@@ -101,7 +101,7 @@ describe("ts-patch production e2e (ESM)", () => {
     const emitted = readFileSync(join(projDir, "dist", "main.js"), "utf8");
 
     // The injected import + bare defineDeps calls (ESM contract).
-    expect(emitted).toContain('import { defineDeps } from "@fnioc/core"');
+    expect(emitted).toContain('import { defineDeps } from "@fnioc/di"');
     expect(emitted).toContain("defineDeps(ConsoleLogger, [[]]);");
     expect(emitted).toContain(
       'defineDeps(SqlUserRepo, [["./services/ILogger", "./services/IDbConnection", null]]);',

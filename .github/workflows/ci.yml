@@ -172,9 +172,11 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       # Topo-sort `paths_released` so dependencies publish before dependents.
-      # core has no internal deps; di and transformer peer-depend on core.
-      # Publish core FIRST so a dependent never references a core version that
-      # isn't on npm yet.
+      # @fnioc/core is PRIVATE and inlined at build time — it is never released
+      # or published, so it never appears in `paths_released`. di and transformer
+      # are independent at publish time (transformer's @fnioc/di reference is a
+      # peer the consumer installs, not a publish-order constraint), so any order
+      # is valid; the sort is a stable passthrough.
       - name: Topo-sort paths_released (dependencies first)
         id: sorted
         if: ${{ steps.release.outputs.releases_created == 'true' }}
@@ -182,9 +184,7 @@ jobs:
           PATHS_RELEASED: ${{ steps.release.outputs.paths_released }}
         run: |
           set -euo pipefail
-          sorted=$(echo "$PATHS_RELEASED" | jq -c '
-            sort_by(if . == "packages/core" then 0 else 1 end)
-          ')
+          sorted=$(echo "$PATHS_RELEASED" | jq -c 'sort')
           echo "Original order: $PATHS_RELEASED"
           echo "Sorted order:   $sorted"
           echo "sorted=${sorted}" >> "$GITHUB_OUTPUT"
@@ -230,16 +230,15 @@ jobs:
             echo "::endgroup::"
           done
 
-      # Strip the dev-only `bun` export condition before publishing. Each package
-      # publishes dist-only (files: ["dist"]), but its committed `exports["."]`
-      # carries a `bun` condition pointing at `./src/index.ts` so the local dev
-      # loop resolves TypeScript source directly. That src path is NOT in the
-      # tarball, so the `bun` condition would dangle for any consumer resolving
-      # under the `bun` runtime. Delete it only in the runner tree, right before
-      # `npm publish`; the committed package.json keeps `bun` for the dev loop.
-      # `jq 'del(.exports["."].bun)'` preserves the types/import/default
-      # conditions (all dist-pointing).
-      - name: Strip dev-only `bun` export condition before publish
+      # Strip the private @fnioc/core devDependency before publishing. core is
+      # inlined into di's and transformer's dist at build time (its source is
+      # bundled into the JS and its types rolled into the .d.ts), so the published
+      # packages never reference it. It is a workspace devDependency for the dev
+      # loop only; left in the published manifest it would carry an unresolvable
+      # `workspace:*` (or, post-rewrite, a `^1.0.0` that is never on npm since
+      # core is private). Delete it in the runner tree right before publish; the
+      # committed package.json keeps it for local builds.
+      - name: Strip private @fnioc/core dep before publish
         if: ${{ steps.release.outputs.releases_created == 'true' }}
         env:
           SORTED: ${{ steps.sorted.outputs.sorted }}
@@ -247,11 +246,12 @@ jobs:
           set -euo pipefail
           echo "$SORTED" | jq -r '.[]' | while read -r pkg_path; do
             pkg_json="$pkg_path/package.json"
-            echo "::group::Stripping bun export condition in $pkg_json"
+            echo "::group::Stripping @fnioc/core from $pkg_json"
             tmp=$(mktemp)
-            jq 'del(.exports["."].bun)' "$pkg_json" > "$tmp"
+            jq 'del(.dependencies["@fnioc/core"], .devDependencies["@fnioc/core"], .peerDependencies["@fnioc/core"], .optionalDependencies["@fnioc/core"])' \
+              "$pkg_json" > "$tmp"
             mv "$tmp" "$pkg_json"
-            jq '.exports' "$pkg_json"
+            jq '{dependencies, devDependencies, peerDependencies}' "$pkg_json"
             echo "::endgroup::"
           done
 

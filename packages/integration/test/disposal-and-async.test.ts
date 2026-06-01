@@ -1,6 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { DiBuilder, AsyncDisposalRequiredError } from "@fnioc/di";
-import { defineDeps } from "@fnioc/core";
+import { DiBuilder, AsyncDisposalRequiredError, defineDeps } from "@fnioc/di";
 
 // Coverage 6 (disposal — sync), 7 (disposal — async), 8 (async-as-values).
 //
@@ -32,11 +31,11 @@ describe("sync disposal — reverse construction order", () => {
     defineDeps(First, [[]]);
     defineDeps(Second, [["d:first"]]);
 
-    const services = new DiBuilder<"app">();
+    const services = new DiBuilder<"app">("app");
     services.add("d:first", First).as("app");
     services.add("d:second", Second).as("app");
 
-    const root = services.createScope("app");
+    const root = services.build();
     root.resolve("d:second"); // constructs First then Second
 
     root.dispose();
@@ -45,13 +44,13 @@ describe("sync disposal — reverse construction order", () => {
   });
 
   test("sync dispose() throws AsyncDisposalRequiredError when the scope owns a Promise", () => {
-    const services = new DiBuilder<"app">();
-    services.register("async:value", {
+    const services = new DiBuilder<"app">("app");
+    services.add("async:value", {
       useFactory: () => Promise.resolve({ ready: true }),
-      tag: "app",
+      scope: "app",
     });
 
-    const root = services.createScope("app");
+    const root = services.build();
     root.resolve("async:value"); // caches the Promise on the root
 
     let caught: unknown;
@@ -73,9 +72,9 @@ describe("sync disposal — reverse construction order", () => {
     }
     defineDeps(Thing, [[]]);
 
-    const services = new DiBuilder<"app">();
+    const services = new DiBuilder<"app">("app");
     services.add("d:thing", Thing).as("app");
-    const root = services.createScope("app");
+    const root = services.build();
     root.resolve("d:thing");
 
     root.dispose();
@@ -105,11 +104,11 @@ describe("async disposal — awaits Promise-valued instances, reverse order", ()
     defineDeps(AsyncFirst, [[]]);
     defineDeps(SyncSecond, [["a:first"]]);
 
-    const services = new DiBuilder<"app">();
+    const services = new DiBuilder<"app">("app");
     services.add("a:first", AsyncFirst).as("app");
     services.add("a:second", SyncSecond).as("app");
 
-    const root = services.createScope("app");
+    const root = services.build();
     root.resolve("a:second"); // AsyncFirst then SyncSecond
 
     await root.disposeAsync();
@@ -126,13 +125,13 @@ describe("async disposal — awaits Promise-valued instances, reverse order", ()
       }
     }
 
-    const services = new DiBuilder<"app">();
-    services.register("a:resource", {
+    const services = new DiBuilder<"app">("app");
+    services.add("a:resource", {
       useFactory: () => Promise.resolve(new Resource()),
-      tag: "app",
+      scope: "app",
     });
 
-    const root = services.createScope("app");
+    const root = services.build();
     const p = root.resolve<Promise<Resource>>("a:resource");
     expect(p).toBeInstanceOf(Promise);
 
@@ -156,15 +155,15 @@ describe("async as values — Promise<T> useFactory cached as a singleton Promis
     }
 
     const services = new DiBuilder<"singleton">();
-    services.register<Promise<Db>>("av:db", {
+    services.add<Promise<Db>>("av:db", {
       useFactory: () => {
         runs += 1;
         return Promise.resolve(new Db());
       },
-      tag: "singleton",
+      scope: "singleton",
     });
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     const p1 = root.resolve<Promise<Db>>("av:db");
     const p2 = root.resolve<Promise<Db>>("av:db");
 
@@ -191,16 +190,16 @@ describe("async as values — Promise<T> useFactory cached as a singleton Promis
 
     const services = new DiBuilder<"singleton">();
     let runs = 0;
-    services.register<Promise<Db>>("av:db2", {
+    services.add<Promise<Db>>("av:db2", {
       useFactory: () => {
         runs += 1;
         return Promise.resolve(new Db());
       },
-      tag: "singleton",
+      scope: "singleton",
     });
     services.add("av:consumer", Consumer).as("singleton");
 
-    const root = services.createScope("singleton");
+    const root = services.build();
     const consumer = root.resolve<Consumer>("av:consumer");
     expect(consumer.db).toBeInstanceOf(Promise);
     // The same cached Promise the engine handed to the consumer.

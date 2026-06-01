@@ -41,7 +41,7 @@ export { T, resetConfigFactoryRuns };
 
 /** Mints the root (singleton) scope from the transformer-lowered registrations. */
 export function rootScope(): Scope<SampleScopes> {
-  return services.createScope("singleton");
+  return services.build();
 }
 
 export interface ResolvedGraph {

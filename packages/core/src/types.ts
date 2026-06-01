@@ -1,3 +1,5 @@
+import type { hole } from "./store.js";
+
 /**
  * A stable string identifying an interface — the DI key.
  *
@@ -19,20 +21,19 @@ export interface FactoryRef {
 /**
  * One positional slot in a constructor signature:
  *   - a `Token` string  — a container-resolved dependency,
- *   - `null` (the hole sentinel) — a caller-supplied parameter, or
+ *   - the `hole` sentinel — a caller-supplied parameter, or
  *   - a `FactoryRef` — a factory-injected parameter (see `FactoryRef`).
  */
-export type DepSlot = Token | null | FactoryRef;
+export type DepSlot = Token | typeof hole | FactoryRef;
 
 /**
  * Per-constructor dependency metadata stored in the global WeakMap.
  *
- * `signatures` is an array of arrays from v1: each element is one constructor
- * signature (for overload support). `signatures[i][j]` is the `DepSlot` — a
- * token, the `null` hole sentinel, or a `FactoryRef` — for constructor
- * parameter `j` of overload `i`.
+ * `signatures` is an array of arrays: each element is one constructor signature
+ * (for overload support). `signatures[i][j]` is the `DepSlot` — a token, the
+ * `hole` sentinel, or a `FactoryRef` — for constructor parameter `j` of
+ * overload `i`.
  */
 export interface DepRecord {
-  readonly abi: number;
-  readonly signatures: ReadonlyArray<ReadonlyArray<DepSlot>>;
+  readonly signatures: readonly (readonly DepSlot[])[];
 }

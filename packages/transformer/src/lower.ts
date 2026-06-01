@@ -93,13 +93,26 @@ interface Registration {
   readonly concreteArg: ts.Expression;
 }
 
-/** True when `call` is a `*.add<I>(C, ...)` with exactly one type argument. */
+/**
+ * True when `call` is the type-driven authoring form `*.add<I>(C)` — exactly one
+ * type argument AND exactly one value argument (the concrete class).
+ *
+ * The single-value-arg requirement is load-bearing: `@fnioc/di`'s `add` is
+ * overloaded. The authoring form passes one value arg (the ctor) with the
+ * interface as a type arg, and is what the transformer lowers. The explicit
+ * forms — `add(token, ctor)`, `add<T>(token, { useFactory })`,
+ * `add<T>(token, { useValue })` — pass TWO value args (a string token first) and
+ * must be left untouched. Without this gate, an explicit factory/value call that
+ * carries a type arg (e.g. `add<Promise<IConfig>>(token, { useFactory })`) would
+ * be misread as the authoring form: the transformer would derive a bogus token
+ * from the type arg, prepend it, and emit a spurious `defineDeps`.
+ */
 function isAddRegistration(call: ts.CallExpression): boolean {
   const callee = call.expression;
   if (!ts.isPropertyAccessExpression(callee)) return false;
   if (callee.name.text !== "add") return false;
   if (!call.typeArguments || call.typeArguments.length !== 1) return false;
-  if (call.arguments.length < 1) return false;
+  if (call.arguments.length !== 1) return false;
   return true;
 }
 

@@ -1,13 +1,13 @@
 {
   "name": "@fnioc/core",
   "version": "1.0.0",
-  "description": "ioc substrate: the dependency-metadata ABI, the global-symbol WeakMap, defineDeps, and the @signature / forCtor authoring surfaces.",
+  "private": true,
+  "description": "ioc substrate (PRIVATE, unpublished): the dependency-metadata format, the global-symbol WeakMap, defineDeps, and the @signature / forCtor authoring surfaces. Inlined into @fnioc/di and @fnioc/transformer at build time.",
   "keywords": [
     "dependency-injection",
     "di",
     "ioc",
-    "typescript",
-    "abi"
+    "typescript"
   ],
   "license": "MIT",
   "repository": {
@@ -16,26 +16,17 @@
     "directory": "packages/core"
   },
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
   "exports": {
-    ".": {
-      "bun": "./src/index.ts",
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "default": "./dist/index.js"
-    }
+    ".": "./src/index.ts"
   },
-  "files": [
-    "dist"
-  ],
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc --noEmit -p tsconfig.json",
     "test": "bun test",
-    "lint": "echo 'lint: typecheck runs in build (tsc -b)' && exit 0"
+    "lint": "tsc --noEmit -p tsconfig.json"
   },
-  "publishConfig": {
-    "access": "public",
-    "provenance": true
+  "dependencies": {
+    "@rhombus-toolkit/func": "3.5.3"
   }
 }

@@ -4,9 +4,10 @@ $schema: 'https://moonrepo.dev/schemas/project.json'
 layer: 'library'
 language: 'typescript'
 
-# @fnioc/di builds against @fnioc/core's emitted types (project reference).
-# moon must build core first; `deps: ['core:build']` serializes that so di's
-# `tsc -b` never races core:build over packages/core/dist.
+# @fnioc/di INLINES the private @fnioc/core at build time — `bun build` bundles
+# core's source into dist/index.js and rollup-plugin-dts inlines its types into
+# dist/index.d.ts. core's source is therefore a build input, and `deps:
+# ['core:build']` keeps core's typecheck ordered before di's.
 dependsOn:
   - 'core'
 
@@ -17,8 +18,11 @@ tasks:
       - 'core:build'
     inputs:
       - 'src/**/*'
+      - 'build.ts'
+      - 'rollup.dts.mjs'
       - 'tsconfig.json'
       - '/tsconfig.base.json'
+      - '/packages/core/src/**/*'
     outputs:
       - 'dist'
   test:

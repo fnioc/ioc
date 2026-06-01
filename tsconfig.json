@@ -1,8 +1,5 @@
 {
+  "//": "Each package owns its own standalone tsconfig (noEmit typecheck). The packages no longer use TS project references — @fnioc/core is private and inlined into @fnioc/di and @fnioc/transformer at build time, and di/transformer resolve core through the workspace rather than via composite references.",
   "files": [],
-  "references": [
-    { "path": "./packages/core" },
-    { "path": "./packages/di" },
-    { "path": "./packages/transformer" }
-  ]
+  "include": []
 }

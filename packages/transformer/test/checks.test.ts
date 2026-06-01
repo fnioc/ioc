@@ -170,7 +170,7 @@ describe("async-mismatch diagnostic", () => {
       }
       declare const services: any;
       declare const container: any;
-      container.register("./app/IDb", { useFactory: async () => ({}) });
+      container.add("./app/IDb", { useFactory: async () => ({}) });
       services.add<IRepo>(Repo).as<"singleton">();
     `;
     const { diagnostics } = transform(fixture(src));
@@ -191,7 +191,7 @@ describe("async-mismatch diagnostic", () => {
       }
       declare const services: any;
       declare const container: any;
-      container.register("./app/IDb", { useFactory: async () => ({}) });
+      container.add("./app/IDb", { useFactory: async () => ({}) });
       services.add<IRepo>(Repo).as<"singleton">();
     `;
     const { diagnostics } = transform(fixture(src));
@@ -207,7 +207,7 @@ describe("async-mismatch diagnostic", () => {
       }
       declare const services: any;
       declare const container: any;
-      container.register("./app/IDb", { useFactory: () => ({}) });
+      container.add("./app/IDb", { useFactory: () => ({}) });
       services.add<IRepo>(Repo).as<"singleton">();
     `;
     const { diagnostics } = transform(fixture(src));

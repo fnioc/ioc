@@ -11,7 +11,7 @@
 // resolve. That is what makes a long-lived service depending on a shorter-lived
 // one fail loudly instead of silently capturing it.
 
-import { getDeps } from "@fnioc/core";
+import { getDeps, hole } from "@fnioc/core";
 import type { DepSlot, FactoryRef, Token } from "@fnioc/core";
 
 import {
@@ -26,8 +26,10 @@ import {
 import type {
   ClassRegistration,
   Ctor,
+  FactorySpec,
   Registration,
   ResolveScope,
+  ValueSpec,
 } from "./types.js";
 
 /** True when a value implements the native synchronous `Disposable`. */
@@ -62,7 +64,9 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
 
 /**
  * True when a `DepSlot` is a `FactoryRef` — a factory-injected parameter. A
- * slot is a string token, the `null` hole sentinel, or this object form.
+ * slot is a string token, the `hole` sentinel, or this object form. The
+ * non-null-object check naturally excludes the hole sentinel whatever its
+ * underlying value (a symbol or `null`), so this stays robust to that changing.
  */
 function isFactoryRef(slot: DepSlot): slot is FactoryRef {
   return (
@@ -81,8 +85,12 @@ function isFactoryRef(slot: DepSlot): slot is FactoryRef {
  * `.createScope` only accepts declared names.
  */
 export class Scope<Scopes extends string = string> implements ResolveScope {
-  /** Local override registrations held at this scope (shadow ancestors). */
-  private readonly localRegistrations = new Map<Token, Registration>();
+  /**
+   * Local override registrations held at this scope (shadow ancestors). Each
+   * token maps to a LIST in registration order; the most-recent (last) entry
+   * wins, mirroring the builder's service collection.
+   */
+  private readonly localRegistrations = new Map<Token, Registration[]>();
 
   /** Instances this scope owns and caches, keyed by token. */
   private readonly instances = new Map<Token, unknown>();
@@ -93,42 +101,63 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
   private disposed = false;
 
   public constructor(
-    /** This scope's tag name. The root scope's name is its lifetime. */
+    /** This scope's name. The root scope's name is its lifetime. */
     public readonly name: Scopes,
     /** The parent scope, or `undefined` for the root. */
     private readonly parent: Scope<Scopes> | undefined,
     /** The builder's base registration map (shared, walked last). */
-    private readonly baseRegistrations: ReadonlyMap<Token, Registration>,
+    private readonly baseRegistrations: ReadonlyMap<Token, Registration[]>,
   ) {}
 
-  /** Creates a parent-linked child scope with the given (declared) name. */
+  /** Appends a registration to a token's list in the given map. */
+  private static appendTo(
+    map: Map<Token, Registration[]>,
+    token: Token,
+    registration: Registration,
+  ): void {
+    const existing = map.get(token);
+    if (existing === undefined) {
+      map.set(token, [registration]);
+    } else {
+      existing.push(registration);
+    }
+  }
+
+  /**
+   * Creates a parent-linked child scope with the given (declared) name. Scopes
+   * MUST nest — this parent chain IS the lifetime hierarchy. The root is minted
+   * by `DiBuilder.build()`; every other scope descends from one via this call.
+   */
   public createScope(childName: Scopes): Scope<Scopes> {
     return new Scope<Scopes>(childName, this, this.baseRegistrations);
   }
 
   /**
    * Registers a scope-local override. Shadows any ancestor or base registration
-   * for the same token, for this scope and its descendants only. The override
-   * paths (`useFactory` / `useValue`) are also available here so a single scope
-   * (e.g. a test scope) can swap an implementation without rebuilding the
-   * builder.
+   * for the same token, for this scope and its descendants only — and, like the
+   * builder, appends to the token's local list so the most-recent override wins
+   * while earlier ones are retained.
+   *
+   * Both registration shapes are accepted so a single scope (e.g. a test scope)
+   * can swap an implementation without rebuilding the builder:
+   *   - `add(token, { useFactory, scope? })` — a closure resolving its own deps
+   *     from the scope passed to it, with an optional `scope` caching its result
+   *     at the matching ancestor;
+   *   - `add(token, { useValue })` — the instance itself, no lifetime.
    */
-  public registerFactory<T>(
-    token: Token,
-    useFactory: (scope: ResolveScope) => T,
-    tag?: Scopes,
-  ): this {
-    this.localRegistrations.set(token, {
-      kind: "factory",
-      useFactory: useFactory as (scope: ResolveScope) => unknown,
-      tag,
-    });
-    return this;
-  }
-
-  /** Registers a scope-local `useValue` override (see `registerFactory`). */
-  public registerValue<T>(token: Token, useValue: T): this {
-    this.localRegistrations.set(token, { kind: "value", useValue });
+  public add<T>(token: Token, spec: FactorySpec<T> | ValueSpec<T>): this {
+    if ("useValue" in spec) {
+      Scope.appendTo(this.localRegistrations, token, {
+        kind: "value",
+        useValue: spec.useValue,
+      });
+    } else {
+      Scope.appendTo(this.localRegistrations, token, {
+        kind: "factory",
+        useFactory: spec.useFactory as (scope: ResolveScope) => unknown,
+        scope: spec.scope,
+      });
+    }
     return this;
   }
 
@@ -145,28 +174,33 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
 
   /**
    * Walks UP the chain (this scope's locals → ancestors' locals → base map),
-   * returning the nearest registration for `token`. Child shadows parent.
+   * returning the nearest registration for `token`. Child shadows parent, and
+   * within any one scope's list the most-recent (last) registration wins — so a
+   * later `.add()`/`.add(...)` override beats an earlier one without deletion.
    */
   private lookup(token: Token): Registration | undefined {
     // Aliasing `this` to walk the parent chain iteratively.
     let node: Scope<Scopes> | undefined = this;
     while (node !== undefined) {
       const local = node.localRegistrations.get(token);
-      if (local !== undefined) return local;
+      if (local !== undefined && local.length > 0) return local[local.length - 1];
       node = node.parent;
     }
-    return this.baseRegistrations.get(token);
+    const base = this.baseRegistrations.get(token);
+    return base !== undefined && base.length > 0
+      ? base[base.length - 1]
+      : undefined;
   }
 
   /**
    * Finds the nearest ancestor scope (inclusive of this one) whose name matches
-   * `tag`, walking UP the chain. Returns `undefined` when none matches.
+   * `scope`, walking UP the chain. Returns `undefined` when none matches.
    */
-  private findOwner(tag: string): Scope<Scopes> | undefined {
+  private findOwner(scope: string): Scope<Scopes> | undefined {
     // Aliasing `this` to walk the parent chain iteratively.
     let node: Scope<Scopes> | undefined = this;
     while (node !== undefined) {
-      if (node.name === tag) return node;
+      if (node.name === scope) return node;
       node = node.parent;
     }
     return undefined;
@@ -206,9 +240,9 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
       return registration.useValue as T;
     }
 
-    // Transient (no tag): never cached. Build relative to THIS scope and return
-    // a fresh instance every time.
-    if (registration.tag === undefined) {
+    // Transient (no scope): never cached. Build relative to THIS scope and
+    // return a fresh instance every time.
+    if (registration.scope === undefined) {
       stack.push(token);
       try {
         return this.instantiate<T>(token, registration, this, stack);
@@ -217,13 +251,13 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
       }
     }
 
-    // Tagged: find the owning ancestor scope. No match ⇒ throw (never
+    // Scoped: find the owning ancestor scope. No match ⇒ throw (never
     // auto-create — that is the captive-dependency detector).
-    const owner = this.findOwner(registration.tag);
+    const owner = this.findOwner(registration.scope);
     if (owner === undefined) {
       throw new MissingScopeError(
         token,
-        registration.tag,
+        registration.scope,
         this.chainNames(),
       );
     }
@@ -278,7 +312,7 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
    *   - a string token → resolved through this scope's chain (selection
    *     guarantees every string-token slot here is resolvable);
    *   - a `FactoryRef` → injected as a callable (see `makeFactory`);
-   *   - a `null` hole → there is no caller on a direct resolve, so it lands as
+   *   - a `hole` → there is no caller on a direct resolve, so it lands as
    *     `undefined`. Holes are meaningfully filled only when the class is a
    *     factory target — see `constructPartitioned`.
    */
@@ -303,8 +337,9 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
         // scope (the owner) so §5.4 still holds at call time.
         return this.makeFactory(slot);
       }
-      if (slot === null) {
+      if (slot === hole) {
         // A hole with no caller on a direct resolve ⇒ unfilled (`undefined`).
+        // Compared by identity against the imported sentinel, never `=== null`.
         return undefined;
       }
       // A string token — resolve it through this scope's chain.
@@ -319,7 +354,7 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
    *
    * The target ctor's signature is partitioned at CALL time against the live
    * registration map: each slot that is a registered token is resolved; each
-   * slot that is an unregistered token or a `null` hole takes the next
+   * slot that is an unregistered token or a `hole` takes the next
    * caller-supplied argument, positionally. The injected callable therefore
    * exposes only the target's unregistered parameters, in their relative order
    * — no Ramda-style placeholders, no leaked constructor arity.
@@ -369,7 +404,7 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
       targetSignature !== undefined &&
       targetSignature.some(
         (slot) =>
-          slot === null || (!isFactoryRef(slot) && !owningScope.isResolvable(slot)),
+          slot === hole || (!isFactoryRef(slot) && !owningScope.isResolvable(slot)),
       );
 
     if (!parameterized) {
@@ -392,7 +427,7 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
   /**
    * Constructs a factory target, partitioning its already-selected signature
    * against the live registration map: a registered token is resolved; an
-   * unregistered token or a `null` hole takes the next caller-supplied argument
+   * unregistered token or a `hole` takes the next caller-supplied argument
    * positionally. Always a fresh instance — a parameterized factory bypasses
    * the instance cache (caller args differ per call). Runs on a fresh cycle
    * stack since the factory is invoked outside the original resolve.
@@ -410,7 +445,7 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
         return this.makeFactory(slot);
       }
       // An unregistered token or a hole is caller-supplied: take the next arg.
-      if (slot === null || !this.isResolvable(slot)) {
+      if (slot === hole || !this.isResolvable(slot)) {
         return callerArgs[nextCallerArg++];
       }
       return this.resolveWith<unknown>(slot, stack);
@@ -422,7 +457,7 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
    * Greedy signature selection. Scans signatures longest → shortest and returns
    * the first SATISFIABLE one. A slot is satisfiable when it is:
    *
-   *   - a `null` hole — always satisfiable; filled by a caller arg (a direct
+   *   - a `hole` — always satisfiable; filled by a caller arg (a direct
    *     resolve supplies nothing, so it lands as `undefined`);
    *   - a `FactoryRef` — always satisfiable; injected as a callable. The
    *     factory's target need not be resolvable for the slot to count (an
@@ -459,7 +494,7 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
       for (const slot of sig) {
         // A hole or a FactoryRef is always satisfiable — only an unresolvable
         // string token blocks a signature.
-        if (slot === null || isFactoryRef(slot)) continue;
+        if (slot === hole || isFactoryRef(slot)) continue;
         if (!this.isResolvable(slot)) {
           satisfiable = false;
           unsatisfiable.add(slot);

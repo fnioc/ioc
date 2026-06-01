@@ -4,8 +4,10 @@ $schema: 'https://moonrepo.dev/schemas/project.json'
 layer: 'library'
 language: 'typescript'
 
-# Build-time only. Shares the ABI/token format from @fnioc/core (project
-# reference); does NOT depend on @fnioc/di.
+# Build-time only. The transformer's own source carries no @fnioc/core runtime
+# import (the @fnioc/di reference it emits lives in generated strings), so its
+# bundle is naturally @fnioc-free; `deps: ['core:build']` keeps core's typecheck
+# ordered first. Does NOT depend on @fnioc/di.
 dependsOn:
   - 'core'
 
@@ -16,6 +18,8 @@ tasks:
       - 'core:build'
     inputs:
       - 'src/**/*'
+      - 'build.ts'
+      - 'rollup.dts.mjs'
       - 'tsconfig.json'
       - '/tsconfig.base.json'
     outputs:

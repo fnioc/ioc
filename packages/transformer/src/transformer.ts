@@ -13,7 +13,7 @@
 //   2. Lowers each registration statement (`add<I>(C).as<"x">()` → string form)
 //      and inserts the `defineDeps(...)` prelude.
 //   3. Rewrites every `nameof<T>()` call to its string token.
-//   4. Injects an `import { defineDeps } from "@fnioc/core"` when a registration
+//   4. Injects an `import { defineDeps } from "@fnioc/di"` when a registration
 //      was lowered and the file does not already import it.
 
 import ts from "typescript";
@@ -23,8 +23,8 @@ import { collectAsyncTokens } from "./checks.js";
 import type { DiagnosticSink } from "./diagnostics.js";
 import { NAMEOF_NAME } from "./nameof.js";
 
-/** The package whose `defineDeps` the lowered output calls. */
-const CORE_MODULE = "@fnioc/core";
+/** The runtime package whose `defineDeps` the lowered output calls. */
+const RUNTIME_MODULE = "@fnioc/di";
 const DEFINE_DEPS = "defineDeps";
 
 /**
@@ -220,7 +220,7 @@ function existingDefineDepsBinding(
 }
 
 /**
- * Prepend `import { defineDeps } from "@fnioc/core";` to the file. This is the
+ * Prepend `import { defineDeps } from "@fnioc/di";` to the file. This is the
  * documented lowered-form contract (PRD §8): libraries compile with the
  * transformer and publish ESM, where this import + the bare `defineDeps(...)`
  * calls are exactly correct.
@@ -251,7 +251,7 @@ function injectDefineDepsImport(
         ),
       ]),
     ),
-    factory.createStringLiteral(CORE_MODULE),
+    factory.createStringLiteral(RUNTIME_MODULE),
   );
   return factory.updateSourceFile(file, [importDecl, ...file.statements]);
 }

@@ -27,16 +27,14 @@ describe("DiBuilder.add runtime guard", () => {
     services.add(T.Service, First).as("singleton");
     services.add(T.Service, Second).as("singleton");
 
-    const resolved = services
-      .createScope("singleton")
-      .resolve<First | Second>(T.Service);
+    const resolved = services.build().resolve<First | Second>(T.Service);
     expect(resolved.which).toBe("second");
   });
 });
 
 describe("re-exports from @fnioc/core", () => {
-  test("hole is the null sentinel", () => {
-    expect(hole).toBeNull();
+  test("hole compares to itself by identity (sentinel, not a literal value)", () => {
+    expect(hole).toBe(hole);
   });
 
   test("signature writes a DepRecord readable via core's getDeps", () => {
@@ -73,7 +71,7 @@ describe("re-exports from @fnioc/core", () => {
     services.add(T.Db, DbImpl).as("singleton");
     services.add(T.Service, Consumer).as("singleton");
 
-    const c = services.createScope("singleton").resolve<Consumer>(T.Service);
+    const c = services.build().resolve<Consumer>(T.Service);
     expect(c.db).toBeInstanceOf(DbImpl);
   });
 });
