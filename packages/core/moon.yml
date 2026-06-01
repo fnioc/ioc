@@ -4,6 +4,9 @@ $schema: 'https://moonrepo.dev/schemas/project.json'
 layer: 'library'
 language: 'typescript'
 
+# @fnioc/core is PRIVATE and source-only — it emits no `dist`. `build` is a
+# typecheck (`tsc --noEmit`) so the workspace still validates core's types; its
+# source is inlined into @fnioc/di and @fnioc/transformer at their build time.
 tasks:
   build:
     command: 'bun run build'
@@ -11,8 +14,6 @@ tasks:
       - 'src/**/*'
       - 'tsconfig.json'
       - '/tsconfig.base.json'
-    outputs:
-      - 'dist'
   test:
     command: 'bun run test'
     inputs:

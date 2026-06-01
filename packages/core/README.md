@@ -1,8 +1,13 @@
 # @fnioc/core
 
-The ABI substrate for `ioc`. Both `@fnioc/di` and `@fnioc/transformer` depend on this package. It exports nothing that touches resolution or compilation — only the immutable types, the global dep-metadata store, and the authoring surfaces that write into it.
+> **Private, unpublished package.** `@fnioc/core` is never published to npm. Its
+> source is **inlined** into `@fnioc/di` and `@fnioc/transformer` at their build
+> time — they ship self-contained JS and `.d.ts` with zero `@fnioc/core`
+> references. Install `@fnioc/di` (and, for the compile-time plugin,
+> `@fnioc/transformer`); you never depend on `@fnioc/core` directly. The runtime
+> authoring surfaces below are re-exported from `@fnioc/di`.
 
-There is no separate `@fnioc/abi` package. `@fnioc/core` *is* the ABI: the types and the WeakMap/`defineDeps` that read and write them are one intrinsic unit.
+The substrate for `ioc`. It exports nothing that touches resolution or compilation — only the immutable types, the global dep-metadata store, and the authoring surfaces that write into it.
 
 ---
 
