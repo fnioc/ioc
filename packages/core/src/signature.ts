@@ -1,3 +1,4 @@
+import type { Ctor } from "@rhombus-toolkit/func";
 import type { DepSlot } from "./types.js";
 import { defineDeps } from "./defineDeps.js";
 
@@ -22,9 +23,9 @@ import { defineDeps } from "./defineDeps.js";
  * ```
  */
 export function signature(
-  ...tokens: ReadonlyArray<DepSlot>
-): (value: Function, _context: ClassDecoratorContext) => void {
-  return (value: Function, _context: ClassDecoratorContext): void => {
+  ...tokens: readonly DepSlot[]
+): (value: Ctor, _context: ClassDecoratorContext) => void {
+  return (value: Ctor, _context: ClassDecoratorContext): void => {
     defineDeps(value, [tokens.slice()]);
   };
 }

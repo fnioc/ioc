@@ -1,31 +1,17 @@
 import { test, expect, describe } from "bun:test";
-import {
-  ABI_VERSION,
-  hole,
-  defineDeps,
-  getDeps,
-  signature,
-  forCtor,
-} from "@fnioc/core";
+import { hole, defineDeps, getDeps, signature, forCtor } from "@fnioc/core";
 import type { FactoryRef, DepSlot } from "@fnioc/core";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-describe("ABI_VERSION", () => {
-  test("is 1", () => {
-    expect(ABI_VERSION).toBe(1);
-  });
-});
-
 describe("hole", () => {
-  test("is null at runtime", () => {
+  test("is the null sentinel at runtime", () => {
     expect(hole).toBeNull();
   });
 
-  test("is accepted where Token | null is expected", () => {
+  test("is accepted where a DepSlot is expected", () => {
     // Type-level: if this compiles, the type is correct.
-    // (This test file would fail to compile if `hole` weren't assignable to
-    //  `Token | null`.)
+    // (This test file would fail to compile if `hole` weren't a valid DepSlot.)
     defineDeps(class HoleTypeCheck {}, [[hole]]);
     const rec = getDeps(class HoleTypeCheck {});
     // We're not asserting about this class; the meaningful assertion is that
@@ -37,9 +23,9 @@ describe("hole", () => {
 // ── Global anchor ─────────────────────────────────────────────────────────────
 
 describe("global-symbol WeakMap anchor", () => {
-  const GLOBAL_KEY = Symbol.for(`@fnioc/core:deps@${ABI_VERSION}`);
+  const GLOBAL_KEY = Symbol.for("fnioc:deps");
 
-  test("store is anchored on globalThis under the version-suffixed key", () => {
+  test("store is anchored on globalThis under the global-symbol key", () => {
     const raw = (globalThis as Record<symbol, unknown>)[GLOBAL_KEY];
     expect(raw).toBeDefined();
     expect(raw instanceof WeakMap).toBe(true);
@@ -54,27 +40,25 @@ describe("global-symbol WeakMap anchor", () => {
     // using a module-private map — this is the dual-package hardening proof.
     const rawStore = (globalThis as Record<symbol, unknown>)[
       GLOBAL_KEY
-    ] as WeakMap<Function, unknown>;
+    ] as WeakMap<object, unknown>;
     expect(rawStore.get(GlobalAnchorProbe)).toBeDefined();
-    expect((rawStore.get(GlobalAnchorProbe) as { abi: number }).abi).toBe(
-      ABI_VERSION,
-    );
+    expect(rawStore.get(GlobalAnchorProbe)).toBe(getDeps(GlobalAnchorProbe));
   });
 });
 
 // ── Two-copies-share-one-WeakMap (PRD §5) ────────────────────────────────────
 //
-// A second independent copy of @fnioc/core at the same ABI_VERSION recomputes
-// `Symbol.for(`@fnioc/core:deps@${ABI_VERSION}`)` and lands on the SAME entry
-// in the global symbol registry — and therefore the SAME WeakMap. This describe
-// block simulates "copy B" by accessing globalThis via the independently-
-// recomputed key, without going through the module's exported `store` binding.
+// A second independent copy of @fnioc/core recomputes `Symbol.for("fnioc:deps")`
+// and lands on the SAME entry in the global symbol registry — and therefore the
+// SAME WeakMap. This describe block simulates "copy B" by accessing globalThis
+// via the independently-recomputed key, without going through the module's
+// exported `store` binding.
 
 describe("two-copies-share-one-WeakMap (PRD §5)", () => {
   // "Copy B" independently derives the same key — this is the whole point of
   // Symbol.for: any code that knows the string gets the same symbol.
-  const COPY_B_KEY = Symbol.for(`@fnioc/core:deps@${ABI_VERSION}`);
-  type RawStore = WeakMap<Function, { abi: number; signatures: unknown[][] }>;
+  const COPY_B_KEY = Symbol.for("fnioc:deps");
+  type RawStore = WeakMap<object, { signatures: unknown[][] }>;
 
   test("copy-A write (defineDeps) is visible via copy-B direct-global read", () => {
     // copy A: write through the public API
@@ -90,7 +74,6 @@ describe("two-copies-share-one-WeakMap (PRD §5)", () => {
     // Must be the SAME object reference (not a clone) — same WeakMap
     expect(viaGlobal).toBe(getDeps(CopyAWriteCtor));
     expect(viaGlobal).toBeDefined();
-    expect(viaGlobal!.abi).toBe(ABI_VERSION);
   });
 
   test("copy-B write (direct-global put) is visible via copy-A public read (getDeps)", () => {
@@ -99,24 +82,12 @@ describe("two-copies-share-one-WeakMap (PRD §5)", () => {
     const copyBStore = (globalThis as Record<symbol, unknown>)[
       COPY_B_KEY
     ] as RawStore;
-    const fakeRecord = { abi: ABI_VERSION, signatures: [["share:IBar"]] };
+    const fakeRecord = { signatures: [["share:IBar"]] };
     copyBStore.set(CopyBWriteCtor, fakeRecord);
 
     // copy A: read through the public API — must see what copy B wrote
     const viaApi = getDeps(CopyBWriteCtor);
     expect(viaApi).toBe(fakeRecord);
-  });
-
-  test("a different ABI version uses a separate WeakMap (version isolation)", () => {
-    const differentVersionKey = Symbol.for("@fnioc/core:deps@999");
-    const liveStore = (globalThis as Record<symbol, unknown>)[COPY_B_KEY];
-    const otherStore = (globalThis as Record<symbol, unknown>)[
-      differentVersionKey
-    ];
-
-    // The v999 slot is either absent or a distinct WeakMap — it must not be the
-    // same object as the live ABI_VERSION store.
-    expect(otherStore).not.toBe(liveStore);
   });
 });
 
@@ -130,7 +101,6 @@ describe("defineDeps", () => {
 
     const rec = getDeps(FreshCtor);
     expect(rec).toBeDefined();
-    expect(rec!.abi).toBe(ABI_VERSION);
     expect(rec!.signatures).toHaveLength(1);
     expect(rec!.signatures[0]).toEqual(["token:IFoo"]);
   });
@@ -161,13 +131,13 @@ describe("defineDeps", () => {
     expect(rec!.signatures[0]).toEqual(["token:IX"]);
   });
 
-  test("preserves a null hole inside a stored signature", () => {
+  test("preserves a hole sentinel inside a stored signature", () => {
     class HoleCtor {}
 
-    defineDeps(HoleCtor, [["token:ILogger", null, "token:IDb"]]);
+    defineDeps(HoleCtor, [["token:ILogger", hole, "token:IDb"]]);
 
     const rec = getDeps(HoleCtor);
-    expect(rec!.signatures[0]).toEqual(["token:ILogger", null, "token:IDb"]);
+    expect(rec!.signatures[0]).toEqual(["token:ILogger", hole, "token:IDb"]);
   });
 
   test("keys by exact constructor — subclass does NOT inherit parent's record", () => {
@@ -245,7 +215,7 @@ describe("signature decorator", () => {
     class DecoratedWithHole {}
 
     const rec = getDeps(DecoratedWithHole);
-    expect(rec!.signatures[0]).toEqual(["dec:ILogger", null, "dec:IDb"]);
+    expect(rec!.signatures[0]).toEqual(["dec:ILogger", hole, "dec:IDb"]);
   });
 
   test("decorator does not replace the class (returns void)", () => {
@@ -296,7 +266,7 @@ describe("forCtor", () => {
     forCtor(ForCtorWithHole).signature("fc:ILogger", hole, "fc:IDb");
 
     const rec = getDeps(ForCtorWithHole);
-    expect(rec!.signatures[0]).toEqual(["fc:ILogger", null, "fc:IDb"]);
+    expect(rec!.signatures[0]).toEqual(["fc:ILogger", hole, "fc:IDb"]);
   });
 
   test("builder is the same object (for chaining identity)", () => {
@@ -315,7 +285,7 @@ describe("FactoryRef dep slot", () => {
     // If these annotations compile, the types are exported. The runtime values
     // are only here so the references aren't elided.
     const ref: FactoryRef = { factory: "exp:IFoo" };
-    const slots: ReadonlyArray<DepSlot> = ["exp:IBar", null, ref];
+    const slots: readonly DepSlot[] = ["exp:IBar", hole, ref];
     expect(ref.factory).toBe("exp:IFoo");
     expect(slots).toHaveLength(3);
   });
