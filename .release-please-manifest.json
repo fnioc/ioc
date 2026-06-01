@@ -1,5 +1,4 @@
 {
-  "packages/core": "1.0.0",
   "packages/di": "1.0.0",
   "packages/transformer": "1.0.0"
 }
