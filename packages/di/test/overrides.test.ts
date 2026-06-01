@@ -2,10 +2,9 @@ import { test, expect, describe } from "bun:test";
 import { DiBuilder } from "@fnioc/di";
 import { T } from "./fixtures.js";
 
-// The override paths: useFactory / useValue (§"Override paths"). The recommended
-// plugin-less mechanism. Plus async-as-values: a useFactory may be async; the
-// container never awaits and a singleton-tagged async factory caches the
-// Promise (factory runs once).
+// The override paths: addFactory / addValue (plugin-less mechanism). Plus
+// async-as-values: a addFactory may be async; the container never awaits and a
+// singleton-tagged async factory caches the Promise (factory runs once).
 
 class Bar {
   public readonly kind = "bar";
@@ -15,7 +14,7 @@ describe("useValue", () => {
   test("returns the registered value verbatim, always the same reference", () => {
     const cached = { id: 42 };
     const services = new DiBuilder<"singleton">();
-    services.add(T.Config, { useValue: cached });
+    services.addValue(T.Config, cached);
 
     const root = services.build();
     expect(root.resolve<typeof cached>(T.Config)).toBe(cached);
@@ -24,7 +23,7 @@ describe("useValue", () => {
 
   test("useValue resolves without any scope (no lifetime, no caching dance)", () => {
     const services = new DiBuilder<"singleton", "request">();
-    services.add(T.Config, { useValue: "literal-value" });
+    services.addValue(T.Config, "literal-value");
 
     const req = services.build().createScope("request");
     expect(req.resolve<string>(T.Config)).toBe("literal-value");
@@ -38,9 +37,7 @@ describe("useFactory", () => {
     }
     const services = new DiBuilder<"singleton">();
     services.add(T.B, Bar).as("singleton");
-    services.add(T.A, {
-      useFactory: (c) => new Foo(c.resolve<Bar>(T.B)),
-    });
+    services.addFactory(T.A, (c) => new Foo(c.resolve<Bar>(T.B)));
 
     const root = services.build();
     const foo = root.resolve<Foo>(T.A);
@@ -51,11 +48,9 @@ describe("useFactory", () => {
   test("an untagged factory runs on every resolve (transient)", () => {
     let calls = 0;
     const services = new DiBuilder<"singleton">();
-    services.add(T.Service, {
-      useFactory: () => {
-        calls += 1;
-        return { n: calls };
-      },
+    services.addFactory(T.Service, () => {
+      calls += 1;
+      return { n: calls };
     });
 
     const root = services.build();
@@ -68,13 +63,10 @@ describe("useFactory", () => {
   test("a singleton-scoped factory runs once and caches its result", () => {
     let calls = 0;
     const services = new DiBuilder<"singleton">();
-    services.add(T.Service, {
-      useFactory: () => {
-        calls += 1;
-        return { n: calls };
-      },
-      scope: "singleton",
-    });
+    services.addFactory(T.Service, () => {
+      calls += 1;
+      return { n: calls };
+    }).as("singleton");
 
     const root = services.build();
     const a = root.resolve<{ n: number }>(T.Service);
@@ -86,10 +78,7 @@ describe("useFactory", () => {
   test("a request-scoped factory caches per request scope", () => {
     let calls = 0;
     const services = new DiBuilder<"singleton", "request">();
-    services.add(T.Service, {
-      useFactory: () => ({ n: ++calls }),
-      scope: "request",
-    });
+    services.addFactory(T.Service, () => ({ n: ++calls })).as("request");
 
     const root = services.build();
     const reqA = root.createScope("request");
@@ -108,10 +97,7 @@ describe("useFactory", () => {
 describe("async as values", () => {
   test("resolve() returns the factory's Promise synchronously (no await)", () => {
     const services = new DiBuilder<"singleton">();
-    services.add(T.Db, {
-      useFactory: async () => ({ connected: true }),
-      scope: "singleton",
-    });
+    services.addFactory(T.Db, async () => ({ connected: true })).as("singleton");
 
     const root = services.build();
     const result = root.resolve<Promise<{ connected: boolean }>>(T.Db);
@@ -122,13 +108,10 @@ describe("async as values", () => {
   test("a singleton async factory runs once; both awaits see the same value", async () => {
     let calls = 0;
     const services = new DiBuilder<"singleton">();
-    services.add(T.Db, {
-      useFactory: async () => {
-        calls += 1;
-        return { id: calls };
-      },
-      scope: "singleton",
-    });
+    services.addFactory(T.Db, async () => {
+      calls += 1;
+      return { id: calls };
+    }).as("singleton");
 
     const root = services.build();
     const p1 = root.resolve<Promise<{ id: number }>>(T.Db);
@@ -144,10 +127,7 @@ describe("async as values", () => {
 
   test("a consumer can await an injected Promise<T> dependency", async () => {
     const services = new DiBuilder<"singleton">();
-    services.add(T.Db, {
-      useFactory: async () => ({ query: () => "rows" }),
-      scope: "singleton",
-    });
+    services.addFactory(T.Db, async () => ({ query: () => "rows" })).as("singleton");
 
     const root = services.build();
     const db = await root.resolve<Promise<{ query: () => string }>>(T.Db);

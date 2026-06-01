@@ -1,8 +1,14 @@
 // The registration builder. Holds the base token → registration list map and
-// mints the root Scope. `.add()` is the sole registration surface: the
-// transformer lowers the type-driven authoring form to it, and the explicit
-// token forms (class / useFactory / useValue) are the plugin-less mechanism for
-// overrides, test doubles, and third-party wiring.
+// mints the root Scope. Three registration surfaces:
+//   - `add`        — a class (its ctor deps are injected),
+//   - `addFactory` — a factory function (its call-param deps are injected),
+//   - `addValue`   — an already-built instance (no deps, no lifetime).
+// The transformer lowers the type-driven authoring forms (`add<I>(C)`,
+// `add<I>(fn)`, `addValue<I>(v)`) to these; the explicit-token forms are the
+// plugin-less mechanism for overrides, test doubles, and third-party wiring.
+// `add<I>(fn)` (a factory) lowers to `addFactory("token", fn)` — the transformer
+// statically knows the arg is a function, so the runtime never has to guess
+// class-vs-factory.
 
 import type { Token } from "@fnioc/core";
 
@@ -10,10 +16,10 @@ import { Scope } from "./scope.js";
 import type {
   ClassRegistration,
   Ctor,
-  FactorySpec,
+  FactoryRegistration,
+  Factory,
   Registration,
   ResolveScope,
-  ValueSpec,
 } from "./types.js";
 
 /**
@@ -97,72 +103,16 @@ export class DiBuilder<
   }
 
   /**
-   * Type-only authoring overload — the form the transformer rewrites FROM. The
-   * concrete is typed `new (...args: any[]) => I` (plain `new`, so an abstract
-   * class is rejected). At runtime the engine only ever receives the
-   * string-token form below; this signature exists purely so type-driven
-   * authoring type-checks before the transformer lowers it.
+   * Appends a scopeless `class`/`factory` base registration and returns the
+   * `.as(scope?)` continuation. `.as()` appends a fresh SCOPED copy so the
+   * array's last entry wins; a bare `.add(...)`/`.addFactory(...)` with no
+   * trailing `.as()` leaves the base (transient) registration in place.
    */
-  public add<I>(ctor: new (...args: any[]) => I): AddBuilder<Root | Children>;
-  /**
-   * Class registration — a string token bound to a concrete constructor.
-   * Returns the `.as(scope?)` continuation that attaches the lifetime. This is
-   * what the transformer emits and what the engine actually executes.
-   */
-  public add(token: Token, ctor: Ctor): AddBuilder<Root | Children>;
-  /**
-   * Factory registration — a `useFactory` closure resolving its own deps from
-   * the scope passed to it, with an optional `scope` caching its result at the
-   * matching ancestor. Returns the builder for chaining.
-   */
-  public add<T>(token: Token, spec: FactorySpec<T>): this;
-  /**
-   * Value registration — the instance itself, no lifetime. Returns the builder
-   * for chaining.
-   */
-  public add<T>(token: Token, spec: ValueSpec<T>): this;
-  public add(
-    tokenOrCtor: Token | (new (...args: any[]) => unknown),
-    specOrCtor?: Ctor | FactorySpec<unknown> | ValueSpec<unknown>,
-  ): AddBuilder<Root | Children> | this {
-    // Only the string-token form reaches the engine at runtime. The type-only
-    // overload is never actually invoked post-transform; guard defensively so a
-    // hand-written type-form call fails loud rather than registering garbage.
-    if (typeof tokenOrCtor !== "string" || specOrCtor === undefined) {
-      throw new TypeError(
-        'add<I>(ctor) requires the @fnioc/transformer plugin. Without it, ' +
-          'register with an explicit token: add("my:token", MyClass).',
-      );
-    }
-
-    const token = tokenOrCtor;
-
-    // useValue: the instance itself, no lifetime.
-    if (typeof specOrCtor === "object" && "useValue" in specOrCtor) {
-      this.append(token, { kind: "value", useValue: specOrCtor.useValue });
-      return this;
-    }
-
-    // useFactory: a closure with an optional caching scope.
-    if (typeof specOrCtor === "object" && "useFactory" in specOrCtor) {
-      this.append(token, {
-        kind: "factory",
-        useFactory: specOrCtor.useFactory as (scope: ResolveScope) => unknown,
-        scope: specOrCtor.scope,
-      });
-      return this;
-    }
-
-    // Class registration: a concrete constructor. Appended scopeless (transient)
-    // here; `.as()` appends a fresh scoped record so the array's last entry wins.
-    const ctor = specOrCtor as Ctor;
-    const registration: ClassRegistration = {
-      kind: "class",
-      ctor,
-      scope: undefined,
-    };
-    this.append(token, registration);
-
+  private appendScoped(
+    token: Token,
+    base: ClassRegistration | FactoryRegistration,
+  ): AddBuilder<Root | Children> {
+    this.append(token, base);
     const append = (next: Registration): void => this.append(token, next);
     return {
       as<S extends Root | Children>(scope?: S): void {
@@ -171,9 +121,99 @@ export class DiBuilder<
         // at runtime would leave the registration transient — guard so it is a
         // no-op rather than appending a scopeless duplicate.
         if (scope === undefined) return;
-        append({ ...registration, scope });
+        append({ ...base, scope });
       },
     };
+  }
+
+  /**
+   * Type-only authoring overloads — the forms the transformer rewrites FROM:
+   *   - `add<I>(C)`  → `add("token", C)`            (class)
+   *   - `add<I>(fn)` → `addFactory("token", fn)`    (factory; the transformer
+   *     knows the arg is a function and routes it to `addFactory`).
+   * The ctor is typed `Ctor<any[], I>` (plain construct signature, so an
+   * abstract class is rejected); the factory is any `(...args) => I`. Neither
+   * runs post-transform — they exist purely so type-driven authoring
+   * type-checks before lowering.
+   */
+  public add<I>(ctor: Ctor<any[], I>): AddBuilder<Root | Children>;
+  public add<I>(factory: (...args: any[]) => I): AddBuilder<Root | Children>;
+  /**
+   * Class registration — a string token bound to a concrete constructor. The
+   * runtime form: what the transformer emits for a class, and what a
+   * plugin-less caller writes directly. Returns the `.as(scope?)` continuation.
+   */
+  public add(token: Token, ctor: Ctor): AddBuilder<Root | Children>;
+  public add(
+    ...args:
+      | [ctor: Ctor<any[], unknown>]
+      | [factory: (...args: any[]) => unknown]
+      | [token: Token, ctor: Ctor]
+  ): AddBuilder<Root | Children> {
+    // Only the two-arg string-token form reaches the engine at runtime. The
+    // single-arg authoring overloads never run post-transform; guard defensively
+    // so a hand-written type-form call fails loud rather than registering junk.
+    if (args.length === 1 || typeof args[0] !== "string") {
+      throw new TypeError(
+        "add<I>(ctor) / add<I>(factory) require the @fnioc/transformer plugin. " +
+          'Without it, register with an explicit token: add("my:token", MyClass) ' +
+          "or addFactory(\"my:token\", (scope) => ...).",
+      );
+    }
+    const [token, ctor] = args;
+    return this.appendScoped(token, {
+      kind: "class",
+      ctor: ctor as Ctor,
+      scope: undefined,
+    });
+  }
+
+  /**
+   * Factory registration — a string token bound to a factory function. The
+   * runtime form the transformer emits for an authored `add<I>(fn)`, and what a
+   * plugin-less caller writes directly.
+   *
+   * Parameter injection follows the metadata rule (see `Scope.instantiate`): a
+   * factory WITH a `defineDeps` record (emitted by the transformer) has each
+   * parameter injected by its slot; a record-less factory (the plugin-less
+   * escape hatch) is called with the live scope — type it `(scope: ResolveScope)
+   * => T` and `scope.resolve(...)` its own deps. Returns the `.as(scope?)`
+   * continuation so a factory caches at a named scope exactly like a class.
+   */
+  public addFactory(
+    token: Token,
+    factory: (scope: ResolveScope) => unknown,
+  ): AddBuilder<Root | Children>;
+  public addFactory(
+    token: Token,
+    factory: Factory,
+  ): AddBuilder<Root | Children> {
+    return this.appendScoped(token, {
+      kind: "factory",
+      factory,
+      scope: undefined,
+    });
+  }
+
+  /**
+   * Value registration — an already-built instance, no deps and no lifetime.
+   * Separate from `add` because a value may itself be a function (a callable
+   * service), which is structurally indistinguishable from a factory inside one
+   * overload. Authoring `addValue<I>(v)` lowers to `addValue("token", v)`.
+   */
+  public addValue<I>(value: I): void;
+  public addValue(token: Token, value: unknown): void;
+  public addValue(
+    ...args: [value: unknown] | [token: Token, value: unknown]
+  ): void {
+    if (args.length === 1 || typeof args[0] !== "string") {
+      throw new TypeError(
+        "addValue<I>(value) requires the @fnioc/transformer plugin. Without it, " +
+          'register with an explicit token: addValue("my:token", value).',
+      );
+    }
+    const [token, value] = args;
+    this.append(token, { kind: "value", useValue: value });
   }
 
   /**

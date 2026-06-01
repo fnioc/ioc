@@ -5,13 +5,20 @@ import { transform, fixture } from "./harness.js";
 // ABI `Token[][]`: an array of signatures, each a positional array of
 // `string | null` (null = hole for a non-tokenable primitive).
 
-/** Pull the `[[...]]` signature array text out of a defineDeps(...) call. */
+/**
+ * Pull the `[[...]]` signature array text out of a defineDeps(...) call for the
+ * given class. The transformer always hoists: `const ɵregN = Ctor;` followed by
+ * `defineDeps(ɵregN, [[...]]);`. We find the hoisted const to resolve the name.
+ */
 function depsArrayFor(output: string, ctor: string): string {
-  const marker = `defineDeps(${ctor}, `;
+  const hoistMatch = output.match(new RegExp(`const (ɵreg\\d+) = ${ctor};`));
+  if (!hoistMatch) throw new Error(`no hoisted const for ${ctor} in:\n${output}`);
+  const regName = hoistMatch[1]!;
+  const marker = `defineDeps(${regName}, `;
   const start = output.indexOf(marker);
-  if (start < 0) throw new Error(`no defineDeps for ${ctor} in:\n${output}`);
+  if (start < 0) throw new Error(`no defineDeps for ${regName} in:\n${output}`);
   const from = start + marker.length;
-  // The emitted form is `defineDeps(Ctor, [[...]]);`. The signature literal
+  // The emitted form is `defineDeps(ɵregN, [[...]]);`. The signature literal
   // `[[...]]` ends just before the call's `)` — i.e. at the first `]` of `]);`.
   const end = output.indexOf("]);", from);
   return output.slice(from, end + 1);

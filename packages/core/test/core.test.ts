@@ -22,16 +22,16 @@ describe("hole", () => {
 
 // ── Global anchor ─────────────────────────────────────────────────────────────
 
-describe("global-symbol WeakMap anchor", () => {
+describe("global-symbol Map anchor", () => {
   const GLOBAL_KEY = Symbol.for("fnioc:deps");
 
   test("store is anchored on globalThis under the global-symbol key", () => {
     const raw = (globalThis as Record<symbol, unknown>)[GLOBAL_KEY];
     expect(raw).toBeDefined();
-    expect(raw instanceof WeakMap).toBe(true);
+    expect(raw instanceof Map).toBe(true);
   });
 
-  test("defineDeps writes through the same WeakMap visible on globalThis", () => {
+  test("defineDeps writes through the same Map visible on globalThis", () => {
     class GlobalAnchorProbe {}
 
     defineDeps(GlobalAnchorProbe, [["anchor:IFoo"]]);
@@ -40,25 +40,25 @@ describe("global-symbol WeakMap anchor", () => {
     // using a module-private map — this is the dual-package hardening proof.
     const rawStore = (globalThis as Record<symbol, unknown>)[
       GLOBAL_KEY
-    ] as WeakMap<object, unknown>;
+    ] as Map<object, unknown>;
     expect(rawStore.get(GlobalAnchorProbe)).toBeDefined();
     expect(rawStore.get(GlobalAnchorProbe)).toBe(getDeps(GlobalAnchorProbe));
   });
 });
 
-// ── Two-copies-share-one-WeakMap (PRD §5) ────────────────────────────────────
+// ── Two-copies-share-one-Map (PRD §5) ────────────────────────────────────────
 //
 // A second independent copy of @fnioc/core recomputes `Symbol.for("fnioc:deps")`
 // and lands on the SAME entry in the global symbol registry — and therefore the
-// SAME WeakMap. This describe block simulates "copy B" by accessing globalThis
+// SAME Map. This describe block simulates "copy B" by accessing globalThis
 // via the independently-recomputed key, without going through the module's
 // exported `store` binding.
 
-describe("two-copies-share-one-WeakMap (PRD §5)", () => {
+describe("two-copies-share-one-Map (PRD §5)", () => {
   // "Copy B" independently derives the same key — this is the whole point of
   // Symbol.for: any code that knows the string gets the same symbol.
   const COPY_B_KEY = Symbol.for("fnioc:deps");
-  type RawStore = WeakMap<object, { signatures: unknown[][] }>;
+  type RawStore = Map<object, { signatures: unknown[][] }>;
 
   test("copy-A write (defineDeps) is visible via copy-B direct-global read", () => {
     // copy A: write through the public API
@@ -71,13 +71,13 @@ describe("two-copies-share-one-WeakMap (PRD §5)", () => {
     ] as RawStore;
     const viaGlobal = copyBStore.get(CopyAWriteCtor);
 
-    // Must be the SAME object reference (not a clone) — same WeakMap
+    // Must be the SAME object reference (not a clone) — same Map
     expect(viaGlobal).toBe(getDeps(CopyAWriteCtor));
     expect(viaGlobal).toBeDefined();
   });
 
   test("copy-B write (direct-global put) is visible via copy-A public read (getDeps)", () => {
-    // copy B: write directly into the shared WeakMap, bypassing the module's API
+    // copy B: write directly into the shared Map, bypassing the module's API
     class CopyBWriteCtor {}
     const copyBStore = (globalThis as Record<symbol, unknown>)[
       COPY_B_KEY
@@ -146,7 +146,7 @@ describe("defineDeps", () => {
 
     defineDeps(Parent, [["token:IParent"]]);
 
-    // getDeps(Child) must return undefined; the WeakMap is keyed by the exact
+    // getDeps(Child) must return undefined; the Map is keyed by the exact
     // constructor, not the prototype chain.
     expect(getDeps(Child)).toBeUndefined();
   });

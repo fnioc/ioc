@@ -21,8 +21,6 @@ export { Scope } from "./scope.js";
 export type {
   Ctor,
   Factory,
-  FactorySpec,
-  ValueSpec,
   Registration,
   ClassRegistration,
   FactoryRegistration,

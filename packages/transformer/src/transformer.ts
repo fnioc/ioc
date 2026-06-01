@@ -18,7 +18,11 @@
 
 import ts from "typescript";
 import { lowerStatement, type LowerContext } from "./lower.js";
-import { deriveToken, type TokenContext } from "./tokens.js";
+import {
+  deriveToken,
+  tokenForReturnType,
+  type TokenContext,
+} from "./tokens.js";
 import { collectAsyncTokens } from "./checks.js";
 import type { DiagnosticSink } from "./diagnostics.js";
 import { NAMEOF_NAME } from "./nameof.js";
@@ -73,6 +77,7 @@ function transformSourceFile(
     ctx.factory.createIdentifier(localName);
 
   let usedDefineDeps = false;
+  let hoistCounter = 0;
   const lowerCtx: LowerContext = {
     ...ctx,
     sourceFile,
@@ -81,6 +86,9 @@ function transformSourceFile(
     makeDefineDepsRef,
     markUsedDefineDeps() {
       usedDefineDeps = true;
+    },
+    nextHoistName() {
+      return `ɵreg${hoistCounter++}`;
     },
   };
 
@@ -110,13 +118,72 @@ function lowerStatements(
   const out: ts.Statement[] = [];
   for (const statement of statements) {
     const lowered = lowerStatement(statement, ctx);
-    if (lowered) {
-      for (const s of lowered) out.push(rewriteNameof(s, ctx) as ts.Statement);
-    } else {
-      out.push(rewriteNameof(statement, ctx) as ts.Statement);
+    const each = lowered ?? [statement];
+    for (const s of each) {
+      out.push(rewriteResolve(rewriteNameof(s, ctx), ctx) as ts.Statement);
     }
   }
   return out;
+}
+
+/**
+ * Rewrite every tokenless `*.resolve<I>()` call (one type argument, NO value
+ * argument) within `node` to its string-token form, anywhere in the tree —
+ * resolution calls are not confined to top-level statements. A function-typed
+ * type arg (`resolve<(a: A) => T>()`) is a FACTORY request: it lowers to
+ * `*.resolveFactory("<token-for-return-type>")`; any other type arg lowers to
+ * `*.resolve("<token-for-I>")`. The explicit `resolve<T>(token)` form carries a
+ * value argument and is left untouched.
+ */
+function rewriteResolve(node: ts.Node, ctx: LowerContext): ts.Node {
+  const visit = (n: ts.Node): ts.Node => {
+    const visited = ts.visitEachChild(n, visit, undefined);
+    if (ts.isCallExpression(visited) && isTokenlessResolveCall(visited)) {
+      return lowerResolveCall(visited, ctx);
+    }
+    return visited;
+  };
+  return visit(node);
+}
+
+/** True when `call` is a tokenless `*.resolve<I>()` (1 type arg, 0 value args). */
+function isTokenlessResolveCall(call: ts.CallExpression): boolean {
+  const callee = call.expression;
+  if (!ts.isPropertyAccessExpression(callee)) return false;
+  if (callee.name.text !== "resolve") return false;
+  if (!call.typeArguments || call.typeArguments.length !== 1) return false;
+  return call.arguments.length === 0;
+}
+
+/** `*.resolve<I>()` → `*.resolve("tok")` / `*.resolveFactory("tok:return")`. */
+function lowerResolveCall(
+  call: ts.CallExpression,
+  ctx: LowerContext,
+): ts.CallExpression {
+  const callee = call.expression as ts.PropertyAccessExpression;
+  const typeArg = call.typeArguments![0]!;
+
+  let method = "resolve";
+  let token: string | undefined;
+  if (ts.isFunctionTypeNode(typeArg)) {
+    method = "resolveFactory";
+    const signature = ctx.checker.getSignatureFromDeclaration(typeArg);
+    token = signature ? tokenForReturnType(signature, ctx) : undefined;
+  } else {
+    token = deriveToken(ctx.checker.getTypeFromTypeNode(typeArg), ctx);
+  }
+
+  const newCallee =
+    method === callee.name.text
+      ? callee
+      : ctx.factory.createPropertyAccessExpression(callee.expression, method);
+  const tokenLiteral =
+    token === undefined
+      ? ctx.factory.createNull()
+      : ctx.factory.createStringLiteral(token);
+  return ctx.factory.updateCallExpression(call, newCallee, undefined, [
+    tokenLiteral,
+  ]);
 }
 
 /** Rewrite every `nameof<T>()` call within `node` to its string token. */

@@ -35,13 +35,19 @@ export class SqlDb implements IDbConnection {
   }
 }
 
-/** Ctor deps: a logger + a db (both registered) + an unregistered table name (a hole). */
+/**
+ * Ctor deps: a logger + a db (both registered) + an optional table name (a hole).
+ * `table` is `string | undefined` so the transformer emits an overload expansion:
+ *   [[logger, db, null], [logger, db]]
+ * Greedy selection prefers the long form but falls to the short form when `null`
+ * (an unresolvable hole) blocks it — table is `undefined` on a direct resolve.
+ */
 export class SqlUserRepo implements IUserRepo {
   public static built = 0;
   public constructor(
     public readonly logger: ILogger,
     public readonly db: IDbConnection,
-    public readonly table: string,
+    public readonly table?: string,
   ) {
     SqlUserRepo.built += 1;
   }
@@ -63,14 +69,15 @@ export class RequestContext implements IRequestContext {
 
 /**
  * A factory target with a PARTITIONED / positional signature: a registered repo
- * dep plus an unregistered `IRequestContext`-shaped hole the caller supplies.
- * Built fresh per factory call.
+ * dep plus a caller-supplied `requestId: string` hole. `string` is always a hole
+ * in the transformer output (primitive → null slot), so the injected factory's
+ * call signature is `(requestId: string) => IReport`. Built fresh per call.
  */
 export class Report implements IReport {
   public static built = 0;
   public constructor(
     public readonly repo: IUserRepo,
-    public readonly ctx: IRequestContext | undefined,
+    public readonly requestId?: string,
   ) {
     Report.built += 1;
   }
@@ -81,8 +88,8 @@ export class Report implements IReport {
  *   - `makeCtx: () => IRequestContext` — a BARE factory: the target has no holes
  *     and is request-scoped, so the injected callable routes through the normal
  *     resolve path and RESPECTS the lifetime (same instance within one request).
- *   - `makeReport: (ctx) => IReport` — a PARTIAL factory: Report's ctor mixes a
- *     registered repo dep with an unregistered IRequestContext hole, so the
+ *   - `makeReport: (requestId) => IReport` — a PARTIAL factory: Report's ctor
+ *     mixes a registered repo dep with an unregistered string hole, so the
  *     factory's call signature exposes only the hole, filled positionally, and a
  *     FRESH instance is built per call.
  * The transformer detects both inline arrow types and emits `{ factory }` slots.
@@ -90,7 +97,7 @@ export class Report implements IReport {
 export class ReportService implements IReportService {
   public constructor(
     public readonly makeCtx: () => IRequestContext,
-    public readonly makeReport: (ctx: IRequestContext) => IReport,
+    public readonly makeReport: (requestId: string) => IReport,
   ) {}
 }
 

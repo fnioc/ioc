@@ -1,15 +1,33 @@
-import type { Ctor } from "@rhombus-toolkit/func";
-import type { DepSlot, DepRecord, FactoryRef } from "./types.js";
+import type {
+  DepSlot,
+  DepRecord,
+  DepTarget,
+  FactoryRef,
+} from "./types.js";
 import { store } from "./store.js";
 
 /** True when `slot` is a `FactoryRef` (carries a `.factory` token). */
 function isFactoryRef(slot: DepSlot): slot is FactoryRef {
-  return typeof slot === "object" && slot !== null;
+  return (
+    typeof slot === "object" &&
+    slot !== null &&
+    typeof (slot as { factory?: unknown }).factory === "string"
+  );
+}
+
+/** True when `slot` is a `ScopeRef` (the live-scope marker `{ scope: true }`). */
+function isScopeRef(slot: DepSlot): boolean {
+  return (
+    typeof slot === "object" &&
+    slot !== null &&
+    (slot as { scope?: unknown }).scope === true
+  );
 }
 
 /**
  * Structural equality of two signature slots:
  *   - two `FactoryRef`s are equal iff their `.factory` tokens match,
+ *   - two `ScopeRef`s are always equal,
  *   - strings compare by value, the `hole` sentinel by identity,
  *   - slots of different kinds are never equal.
  */
@@ -18,6 +36,11 @@ function slotsEqual(a: DepSlot, b: DepSlot): boolean {
   const bIsRef = isFactoryRef(b);
   if (aIsRef || bIsRef) {
     return aIsRef && bIsRef && a.factory === b.factory;
+  }
+  const aIsScope = isScopeRef(a);
+  const bIsScope = isScopeRef(b);
+  if (aIsScope || bIsScope) {
+    return aIsScope && bIsScope;
   }
   return a === b;
 }
@@ -41,17 +64,18 @@ function signaturesEqual(a: readonly DepSlot[], b: readonly DepSlot[]): boolean 
  * DepRecord, deduping exact-equal signatures (same length + same elements in
  * order). Creates the record from scratch if the ctor is not yet registered.
  *
- * @param ctor       The exact constructor function to annotate (no prototype-
- *                   chain walk — subclasses do NOT inherit the parent's record).
+ * @param target     The exact constructor OR factory function to annotate (no
+ *                   prototype-chain walk — subclasses do NOT inherit the
+ *                   parent's record).
  * @param signatures An array of signatures; each signature is a positional array
- *                   of DepSlot (Token | hole | FactoryRef) parallel to the
- *                   constructor's parameter list.
+ *                   of DepSlot (Token | hole | FactoryRef | ScopeRef) parallel to
+ *                   the target's parameter list.
  */
 export function defineDeps(
-  ctor: Ctor,
+  target: DepTarget,
   signatures: readonly (readonly DepSlot[])[],
 ): void {
-  const existing = store.get(ctor);
+  const existing = store.get(target);
   if (existing !== undefined) {
     const merged: (readonly DepSlot[])[] = [...existing.signatures];
     for (const sig of signatures) {
@@ -59,19 +83,20 @@ export function defineDeps(
         merged.push(sig);
       }
     }
-    store.set(ctor, { signatures: merged });
+    store.set(target, { signatures: merged });
   } else {
-    store.set(ctor, { signatures });
+    store.set(target, { signatures });
   }
 }
 
 /**
- * Reads the dependency metadata for a constructor from the global WeakMap.
+ * Reads the dependency metadata for a constructor or factory function from the
+ * global WeakMap.
  *
- * Returns `undefined` when no metadata has been registered for `ctor`.
- * Keyed by the exact constructor — a subclass does NOT inherit the parent's
+ * Returns `undefined` when no metadata has been registered for `target`.
+ * Keyed by the exact target — a subclass does NOT inherit the parent's
  * DepRecord.
  */
-export function getDeps(ctor: Ctor): DepRecord | undefined {
-  return store.get(ctor);
+export function getDeps(target: DepTarget): DepRecord | undefined {
+  return store.get(target);
 }

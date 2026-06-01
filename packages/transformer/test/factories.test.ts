@@ -8,11 +8,18 @@ import { transform, fixture, type VirtualFiles } from "./harness.js";
 // deliberate opt-out and resolves to its own normal token. Detection is purely
 // syntactic (the annotation's shape), never the resolved type.
 
-/** Pull the `[[...]]` signature array text out of a defineDeps(...) call. */
+/**
+ * Pull the `[[...]]` signature array text out of a defineDeps(...) call for the
+ * given class. The transformer always hoists: `const ɵregN = Ctor;` followed by
+ * `defineDeps(ɵregN, [[...]]);`. We find the hoisted const to resolve the name.
+ */
 function depsArrayFor(output: string, ctor: string): string {
-  const marker = `defineDeps(${ctor}, `;
+  const hoistMatch = output.match(new RegExp(`const (ɵreg\\d+) = ${ctor};`));
+  if (!hoistMatch) throw new Error(`no hoisted const for ${ctor} in:\n${output}`);
+  const regName = hoistMatch[1]!;
+  const marker = `defineDeps(${regName}, `;
   const start = output.indexOf(marker);
-  if (start < 0) throw new Error(`no defineDeps for ${ctor} in:\n${output}`);
+  if (start < 0) throw new Error(`no defineDeps for ${regName} in:\n${output}`);
   const from = start + marker.length;
   const end = output.indexOf("]);", from);
   return output.slice(from, end + 1);

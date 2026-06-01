@@ -82,13 +82,11 @@ services.add<IConfigConsumer>(ConfigConsumer).as<"singleton">();
 services.add<IReportService>(ReportService).as<"request">();
 
 // Plugin-less path: async config via a Promise-returning factory, cached as a
-// singleton. This same closure is used identically in the parity test.
-services.add<Promise<IConfig>>(CONFIG_TOKEN, {
-  useFactory: () => makeConfig(),
-  scope: "singleton",
-});
+// singleton. addFactory with a scope-less factory (no defineDeps record) → called
+// with the live scope; this factory ignores it and calls makeConfig() directly.
+services.addFactory(CONFIG_TOKEN, () => makeConfig()).as("singleton");
 
 // The named-callable IThunk is provided plugin-less as a value (it is a plain
 // closure, not a class). ThunkConsumer's `IThunk` ctor param lowers to this
 // token — a plain string slot, NOT a factory — so di resolves THIS value.
-services.add<IThunk>(THUNK_TOKEN, { useValue: theThunk });
+services.addValue(THUNK_TOKEN, theThunk);

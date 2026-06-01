@@ -48,11 +48,16 @@ describe("registration + basic resolution", () => {
     expect(repo.db).toBeInstanceOf(SqlDb);
   });
 
-  test("a useValue add returns the builder for chaining; class add returns AddBuilder", () => {
+  test("addValue registers a value that resolves verbatim; class add returns AddBuilder", () => {
+    // Semantic change: the old add(token, { useValue }) object shape is removed.
+    // addValue(token, value) is the new surface; it returns void (no chaining).
+    // Class add still returns an AddBuilder for .as() tagging.
     const services = new DiBuilder<"singleton">();
-    // The factory/value add shapes return the builder for chaining.
-    const ret = services.add(T.Config, { useValue: { v: 1 } });
-    expect(ret).toBe(services);
+    services.addValue(T.Config, { v: 1 });
+    const addBuilder = services.add(T.Logger, class L {});
+    expect(typeof addBuilder.as).toBe("function");
+    // The value registered above resolves correctly.
+    expect(services.build().resolve<{ v: number }>(T.Config)).toEqual({ v: 1 });
   });
 });
 

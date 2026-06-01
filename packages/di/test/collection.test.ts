@@ -34,20 +34,17 @@ describe("service collection — last-wins over a retained list", () => {
     const fake = { which: "fake" };
     const services = new DiBuilder<"singleton">();
     services.add(T.Service, Real).as("singleton");
-    services.add(T.Service, { useValue: fake });
+    services.addValue(T.Service, fake);
 
     expect(services.build().resolve<typeof fake>(T.Service)).toBe(fake);
   });
 
-  test("a later class registration overrides an earlier useFactory", () => {
+  test("a later class registration overrides an earlier addFactory", () => {
     class Winner {
       public readonly which = "winner";
     }
     const services = new DiBuilder<"singleton">();
-    services.add(T.Service, {
-      useFactory: () => ({ which: "factory" }),
-      scope: "singleton",
-    });
+    services.addFactory(T.Service, () => ({ which: "factory" })).as("singleton");
     services.add(T.Service, Winner).as("singleton");
 
     const resolved = services.build().resolve<Winner>(T.Service);
@@ -57,12 +54,12 @@ describe("service collection — last-wins over a retained list", () => {
 
   test("a scope-local override appends to the local list, last-wins", () => {
     const services = new DiBuilder<"singleton", "request">();
-    services.add(T.Config, { useValue: "base" });
+    services.addValue(T.Config, "base");
 
     const root = services.build();
     const req = root.createScope("request");
-    req.add(T.Config, { useValue: "local-1" });
-    req.add(T.Config, { useValue: "local-2" });
+    req.addValue(T.Config, "local-1");
+    req.addValue(T.Config, "local-2");
 
     expect(req.resolve<string>(T.Config)).toBe("local-2");
     // The base registration is still the one a sibling-less ancestor sees.
@@ -82,36 +79,38 @@ describe("the three add shapes", () => {
     expect(root.resolve<Svc>(T.Service)).toBe(root.resolve<Svc>(T.Service));
   });
 
-  test("factory — add(token, { useFactory, scope }) resolves its own deps", () => {
+  test("factory — addFactory(token, fn).as(scope) resolves its own deps", () => {
     class Dep {
       public readonly kind = "dep";
     }
     const services = new DiBuilder<"singleton">();
     services.add(T.Db, Dep).as("singleton");
-    services.add(T.Service, {
-      useFactory: (s) => ({ dep: s.resolve<Dep>(T.Db) }),
-      scope: "singleton",
-    });
+    services.addFactory(T.Service, (s) => ({ dep: s.resolve<Dep>(T.Db) })).as("singleton");
 
     const root = services.build();
     const a = root.resolve<{ dep: Dep }>(T.Service);
     const b = root.resolve<{ dep: Dep }>(T.Service);
-    expect(a).toBe(b); // scope:"singleton" caches the result
+    expect(a).toBe(b); // .as("singleton") caches the result
     expect(a.dep).toBeInstanceOf(Dep);
   });
 
-  test("value — add(token, { useValue }) returns the instance verbatim", () => {
+  test("value — addValue(token, value) returns the instance verbatim", () => {
     const value = { v: 1 };
     const services = new DiBuilder<"singleton">();
-    services.add(T.Config, { useValue: value });
+    services.addValue(T.Config, value);
 
     expect(services.build().resolve<typeof value>(T.Config)).toBe(value);
   });
 
-  test("factory and value adds return the builder for chaining", () => {
+  test("addFactory returns AddBuilder for .as() chaining; addValue returns void", () => {
+    // addValue returns void (no chaining); addFactory returns an AddBuilder.
+    // Semantic change: old add(token, { useValue }) returned the builder;
+    // addValue(token, value) is void by design — values have no lifetime to tag.
     const services = new DiBuilder<"singleton">();
-    expect(services.add(T.A, { useValue: 1 })).toBe(services);
-    expect(services.add(T.B, { useFactory: () => 2 })).toBe(services);
+    const factoryBuilder = services.addFactory(T.B, () => 2);
+    expect(typeof factoryBuilder.as).toBe("function");
+    // addValue is fire-and-forget: just assert it does not throw.
+    expect(() => services.addValue(T.A, 1)).not.toThrow();
   });
 });
 
