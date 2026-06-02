@@ -42,4 +42,5 @@ const globals = globalThis as typeof globalThis & {
   [GLOBAL_KEY]?: Map<DepTarget, DepRecord>;
 };
 
-export const store = (globals[GLOBAL_KEY] ??= new Map());
+export const store: Map<DepTarget, DepRecord> = (globals[GLOBAL_KEY] ??=
+  new Map<DepTarget, DepRecord>());
