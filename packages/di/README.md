@@ -58,7 +58,7 @@ services.add("pkg:ICache", {
 
 A `useFactory` with `scope: "singleton"` runs once and caches the result; without a `scope` it runs on every resolve (transient). `useValue` is always the same reference.
 
-The same two specs are available scope-locally via `scope.add(token, spec)`, so a single scope (e.g. a test scope) can swap an implementation without rebuilding the builder.
+To override a registration for a specific context (e.g. a test double), register a later spec for the same token on the `DiBuilder` before calling `build()`. The registration map is append-only and last-registration-wins, so a later `.add(token, ...)` / `.addFactory(token, ...)` / `.addValue(token, ...)` call shadows the earlier one without deleting it. The map seals at `build()` — no post-build mutation is possible.
 
 ---
 
@@ -272,16 +272,19 @@ Note: `FactoryTargetError` is thrown when the factory callable is constructed (a
 | `add<I>(Concrete)` | `(ctor: new (...) => I) => AddBuilder` | Register a concrete class against interface `I`. |
 | `.as<S>()` | `(scope: S) → void` | Set the lifetime scope. No call → transient. |
 | `add(token, ctor)` | `(token: string, ctor) => AddBuilder` | Class registration (lowered form). |
-| `add(token, spec)` | `(token: string, { useFactory, scope? } \| { useValue }) => this` | Factory / value registration. No dep metadata required. |
-| `build()` | `() => Scope<Root \| Children>` | Mint the root scope (named `Root`). No argument. |
+| `addFactory(token, factory)` | `(token: string, factory: (sp: Resolver) => T) => AddBuilder` | Factory registration. No dep metadata required — the factory receives the live `Resolver`. |
+| `addValue(token, value)` | `(token: string, value: unknown) => void` | Value registration. A pre-built instance, re-used as-is. |
+| `build()` | `() => ServiceProvider<Root \| Children>` | Seal the registration map and mint the root `ServiceProvider`. No post-build mutation is possible. |
 
-### `Scope<Scopes>`
+### `ServiceProvider<Scopes>`
+
+Implements `Resolver` + `ScopeFactory` + `Disposable` / `AsyncDisposable`.
 
 | Member | Signature | Description |
 |---|---|---|
-| `createScope(name)` | `(name: Scopes) => Scope<Scopes>` | Create a nested child scope. |
-| `add(token, spec)` | `(token, { useFactory, scope? } \| { useValue }) => this` | Scope-local override registration. |
 | `resolve<T>(token)` | `(token: string) => T` | Resolve an instance. Throws on captive-dep violation, missing scope ancestor, or cycle. |
+| `resolveFactory(token)` | `(token: string) => (...args) => T` | Resolve a factory callable for the token rather than an instance. |
+| `createScope(name)` | `(name: Scopes) => ServiceProvider<Scopes>` | Create a nested child scope. |
 | `dispose()` | `() => void` | Sync close. Throws if any owned instance has async-only disposal. |
 | `disposeAsync()` | `() => Promise<void>` | Async close. |
 | `[Symbol.dispose]()` | — | Native `using` support. |
