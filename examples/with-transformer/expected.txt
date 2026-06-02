@@ -2,10 +2,14 @@
 greeter is a shared singleton: true
 Greeter instances built: 1
 ConsoleLogger instances built: 1
-SystemClock instances built: 1
+SystemClock instances built: 2
 logged lines:
   [2026-01-01T00:00:00Z] Hello, Ada!
   [2026-01-01T00:00:00Z] Hello, Linus!
+  [union] union-test
+  diagnostics at 2026-01-01T00:00:00Z
 request 1 id stable within scope: true (value 1)
 request 2 id is distinct: true (value 2)
 RequestId instances built: 2
+union resolved to logger (first in union): true
+inject brand pinned correct clock: true

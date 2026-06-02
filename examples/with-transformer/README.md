@@ -13,6 +13,11 @@ with the [`@fnioc/transformer`](../../packages/transformer) ts-patch plugin.
 - Singleton lifetime: the greeter and its logger are shared across resolves.
 - A `request` child scope (`root.createScope("request")`) owning a
   request-scoped service, demonstrating per-scope lifetimes.
+- **Inline union** (`A | B` ctor param): `UnionConsumer(sink: ILogger | IMetricsBackend)`
+  — the transformer emits a `{ union: [...] }` slot; the first registered member wins.
+- **`Inject<T, "tok">` brand**: `DiagnosticsService` pins its `clock` param to
+  `"app:primary-clock"` overriding the structural derivation, so a specific
+  `SystemClock` instance registered under that token is injected.
 
 ## How it works
 

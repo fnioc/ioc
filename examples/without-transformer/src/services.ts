@@ -55,3 +55,44 @@ export class RequestId implements IRequestId {
     this.value = RequestId.built;
   }
 }
+
+// ── union and third-party demonstration classes ───────────────────────────────
+
+/**
+ * A "diagnostics reporter" that depends on any available log sink — either the
+ * real logger or the clock (for simple timestamp-prefixed output). This class is
+ * used to demonstrate a `union(...)` slot: its log dep resolves to whichever of
+ * the two is available, in declaration order.
+ */
+export class DiagnosticsReporter {
+  public static built = 0;
+  public constructor(public readonly sink: { log?: (msg: string) => void; now?: () => string }) {
+    DiagnosticsReporter.built += 1;
+  }
+  public report(msg: string): string {
+    if (this.sink.log) {
+      this.sink.log(`[diag] ${msg}`);
+      return `logged: ${msg}`;
+    }
+    if (this.sink.now) {
+      return `[${this.sink.now()}] ${msg}`;
+    }
+    return msg;
+  }
+}
+
+/**
+ * Simulates a third-party class whose constructor we cannot annotate. The wiring
+ * must supply a complete manual `forCtor(ThirdPartyFormatter).signature(...)`
+ * because the class has no transformer-emitted metadata and no `@signature`
+ * decorator.
+ */
+export class ThirdPartyFormatter {
+  public constructor(
+    public readonly logger: ILogger,
+    public readonly clock: IClock,
+  ) {}
+  public format(text: string): string {
+    return `[${this.clock.now()}] ${text}`;
+  }
+}

@@ -36,18 +36,17 @@ export class SqlDb implements IDbConnection {
 }
 
 /**
- * Ctor deps: a logger + a db (both registered) + an optional table name (a hole).
- * `table` is `string | undefined` so the transformer emits an overload expansion:
- *   [[logger, db, null], [logger, db]]
- * Greedy selection prefers the long form but falls to the short form when `null`
- * (an unresolvable hole) blocks it — table is `undefined` on a direct resolve.
+ * Ctor deps: a logger + a db (both registered). Previously had an optional
+ * `table?: string` parameter to demonstrate overload expansion, but primitive
+ * `string` is not tokenizable in the new design (no symbol, no named alias).
+ * The overload-expansion / caller-supplied pattern is demonstrated via
+ * `resolveFactory(token, params)` in the parity tests.
  */
 export class SqlUserRepo implements IUserRepo {
   public static built = 0;
   public constructor(
     public readonly logger: ILogger,
     public readonly db: IDbConnection,
-    public readonly table?: string,
   ) {
     SqlUserRepo.built += 1;
   }
@@ -68,36 +67,30 @@ export class RequestContext implements IRequestContext {
 }
 
 /**
- * A factory target with a PARTITIONED / positional signature: a registered repo
- * dep plus a caller-supplied `requestId: string` hole. `string` is always a hole
- * in the transformer output (primitive → null slot), so the injected factory's
- * call signature is `(requestId: string) => IReport`. Built fresh per call.
+ * A request-scoped value object. Holds a repo dep resolved from the container.
+ * Used in the `resolveFactory` integration tests via the parity test's
+ * self-contained classes.
  */
 export class Report implements IReport {
   public static built = 0;
   public constructor(
     public readonly repo: IUserRepo,
-    public readonly requestId?: string,
   ) {
     Report.built += 1;
   }
 }
 
 /**
- * Holds two factory params:
- *   - `makeCtx: () => IRequestContext` — a BARE factory: the target has no holes
- *     and is request-scoped, so the injected callable routes through the normal
- *     resolve path and RESPECTS the lifetime (same instance within one request).
- *   - `makeReport: (requestId) => IReport` — a PARTIAL factory: Report's ctor
- *     mixes a registered repo dep with an unregistered string hole, so the
- *     factory's call signature exposes only the hole, filled positionally, and a
- *     FRESH instance is built per call.
- * The transformer detects both inline arrow types and emits `{ factory }` slots.
+ * Holds one inline factory param:
+ *   - `makeCtx: () => IRequestContext` — a BARE zero-arg factory: the target is
+ *     request-scoped, so the injected callable routes through the normal resolve
+ *     path and RESPECTS the lifetime (same instance within one request).
+ *
+ * The transformer detects the inline arrow type and emits a `{ type }` slot.
  */
 export class ReportService implements IReportService {
   public constructor(
     public readonly makeCtx: () => IRequestContext,
-    public readonly makeReport: (requestId: string) => IReport,
   ) {}
 }
 

@@ -3,7 +3,8 @@
 // the `./contracts/ILogger` token, so no metadata is hand-written here. Static
 // `built` counters let the program prove singleton sharing at runtime.
 
-import type { IClock, IGreeter, ILogger, IRequestId } from "./contracts.js";
+import type { Inject } from "./fnioc-transformer.js";
+import type { IClock, IDiagnosticsService, IGreeter, ILogger, IMetricsBackend, IRequestId } from "./contracts.js";
 
 export class ConsoleLogger implements ILogger {
   public static built = 0;
@@ -53,5 +54,56 @@ export class RequestId implements IRequestId {
   public constructor() {
     RequestId.built += 1;
     this.value = RequestId.built;
+  }
+}
+
+// ── Extra services for Inject and union demonstrations ────────────────────────
+
+/**
+ * A simple metrics backend that records event keys.
+ * Used in the inline-union demonstration.
+ */
+export class InMemoryMetrics implements IMetricsBackend {
+  public readonly records: string[] = [];
+  public record(key: string): void {
+    this.records.push(key);
+  }
+}
+
+/**
+ * Demonstrates an inline-union ctor parameter: `sink: ILogger | IMetricsBackend`.
+ * The transformer lowers this to a Union slot. Since ILogger is registered first
+ * in the declaration (and registered in the container), it wins.
+ */
+export class UnionConsumer {
+  public constructor(
+    public readonly sink: ILogger | IMetricsBackend,
+  ) {}
+  public emit(msg: string): void {
+    if ("log" in this.sink) {
+      this.sink.log(`[union] ${msg}`);
+    } else {
+      this.sink.record(msg);
+    }
+  }
+}
+
+/**
+ * Demonstrates the `Inject<T, "tok">` brand. The `clock` param is branded
+ * `Inject<IClock, "app:primary-clock">`. The transformer emits the token
+ * `"app:primary-clock"` for that slot instead of the structurally-derived
+ * `./contracts/IClock`. This makes the class resolvable even when no service is
+ * registered under `./contracts/IClock`, as long as one is registered under
+ * `"app:primary-clock"`.
+ */
+export class DiagnosticsService implements IDiagnosticsService {
+  public constructor(
+    private readonly clock: Inject<IClock, "app:primary-clock">,
+    private readonly logger: ILogger,
+  ) {}
+  public diagnose(): string {
+    const msg = `diagnostics at ${this.clock.now()}`;
+    this.logger.log(msg);
+    return msg;
   }
 }

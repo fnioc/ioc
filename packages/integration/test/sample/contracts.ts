@@ -28,19 +28,23 @@ export interface IRequestContext {
 }
 
 /**
- * Built by a factory parameter; carries a caller-supplied string request ID.
- * `requestId?: string` is a primitive → always a hole in the transformer output,
- * guaranteeing the factory's call signature is `(requestId: string) => IReport`.
+ * Built by a factory — holds a resolved repo dep. Intentionally simple:
+ * no optional / caller-supplied params. The `resolveFactory` pattern for
+ * parameterized construction is demonstrated in parity.test.ts directly.
  */
 export interface IReport {
   readonly repo: IUserRepo;
-  readonly requestId?: string;
 }
 
-/** Holds two factory params (a bare zero-arg factory and a partitioned factory). */
+/**
+ * Holds one factory param — a bare zero-arg factory. The formerly partitioned
+ * `makeReport` was removed: parameterized factory injection (`(params) => T`)
+ * is now expressed via `scope.resolveFactory(token, params)` rather than inline
+ * factory types. The makeReport capability is demonstrated in parity.test.ts
+ * via the resolveFactory tests.
+ */
 export interface IReportService {
   readonly makeCtx: () => IRequestContext;
-  readonly makeReport: (requestId: string) => IReport;
 }
 
 /**

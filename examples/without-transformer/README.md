@@ -13,6 +13,12 @@ wiring style, so this is the side-by-side for what the transformer automates.
   `MissingMetadataError`, so every such class must declare its signature.
 - The same singleton sharing and `request` child-scope lifetimes as the
   transformer example.
+- **`union("tok:A", "tok:B")`**: `DiagnosticsReporter` takes a union slot — the
+  first registered member (`ILogger`) wins. Registering `IMetricsBackend` instead
+  would fall through to that.
+- **`forCtor(ThirdParty).signature(...)`**: `ThirdPartyFormatter` is wired with a
+  complete manual signature, exactly as the transformer would emit for a class you
+  don't own.
 
 ## What the transformer would have done for you
 
