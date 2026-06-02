@@ -10,7 +10,7 @@ No decorators. No `reflect-metadata`. No runtime type introspection. Feed it str
 
 The entry point. `Root` is the root scope's name (the app-lifetime scope singletons bind to, default `"singleton"`); `Children` is the union of declarable child-scope names. Scopes are `Root | Children`. Transient (no cache, fresh instance on every resolve) is the default — there is no `"transient"` scope; the absence of `.as()` is what makes a registration transient.
 
-```typescript
+```ts
 import { DiBuilder } from "@fnioc/di";
 
 const services = new DiBuilder<"singleton", "request">();
@@ -22,7 +22,7 @@ Registration is append-only: each token holds a **list** of registrations in reg
 
 Register a concrete implementation against an interface token. The transformer rewrites `add<IFoo>(Foo)` to `add("pkg:IFoo", Foo)` at build time. Hand-fed consumers pass the token string directly.
 
-```typescript
+```ts
 // With transformer (author form):
 services.add<ILogger>(ConsoleLogger).as<"singleton">();
 services.add<IUserRepo>(SqlUserRepo).as<"request">();
@@ -38,13 +38,24 @@ The type constraint on `Concrete` is `new (...args: any[]) => Interface` — pla
 
 `.as<S>()` checks at compile time that `S` is a declared scope name. Passing an undeclared string is a type error.
 
+### `add<I>(Concrete, sig)` — registration-time signature override
+
+For third-party classes (ctor not editable) or generic instantiations the transformer cannot infer, supply a positional override array alongside the class:
+
+```ts
+add<ICache>(RedisCache, ["pkg:IRedisClient", undefined, "pkg:ILogger"]);
+```
+
+`sig` is `readonly (DepSlot | undefined)[]` — a positional sparse override over the transformer-generated signature. A `DepSlot` at a position overrides the generated token there; `undefined` keeps the generated token. Use explicit `undefined` rather than sparse elision (no-sparse-arrays).
+
+Pure token users (no transformer) supply a complete signature via `forCtor(C).signature(...)` instead.
+
 ### `add(token, { useFactory })` and `add(token, { useValue })`
 
 The same `add` surface also takes factory and value specs — registration paths that bypass the dep-metadata system entirely. Recommended for test doubles, third-party instances, and plugin-less consumers. Both return the builder for chaining.
 
-```typescript
-// Factory: receives the scope, returns the instance. An optional `scope`
-// caches the result at the matching ancestor (singleton-style).
+```ts
+// Factory: receives the scope, returns the instance.
 services.add("pkg:IDb", {
   useFactory: (c) => new PostgresDb(c.resolve<IConfig>("pkg:IConfig")),
   scope: "singleton",
@@ -58,7 +69,7 @@ services.add("pkg:ICache", {
 
 A `useFactory` with `scope: "singleton"` runs once and caches the result; without a `scope` it runs on every resolve (transient). `useValue` is always the same reference.
 
-To override a registration for a specific context (e.g. a test double), register a later spec for the same token on the `DiBuilder` before calling `build()`. The registration map is append-only and last-registration-wins, so a later `.add(token, ...)` / `.addFactory(token, ...)` / `.addValue(token, ...)` call shadows the earlier one without deleting it. The map seals at `build()` — no post-build mutation is possible.
+To override a registration for a specific context (e.g. a test double), register a later spec for the same token on the `DiBuilder` before calling `build()`. The registration map is append-only and last-registration-wins. The map seals at `build()` — no post-build mutation is possible.
 
 ---
 
@@ -66,7 +77,7 @@ To override a registration for a specific context (e.g. a test double), register
 
 Scopes form a parent-linked chain. The root scope is a real, app-lifetime object — minted by `build()`, never auto-created by the container. Child scopes nest from a scope via `createScope`.
 
-```typescript
+```ts
 const root = services.build();             // app lifetime — named by Root
 const req  = root.createScope("request");  // per HTTP request
 ```
@@ -89,7 +100,7 @@ const req  = root.createScope("request");  // per HTTP request
 
 The critical correctness rule: deps are resolved **relative to the scope that will own the instance**, not the scope that triggered the resolve.
 
-```typescript
+```ts
 const services = new DiBuilder<"singleton", "request">();
 services.add<ICache>(RedisCache).as<"singleton">();
 services.add<IUserContext>(HttpUserContext).as<"request">();
@@ -114,9 +125,9 @@ This mirrors `Microsoft.Extensions.DependencyInjection`'s scope-validation disci
 
 ## Greedy overload selection
 
-When a constructor has multiple registered signatures (stacked `@signature` decorators or chained `forCtor.signature()` calls), the engine selects by scanning **longest → shortest** and picking the first signature where every non-hole parameter token is satisfiable (registered in the container). Equal-arity ties break by registration order.
+When a constructor has multiple registered signatures (stacked `@signature` decorators or chained `forCtor.signature()` calls), the engine selects by scanning **longest → shortest** and picking the first signature where every resolvable parameter token is satisfiable (registered in the container). Equal-arity ties break by registration order.
 
-```typescript
+```ts
 // Two overloads: prefer the one with ILogger if available
 @signature("pkg:ILogger", "pkg:IDb")
 @signature("pkg:IDb")
@@ -144,7 +155,7 @@ Circular dependency detected:
 
 Closing a scope disposes the instances it owns in **reverse construction order**. Only instances implementing the native TC39 disposal contract are disposed.
 
-```typescript
+```ts
 // Sync disposal
 scope.dispose(): void
 
@@ -168,7 +179,7 @@ Instances owned by ancestor scopes are disposed when those scopes close, not whe
 
 The container never awaits. Async is expressed as `Promise<T>` values through the sync channel.
 
-```typescript
+```ts
 // Register an async factory
 services.add("pkg:IDb", {
   useFactory: async (c) => {
@@ -197,11 +208,11 @@ The transformer unwraps `Promise<X>` at dep-extraction: a parameter typed `Promi
 
 A constructor parameter whose type annotation is an inline function type returning a registered interface is injected as a **factory** — a callable that builds the target on demand — rather than a resolved instance.
 
-```typescript
+```ts
 // IDb is a registered class. This parameter receives a callable:
 constructor(makeDb: () => IDb) { ... }
 
-// Partial factory — the target ctor has holes the caller fills:
+// Partial factory — the caller fills caller-supplied params:
 constructor(makeRepo: (tableName: string) => IUserRepo) { ... }
 ```
 
@@ -209,7 +220,7 @@ constructor(makeRepo: (tableName: string) => IUserRepo) { ... }
 
 A **named** callable interface is NOT treated as a factory — it resolves as a normal service keyed on that interface's own token:
 
-```typescript
+```ts
 interface IDbFactory { (): IDb }
 
 // Resolves as the "pkg:IDbFactory" token, not a factory for IDb
@@ -218,13 +229,29 @@ constructor(dbFactory: IDbFactory) { ... }
 
 Name the interface to opt out of factory interpretation whenever your function-typed service should itself be a registered dep.
 
+### `resolveFactory(type, params?)`
+
+Resolve a factory callable for the token rather than an instance:
+
+```ts
+// Without params → strict zero-arg () => T; every slot must resolve from the container
+const makeDb = scope.resolveFactory("pkg:IDb");
+const db = makeDb(); // all deps resolved from container
+
+// With params → factory (...params) => T; named tokens filled by caller, rest from container
+const makeRepo = scope.resolveFactory("pkg:IUserRepo", ["app:tableName"]);
+const repo = makeRepo("users"); // tableName filled by caller; ILogger, IDb from container
+```
+
+`params` is the complete authored-order list of caller-supplied token strings, matched by token (first-occurrence, left-to-right). Passing `params` pins the factory's shape — it no longer drifts as registration state changes.
+
 ### Partial / positional factories
 
-The injected callable exposes **only the target constructor's unregistered parameters**, in their relative order. Registered deps are resolved by the container at call time; holes and unregistered params are filled positionally by caller-supplied arguments.
+The injected callable exposes **only the target constructor's caller-supplied parameters**, in their relative order. Registered deps are resolved by the container at call time.
 
-```typescript
+```ts
 // IUserRepo concrete: constructor(log: ILogger, tableName: string, db: IDb)
-// ILogger and IDb are registered; tableName is not (a hole).
+// ILogger and IDb are registered; tableName is not registered (caller-supplied).
 // Injected factory type: (tableName: string) => IUserRepo
 
 class RequestHandler {
@@ -237,7 +264,7 @@ class RequestHandler {
 }
 ```
 
-There are no Ramda-style placeholders. The factory's call arity is exactly the count of unregistered parameters; the caller never sees the full constructor shape.
+There are no Ramda-style placeholders. The factory's call arity is exactly the count of caller-supplied parameters; the caller never sees the full constructor shape.
 
 ### Lifetime semantics
 
@@ -245,10 +272,10 @@ The injected factory is a closure captured at injection time, referencing the ow
 
 | Factory kind | Lifetime behavior |
 |---|---|
-| **Zero-arg** (`() => IFoo`, no holes or unregistered params) | Routes through normal `resolve` — respects the target's registered lifetime. A singleton target returns the same instance on every call; a transient target yields a fresh one. |
-| **Parameterized** (caller args fill holes or unregistered params) | Builds a **fresh instance on every call**, bypassing the instance cache. Caller args differ per invocation, so caching would be wrong — two calls with different arguments must not collapse to one cached instance. |
+| **Zero-arg** (`() => IFoo`, no caller-supplied params) | Routes through normal `resolve` — respects the target's registered lifetime. A singleton target returns the same instance on every call; a transient target yields a fresh one. |
+| **Parameterized** (caller args fill caller-supplied params) | Builds a **fresh instance on every call**, bypassing the instance cache. Caller args differ per invocation, so caching would be wrong — two calls with different arguments must not collapse to one cached instance. |
 
-The captive-dependency rule (§5.4) holds at call time: the target's own deps are resolved relative to the scope that owns the factory-holding instance. A factory captured by a singleton that tries to build a request-scoped target still throws `MissingScopeError` when invoked.
+The captive-dependency rule holds at call time: the target's own deps are resolved relative to the scope that owns the factory-holding instance. A factory captured by a singleton that tries to build a request-scoped target still throws `MissingScopeError` when invoked.
 
 ### `FactoryTargetError`
 
@@ -263,6 +290,23 @@ Note: `FactoryTargetError` is thrown when the factory callable is constructed (a
 
 ---
 
+## Union slots
+
+A `Union` dep slot tries each member in declaration order and resolves to the first registered one. Throw if none resolves.
+
+```ts
+import { union } from "@fnioc/di";
+
+forCtor(Handler).signature(
+  union("pkg:IRedis", "pkg:IMemoryCache"),
+  "pkg:ILogger",
+);
+```
+
+Token users construct `Union` slots with `union(...)`. Transformer users write an inline `A | B` annotation and the transformer lowers it automatically. See [`@fnioc/transformer`](../transformer/README.md) for the named-vs-inline distinction.
+
+---
+
 ## API reference
 
 ### `DiBuilder<Root, Children>`
@@ -270,7 +314,8 @@ Note: `FactoryTargetError` is thrown when the factory callable is constructed (a
 | Member | Signature | Description |
 |---|---|---|
 | `add<I>(Concrete)` | `(ctor: new (...) => I) => AddBuilder` | Register a concrete class against interface `I`. |
-| `.as<S>()` | `(scope: S) → void` | Set the lifetime scope. No call → transient. |
+| `add<I>(Concrete, sig)` | `(ctor, sig: readonly (DepSlot \| undefined)[]) => AddBuilder` | Register with a positional signature override. |
+| `.as<S>()` | `(scope: S) => void` | Set the lifetime scope. No call → transient. |
 | `add(token, ctor)` | `(token: string, ctor) => AddBuilder` | Class registration (lowered form). |
 | `addFactory(token, factory)` | `(token: string, factory: (sp: Resolver) => T) => AddBuilder` | Factory registration. No dep metadata required — the factory receives the live `Resolver`. |
 | `addValue(token, value)` | `(token: string, value: unknown) => void` | Value registration. A pre-built instance, re-used as-is. |
@@ -283,7 +328,7 @@ Implements `Resolver` + `ScopeFactory` + `Disposable` / `AsyncDisposable`.
 | Member | Signature | Description |
 |---|---|---|
 | `resolve<T>(token)` | `(token: string) => T` | Resolve an instance. Throws on captive-dep violation, missing scope ancestor, or cycle. |
-| `resolveFactory(token)` | `(token: string) => (...args) => T` | Resolve a factory callable for the token rather than an instance. |
+| `resolveFactory(type, params?)` | `(type: string, params?: readonly string[]) => (...args) => T` | Resolve a factory callable. Without `params`, strict zero-arg `() => T`; with `params`, `(...params) => T` matched by token. |
 | `createScope(name)` | `(name: Scopes) => ServiceProvider<Scopes>` | Create a nested child scope. |
 | `dispose()` | `() => void` | Sync close. Throws if any owned instance has async-only disposal. |
 | `disposeAsync()` | `() => Promise<void>` | Async close. |

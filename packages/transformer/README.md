@@ -67,11 +67,30 @@ Tokens are stable strings derived from TypeScript interface types. The derivatio
 
 The transformer walks up to the nearest `package.json` to identify the owning package, then checks whether the symbol is publicly reachable.
 
+### `Inject<T, K extends Token>` — per-arg token override
+
+To pin a specific token for one constructor or factory parameter, use the `Inject` brand (re-exported from `@fnioc/transformer`, zero runtime):
+
+```ts
+import type { Inject } from "@fnioc/transformer";
+
+class Handler {
+  constructor(
+    cache: Inject<ICache, "pkg:redis-cache">,  // pinned token
+    log: ILogger,                               // derived normally
+  ) {}
+}
+```
+
+Works in any type position the transformer reads: class ctor params, inline factory params, return types. The value type stays `T` — a plain `ICache` is assignable; the brand property is optional.
+
+`Inject` is the escape hatch when the transformer cannot derive a token for an arg (anonymous type, bare generic, symbol-less primitive object): brand it rather than leaving the transformer to error.
+
 ### `nameof<T>()`
 
 The transformer provides a compile-time token helper. Each `nameof<IFoo>()` call in source is rewritten to the derived string token at build time — callers never ship the generation logic at runtime.
 
-```typescript
+```ts
 import { nameof } from "@fnioc/transformer";
 
 const token = nameof<IUserRepo>();
@@ -101,19 +120,20 @@ For each `services.add<IFoo>(Foo).as<"scope">()` call the transformer finds, it:
 2. Derives a slot per parameter:
    - Interfaces and class types → string token per the derivation rule above.
    - `Promise<X>` → token for `X` (not a `Promise<X>` token — see below).
-   - Primitives (`string`, `number`, `boolean`, `symbol`, `bigint`), `unknown`, `any`, `void` → `null` (a hole sentinel; these cannot be interface tokens).
-   - **Inline function types** (`() => IFoo`, `(a: B) => IFoo`) → `{ factory: "pkg:IFoo" }` (a `FactoryRef` — see factory detection below).
+   - **Inline function types** (`() => IFoo`, `(a: B) => IFoo`) → `{ type: "pkg:IFoo" }` (a `FactoryRef` — see factory detection below).
+   - **Inline union types** (`A | B` written directly at the annotation site) → `{ union: ["pkg:A", "pkg:B"] }` (a `Union` slot — see named vs inline unions below).
+   - Types the transformer cannot tokenize (anonymous types, bare generics, symbol-less primitive objects) → **hard compile error**: "name this type or brand it with `Inject<T, 'token'>`."
 3. Emits `defineDeps(Foo, [[...slots]])` immediately before the registration call.
 4. Rewrites the call from the type-driven form to the plain-data form.
 
-```typescript
+```ts
 // Author code
 services.add<IUserRepo>(SqlUserRepo).as<"request">();
 // SqlUserRepo constructor: (log: ILogger, db: IDbConnection, table: string)
+// 'table' is a string primitive — brand it or supply a registration override
 
-// Lowered output
-defineDeps(SqlUserRepo, [["pkg:ILogger", "pkg:IDbConnection", null]]);
-// null = hole for 'table' (string primitive)
+// Lowered output (with table branded as Inject<string, "app:tableName">)
+defineDeps(SqlUserRepo, [["pkg:ILogger", "pkg:IDbConnection", "app:tableName"]]);
 services.add("pkg:IUserRepo", SqlUserRepo).as("request");
 ```
 
@@ -127,9 +147,9 @@ A constructor parameter typed `Promise<IDb>` maps to the same token as `IDb`: `"
 
 ## Factory detection
 
-A constructor parameter whose type annotation is an **inline function-type literal** (`ts.FunctionTypeNode`) is detected as a factory and emitted as `{ factory: "<token>" }` in the `defineDeps` signature. The token is derived from the return type after unwrapping any `Promise<X>`.
+A constructor parameter whose type annotation is an **inline function-type literal** (`ts.FunctionTypeNode`) is detected as a factory and emitted as `{ type: "<token>" }` in the `defineDeps` signature. The token is derived from the return type after unwrapping any `Promise<X>`. An optional `params` field lists the inline factory's caller-supplied parameter tokens in authored order.
 
-```typescript
+```ts
 // Inline function-type annotation → factory ref keyed on "pkg:IDb"
 constructor(makeDb: () => IDb) { ... }
 constructor(makeDb: (id: string) => Promise<IDb>) { ... }
@@ -143,18 +163,61 @@ Detection is **purely syntactic** — it reads the annotation node kind, not the
 
 ### Emitted form
 
-```typescript
+```ts
 // Author code
 class RequestHandler {
   constructor(
     private log: ILogger,        // resolved dep
-    private makeDb: () => IDb,   // factory-injected
+    private makeDb: () => IDb,   // factory-injected, zero caller args
   ) {}
 }
 
 // Lowered output
-defineDeps(RequestHandler, [["pkg:ILogger", { factory: "pkg:IDb" }]]);
+defineDeps(RequestHandler, [["pkg:ILogger", { type: "pkg:IDb" }]]);
 ```
+
+With caller-supplied params:
+
+```ts
+// Author code
+class RequestHandler {
+  constructor(
+    private log: ILogger,
+    private makeRepo: (tableName: string) => IUserRepo,
+  ) {}
+}
+
+// Lowered output — params lists the caller-supplied token(s)
+defineDeps(RequestHandler, [["pkg:ILogger", { type: "pkg:IUserRepo", params: ["app:tableName"] }]]);
+```
+
+---
+
+## Named vs inline unions
+
+Detection is **purely syntactic** — the shape of the annotation node, not the resolved type.
+
+| Annotation form | Lowered slot | What to register |
+|---|---|---|
+| `constructor(x: A \| B)` — inline | `Union` — alternatives | any or all of A, B (first registered wins) |
+| `type AB = A \| B; constructor(x: AB)` — named alias | single token for `AB` | `AB` itself |
+
+```ts
+// Inline union → Union slot, try IRedis first then IMemoryCache
+class Handler {
+  constructor(cache: IRedis | IMemoryCache, log: ILogger) {}
+}
+// Lowered: { union: ["pkg:IRedis", "pkg:IMemoryCache"] }
+
+// Named alias → single "pkg:CacheProvider" token
+type CacheProvider = IRedis | IMemoryCache;
+class Handler {
+  constructor(cache: CacheProvider, log: ILogger) {}
+}
+// Lowered: "pkg:CacheProvider"
+```
+
+Registering `IRedis` or `IMemoryCache` separately does nothing for a `CacheProvider`-typed parameter — you must register `CacheProvider`. See the wiki for the full named-vs-inline treatment.
 
 ---
 
@@ -189,15 +252,15 @@ The transformer emits warnings during `tsc`/`tspc` for three classes of statical
 
 ### Factory-signature mismatch (code 990003)
 
-When the transformer can see the concrete class behind a factory-typed parameter, it compares the factory's declared call signature against the target constructor's unregistered parameters in order. If the counts don't match, it warns:
+When the transformer can see the concrete class behind a factory-typed parameter, it compares the factory's declared call signature against the target constructor's caller-supplied parameters in order. If the counts don't match, it warns:
 
 ```
 Factory parameter "makeRepo" takes 2 argument(s), but the factory caller
-must supply 1 — the unregistered parameter(s) of the produced type's
+must supply 1 — the caller-supplied parameter(s) of the produced type's
 constructor. List exactly those, in order.
 ```
 
-This is the primary value-add of running the transformer: compile-time feedback when a factory's declared arity doesn't match what the container will actually expose at runtime. The check runs only when the produced type resolves to a concrete class the transformer can read.
+This is the primary value-add of running the transformer: compile-time feedback when a factory's declared arity doesn't match what the container will actually expose at runtime.
 
 ### Async mismatch (code 990004)
 
