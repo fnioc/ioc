@@ -3,20 +3,21 @@ import type {
   DepRecord,
   DepTarget,
   FactoryRef,
+  Union,
 } from "./types.js";
 import { store } from "./store.js";
 
-/** True when `slot` is a `FactoryRef` (carries a `.factory` token). */
-function isFactoryRef(slot: DepSlot): slot is FactoryRef {
+/** True when `slot` is a `FactoryRef` (carries a `.type` token). */
+export function isFactoryRef(slot: DepSlot): slot is FactoryRef {
   return (
     typeof slot === "object" &&
     slot !== null &&
-    typeof (slot as { factory?: unknown }).factory === "string"
+    typeof (slot as { type?: unknown }).type === "string"
   );
 }
 
 /** True when `slot` is a `ScopeRef` (the live-scope marker `{ scope: true }`). */
-function isScopeRef(slot: DepSlot): boolean {
+export function isScopeRef(slot: DepSlot): boolean {
   return (
     typeof slot === "object" &&
     slot !== null &&
@@ -24,23 +25,53 @@ function isScopeRef(slot: DepSlot): boolean {
   );
 }
 
+/** True when `slot` is a `Union` (carries a `.union` array of member slots). */
+export function isUnionSlot(slot: DepSlot): slot is Union {
+  return (
+    typeof slot === "object" &&
+    slot !== null &&
+    Array.isArray((slot as { union?: unknown }).union)
+  );
+}
+
 /**
  * Structural equality of two signature slots:
- *   - two `FactoryRef`s are equal iff their `.factory` tokens match,
+ *   - two `FactoryRef`s are equal iff their `.type` tokens match and their
+ *     `.params` arrays are element-wise identical (or both absent),
  *   - two `ScopeRef`s are always equal,
- *   - strings compare by value, the `hole` sentinel by identity,
+ *   - two `Union`s are equal iff their `union` arrays are element-wise equal
+ *     under recursive `slotsEqual`,
+ *   - strings compare by value,
  *   - slots of different kinds are never equal.
  */
 function slotsEqual(a: DepSlot, b: DepSlot): boolean {
   const aIsRef = isFactoryRef(a);
   const bIsRef = isFactoryRef(b);
   if (aIsRef || bIsRef) {
-    return aIsRef && bIsRef && a.factory === b.factory;
+    if (!aIsRef || !bIsRef) return false;
+    if (a.type !== b.type) return false;
+    const aParams = a.params ?? [];
+    const bParams = b.params ?? [];
+    if (aParams.length !== bParams.length) return false;
+    for (let i = 0; i < aParams.length; i++) {
+      if (aParams[i] !== bParams[i]) return false;
+    }
+    return true;
   }
   const aIsScope = isScopeRef(a);
   const bIsScope = isScopeRef(b);
   if (aIsScope || bIsScope) {
     return aIsScope && bIsScope;
+  }
+  const aIsUnion = isUnionSlot(a);
+  const bIsUnion = isUnionSlot(b);
+  if (aIsUnion || bIsUnion) {
+    if (!aIsUnion || !bIsUnion) return false;
+    if (a.union.length !== b.union.length) return false;
+    for (let i = 0; i < a.union.length; i++) {
+      if (!slotsEqual(a.union[i] as DepSlot, b.union[i] as DepSlot)) return false;
+    }
+    return true;
   }
   return a === b;
 }
@@ -68,7 +99,7 @@ function signaturesEqual(a: readonly DepSlot[], b: readonly DepSlot[]): boolean 
  *                   prototype-chain walk — subclasses do NOT inherit the
  *                   parent's record).
  * @param signatures An array of signatures; each signature is a positional array
- *                   of DepSlot (Token | hole | FactoryRef | ScopeRef) parallel to
+ *                   of DepSlot (Token | FactoryRef | ScopeRef | Union) parallel to
  *                   the target's parameter list.
  */
 export function defineDeps(

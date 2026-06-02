@@ -1,7 +1,5 @@
 import type { Ctor, Func } from "@rhombus-toolkit/func";
 
-import type { hole } from "./store.js";
-
 /**
  * Anything dependency metadata can be attached to: a class constructor (its
  * deps are the ctor parameters) or a factory function (its deps are the call
@@ -21,12 +19,16 @@ export type Token = string;
 
 /**
  * Marks a constructor parameter to be injected as a *factory* producing the
- * registered token `factory`, rather than a resolved instance. The factory's
- * own call signature is the target ctor's unregistered params, partitioned at
- * resolve time.
+ * registered type token, rather than a resolved instance. The factory's own
+ * call signature is determined by the caller-supplied `params` list.
+ *
+ * `type` is the token of the produced type T (replaces the former `.factory` field).
+ * `params` is the complete, authored-order list of caller-supplied parameter tokens;
+ * when present it pins the factory shape so it no longer drifts with registration state.
  */
 export interface FactoryRef {
-  readonly factory: Token;
+  readonly type: Token;
+  readonly params?: readonly Token[];
 }
 
 /**
@@ -42,22 +44,53 @@ export interface ScopeRef {
 }
 
 /**
+ * A set of alternative dependency slots tried in declaration order (first
+ * resolvable member wins). If no member is resolvable, resolution throws.
+ * Each member is itself a `DepSlot` — nesting is allowed.
+ */
+export interface Union {
+  readonly union: readonly DepSlot[];
+}
+
+/**
  * One positional slot in a constructor / factory signature:
  *   - a `Token` string  — a container-resolved dependency,
- *   - the `hole` sentinel — a caller-supplied parameter,
- *   - a `FactoryRef` — a factory-injected parameter (see `FactoryRef`), or
- *   - a `ScopeRef` — the live resolution scope (see `ScopeRef`).
+ *   - a `FactoryRef`    — a factory-injected parameter (see `FactoryRef`),
+ *   - a `ScopeRef`      — the live resolution scope (see `ScopeRef`), or
+ *   - a `Union`         — member-level alternatives tried in order.
  */
-export type DepSlot = Token | typeof hole | FactoryRef | ScopeRef;
+export type DepSlot = Token | FactoryRef | ScopeRef | Union;
 
 /**
  * Per-constructor dependency metadata stored in the global WeakMap.
  *
  * `signatures` is an array of arrays: each element is one constructor signature
- * (for overload support). `signatures[i][j]` is the `DepSlot` — a token, the
- * `hole` sentinel, or a `FactoryRef` — for constructor parameter `j` of
+ * (for overload support). `signatures[i][j]` is the `DepSlot` — a token, a
+ * `FactoryRef`, a `ScopeRef`, or a `Union` — for constructor parameter `j` of
  * overload `i`.
  */
 export interface DepRecord {
   readonly signatures: readonly (readonly DepSlot[])[];
 }
+
+// ── Inject brand ──────────────────────────────────────────────────────────────
+
+/**
+ * Compile-time phantom brand that pins a specific token for one constructor or
+ * factory parameter, overriding the token the transformer would normally derive.
+ *
+ * The value type stays `T` — a plain `T` is assignable because the brand
+ * property is optional. Zero runtime footprint.
+ *
+ * @example
+ * ```ts
+ * class Handler {
+ *   constructor(
+ *     cache: Inject<ICache, "pkg:redis-cache">,  // pinned token
+ *     log: ILogger,                              // derived normally
+ *   ) {}
+ * }
+ * ```
+ */
+declare const TOK: unique symbol;
+export type Inject<T, K extends Token> = T & { readonly [TOK]?: K };

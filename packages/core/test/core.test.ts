@@ -1,24 +1,15 @@
 import { test, expect, describe } from "bun:test";
-import { hole, defineDeps, getDeps, signature, forCtor } from "@fnioc/core";
-import type { FactoryRef, DepSlot } from "@fnioc/core";
-
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-describe("hole", () => {
-  test("is the null sentinel at runtime", () => {
-    expect(hole).toBeNull();
-  });
-
-  test("is accepted where a DepSlot is expected", () => {
-    // Type-level: if this compiles, the type is correct.
-    // (This test file would fail to compile if `hole` weren't a valid DepSlot.)
-    defineDeps(class HoleTypeCheck {}, [[hole]]);
-    const rec = getDeps(class HoleTypeCheck {});
-    // We're not asserting about this class; the meaningful assertion is that
-    // the defineDeps call above compiles without a type error.
-    expect(rec).toBeUndefined(); // different anonymous class; just verifying we get here
-  });
-});
+import {
+  defineDeps,
+  getDeps,
+  signature,
+  forCtor,
+  union,
+  isFactoryRef,
+  isScopeRef,
+  isUnionSlot,
+} from "@fnioc/core";
+import type { FactoryRef, DepSlot, Union, Inject, Token } from "@fnioc/core";
 
 // ── Global anchor ─────────────────────────────────────────────────────────────
 
@@ -131,13 +122,14 @@ describe("defineDeps", () => {
     expect(rec!.signatures[0]).toEqual(["token:IX"]);
   });
 
-  test("preserves a hole sentinel inside a stored signature", () => {
-    class HoleCtor {}
+  test("an unregistered token is accepted where a DepSlot is expected", () => {
+    class UnregCtor {}
 
-    defineDeps(HoleCtor, [["token:ILogger", hole, "token:IDb"]]);
+    // An unregistered token is just a plain string — caller-supplied at resolve time.
+    defineDeps(UnregCtor, [["token:ILogger", "caller:supplied", "token:IDb"]]);
 
-    const rec = getDeps(HoleCtor);
-    expect(rec!.signatures[0]).toEqual(["token:ILogger", hole, "token:IDb"]);
+    const rec = getDeps(UnregCtor);
+    expect(rec!.signatures[0]).toEqual(["token:ILogger", "caller:supplied", "token:IDb"]);
   });
 
   test("keys by exact constructor — subclass does NOT inherit parent's record", () => {
@@ -210,14 +202,6 @@ describe("signature decorator", () => {
     expect(sigs).toContainEqual(["dec:ILogger", "dec:IDb"]);
   });
 
-  test("hole is accepted in a decorator signature", () => {
-    @signature("dec:ILogger", hole, "dec:IDb")
-    class DecoratedWithHole {}
-
-    const rec = getDeps(DecoratedWithHole);
-    expect(rec!.signatures[0]).toEqual(["dec:ILogger", hole, "dec:IDb"]);
-  });
-
   test("decorator does not replace the class (returns void)", () => {
     @signature("dec:IFoo")
     class NotReplaced {
@@ -260,15 +244,6 @@ describe("forCtor", () => {
     expect(sigs).toContainEqual(["fc:ILogger", "fc:IDb"]);
   });
 
-  test("hole is accepted in a forCtor signature", () => {
-    class ForCtorWithHole {}
-
-    forCtor(ForCtorWithHole).signature("fc:ILogger", hole, "fc:IDb");
-
-    const rec = getDeps(ForCtorWithHole);
-    expect(rec!.signatures[0]).toEqual(["fc:ILogger", hole, "fc:IDb"]);
-  });
-
   test("builder is the same object (for chaining identity)", () => {
     class ForCtorChainId {}
 
@@ -284,43 +259,69 @@ describe("FactoryRef dep slot", () => {
   test("FactoryRef and DepSlot are exported (type-level)", () => {
     // If these annotations compile, the types are exported. The runtime values
     // are only here so the references aren't elided.
-    const ref: FactoryRef = { factory: "exp:IFoo" };
-    const slots: readonly DepSlot[] = ["exp:IBar", hole, ref];
-    expect(ref.factory).toBe("exp:IFoo");
-    expect(slots).toHaveLength(3);
+    const ref: FactoryRef = { type: "exp:IFoo" };
+    const slots: readonly DepSlot[] = ["exp:IBar", ref];
+    expect(ref.type).toBe("exp:IFoo");
+    expect(slots).toHaveLength(2);
+  });
+
+  test("FactoryRef with params field", () => {
+    const ref: FactoryRef = { type: "exp:IFoo", params: ["exp:ParamA", "exp:ParamB"] };
+    expect(ref.type).toBe("exp:IFoo");
+    expect(ref.params).toEqual(["exp:ParamA", "exp:ParamB"]);
   });
 
   test("a FactoryRef slot is stored verbatim in the DepRecord", () => {
     class FactorySlotCtor {}
 
-    defineDeps(FactorySlotCtor, [["slot:ILogger", { factory: "slot:IFoo" }]]);
+    defineDeps(FactorySlotCtor, [["slot:ILogger", { type: "slot:IFoo" }]]);
 
     const rec = getDeps(FactorySlotCtor);
     expect(rec!.signatures[0]).toEqual([
       "slot:ILogger",
-      { factory: "slot:IFoo" },
+      { type: "slot:IFoo" },
     ]);
   });
 
   describe("structural dedup", () => {
-    test("two identical { factory } slots dedup to one signature", () => {
+    test("two identical { type } slots dedup to one signature", () => {
       class FactoryDedupSame {}
 
-      defineDeps(FactoryDedupSame, [["dedup:IA", { factory: "dedup:IX" }]]);
-      defineDeps(FactoryDedupSame, [["dedup:IA", { factory: "dedup:IX" }]]);
+      defineDeps(FactoryDedupSame, [["dedup:IA", { type: "dedup:IX" }]]);
+      defineDeps(FactoryDedupSame, [["dedup:IA", { type: "dedup:IX" }]]);
 
       const rec = getDeps(FactoryDedupSame);
       expect(rec!.signatures).toHaveLength(1);
     });
 
-    test("{factory:'x'} vs {factory:'y'} stay distinct signatures", () => {
+    test("{type:'x'} vs {type:'y'} stay distinct signatures", () => {
       class FactoryDedupDiff {}
 
-      defineDeps(FactoryDedupDiff, [["dedup:IA", { factory: "dedup:IX" }]]);
-      defineDeps(FactoryDedupDiff, [["dedup:IA", { factory: "dedup:IY" }]]);
+      defineDeps(FactoryDedupDiff, [["dedup:IA", { type: "dedup:IX" }]]);
+      defineDeps(FactoryDedupDiff, [["dedup:IA", { type: "dedup:IY" }]]);
 
       const rec = getDeps(FactoryDedupDiff);
       expect(rec!.signatures).toHaveLength(2);
+    });
+
+    test("two FactoryRefs with same type but different params are distinct", () => {
+      class FactoryParamsDiff {}
+
+      defineDeps(FactoryParamsDiff, [["dedup:IA", { type: "dedup:IX", params: ["a"] }]]);
+      defineDeps(FactoryParamsDiff, [["dedup:IA", { type: "dedup:IX", params: ["b"] }]]);
+
+      const rec = getDeps(FactoryParamsDiff);
+      expect(rec!.signatures).toHaveLength(2);
+    });
+
+    test("two FactoryRefs with same type and same params dedup", () => {
+      class FactoryParamsSame {}
+
+      defineDeps(FactoryParamsSame, [["dedup:IA", { type: "dedup:IX", params: ["a", "b"] }]]);
+      defineDeps(FactoryParamsSame, [["dedup:IA", { type: "dedup:IX", params: ["a", "b"] }]]);
+
+      const rec = getDeps(FactoryParamsSame);
+      expect(rec!.signatures).toHaveLength(1);
     });
 
     test("a string slot and a FactoryRef slot stay distinct", () => {
@@ -329,7 +330,7 @@ describe("FactoryRef dep slot", () => {
       // Same arity, same first slot; differ only in the second slot's KIND
       // (string token vs FactoryRef). Must NOT dedup.
       defineDeps(FactoryVsStringCtor, [["kind:IA", "kind:IFoo"]]);
-      defineDeps(FactoryVsStringCtor, [["kind:IA", { factory: "kind:IFoo" }]]);
+      defineDeps(FactoryVsStringCtor, [["kind:IA", { type: "kind:IFoo" }]]);
 
       const rec = getDeps(FactoryVsStringCtor);
       expect(rec!.signatures).toHaveLength(2);
@@ -337,24 +338,186 @@ describe("FactoryRef dep slot", () => {
   });
 
   test("authoring a factory slot via @signature writes the expected record", () => {
-    @signature("dec:ILogger", { factory: "dec:IFoo" })
+    @signature("dec:ILogger", { type: "dec:IFoo" })
     class DecoratedFactory {}
 
     const rec = getDeps(DecoratedFactory);
     expect(rec!.signatures).toHaveLength(1);
     expect(rec!.signatures[0]).toEqual([
       "dec:ILogger",
-      { factory: "dec:IFoo" },
+      { type: "dec:IFoo" },
     ]);
   });
 
   test("authoring a factory slot via forCtor writes the expected record", () => {
     class ForCtorFactory {}
 
-    forCtor(ForCtorFactory).signature("fc:ILogger", { factory: "fc:IFoo" });
+    forCtor(ForCtorFactory).signature("fc:ILogger", { type: "fc:IFoo" });
 
     const rec = getDeps(ForCtorFactory);
     expect(rec!.signatures).toHaveLength(1);
-    expect(rec!.signatures[0]).toEqual(["fc:ILogger", { factory: "fc:IFoo" }]);
+    expect(rec!.signatures[0]).toEqual(["fc:ILogger", { type: "fc:IFoo" }]);
+  });
+});
+
+// ── isFactoryRef / isScopeRef / isUnionSlot guards ───────────────────────────
+
+describe("type guards", () => {
+  test("isFactoryRef: true for { type: string }", () => {
+    const slot: DepSlot = { type: "tok:IFoo" };
+    expect(isFactoryRef(slot)).toBe(true);
+  });
+
+  test("isFactoryRef: false for a string token", () => {
+    expect(isFactoryRef("tok:IFoo")).toBe(false);
+  });
+
+  test("isFactoryRef: false for { scope: true }", () => {
+    const slot: DepSlot = { scope: true };
+    expect(isFactoryRef(slot)).toBe(false);
+  });
+
+  test("isFactoryRef: false for a Union slot", () => {
+    const slot: DepSlot = { union: ["tok:A"] };
+    expect(isFactoryRef(slot)).toBe(false);
+  });
+
+  test("isScopeRef: true for { scope: true }", () => {
+    const slot: DepSlot = { scope: true };
+    expect(isScopeRef(slot)).toBe(true);
+  });
+
+  test("isScopeRef: false for a string token", () => {
+    expect(isScopeRef("tok:IFoo")).toBe(false);
+  });
+
+  test("isUnionSlot: true for { union: [...] }", () => {
+    const slot: DepSlot = { union: ["tok:A", "tok:B"] };
+    expect(isUnionSlot(slot)).toBe(true);
+  });
+
+  test("isUnionSlot: false for a string token", () => {
+    expect(isUnionSlot("tok:A")).toBe(false);
+  });
+
+  test("isUnionSlot: false for a FactoryRef", () => {
+    const slot: DepSlot = { type: "tok:IFoo" };
+    expect(isUnionSlot(slot)).toBe(false);
+  });
+});
+
+// ── Union slot and union() helper ─────────────────────────────────────────────
+
+describe("Union slot", () => {
+  test("union() smoke: union('a','b') → { union: ['a','b'] }", () => {
+    const u = union("a", "b");
+    expect(u).toEqual({ union: ["a", "b"] });
+  });
+
+  test("union() with no args produces an empty union", () => {
+    const u = union();
+    expect(u).toEqual({ union: [] });
+  });
+
+  test("union() accepts FactoryRef members", () => {
+    const ref: FactoryRef = { type: "tok:IFoo" };
+    const u = union("tok:A", ref);
+    expect(u).toEqual({ union: ["tok:A", { type: "tok:IFoo" }] });
+  });
+
+  test("union() accepts nested unions", () => {
+    const inner = union("tok:A", "tok:B");
+    const outer = union(inner, "tok:C");
+    expect(outer).toEqual({ union: [{ union: ["tok:A", "tok:B"] }, "tok:C"] });
+  });
+
+  test("a Union slot is stored verbatim in the DepRecord", () => {
+    class UnionSlotCtor {}
+
+    defineDeps(UnionSlotCtor, [["tok:ILogger", union("tok:IRedis", "tok:IMemory")]]);
+
+    const rec = getDeps(UnionSlotCtor);
+    expect(rec!.signatures[0]).toEqual([
+      "tok:ILogger",
+      { union: ["tok:IRedis", "tok:IMemory"] },
+    ]);
+  });
+
+  describe("Union structural dedup in slotsEqual", () => {
+    test("two identical Union slots dedup to one signature", () => {
+      class UnionDedupSame {}
+
+      defineDeps(UnionDedupSame, [["tok:IA", union("tok:IX", "tok:IY")]]);
+      defineDeps(UnionDedupSame, [["tok:IA", union("tok:IX", "tok:IY")]]);
+
+      const rec = getDeps(UnionDedupSame);
+      expect(rec!.signatures).toHaveLength(1);
+    });
+
+    test("unions with different members stay distinct", () => {
+      class UnionDedupDiff {}
+
+      defineDeps(UnionDedupDiff, [["tok:IA", union("tok:IX", "tok:IY")]]);
+      defineDeps(UnionDedupDiff, [["tok:IA", union("tok:IX", "tok:IZ")]]);
+
+      const rec = getDeps(UnionDedupDiff);
+      expect(rec!.signatures).toHaveLength(2);
+    });
+
+    test("unions with different lengths stay distinct", () => {
+      class UnionLenDiff {}
+
+      defineDeps(UnionLenDiff, [["tok:IA", union("tok:IX")]]);
+      defineDeps(UnionLenDiff, [["tok:IA", union("tok:IX", "tok:IY")]]);
+
+      const rec = getDeps(UnionLenDiff);
+      expect(rec!.signatures).toHaveLength(2);
+    });
+
+    test("a Union slot and a string slot with the same token stay distinct", () => {
+      class UnionVsString {}
+
+      defineDeps(UnionVsString, [["tok:IA", "tok:IX"]]);
+      defineDeps(UnionVsString, [["tok:IA", union("tok:IX")]]);
+
+      const rec = getDeps(UnionVsString);
+      expect(rec!.signatures).toHaveLength(2);
+    });
+
+    test("nested unions are compared recursively", () => {
+      class NestedUnionDedup {}
+
+      const sig1: DepSlot = union(union("tok:A", "tok:B"), "tok:C");
+      const sig2: DepSlot = union(union("tok:A", "tok:B"), "tok:C");
+      const sig3: DepSlot = union(union("tok:A", "tok:X"), "tok:C");
+
+      defineDeps(NestedUnionDedup, [["tok:X", sig1]]);
+      defineDeps(NestedUnionDedup, [["tok:X", sig2]]); // should dedup
+      defineDeps(NestedUnionDedup, [["tok:X", sig3]]); // distinct
+
+      const rec = getDeps(NestedUnionDedup);
+      expect(rec!.signatures).toHaveLength(2);
+    });
+  });
+});
+
+// ── Inject brand (type-level) ─────────────────────────────────────────────────
+
+describe("Inject brand", () => {
+  test("Inject<T, K> is assignable from plain T (optional brand property)", () => {
+    // A plain string is assignable to Inject<string, "my:tok"> because [TOK]? is optional.
+    // This is a compile-time test — if these type annotations compile, the brand is correct.
+    const plain: string = "hello";
+    const branded: Inject<string, "my:tok"> = plain;
+    expect(branded).toBe("hello");
+  });
+
+  test("Inject type is exported and usable in a DepSlot context indirectly", () => {
+    // Inject<T, K> widens to T, so it cannot appear directly as a DepSlot.
+    // This test verifies the type is exported and the pattern compiles.
+    // The transformer reads the brand from the type system, not at runtime.
+    type _Check = Inject<{ id: number }, "pkg:MyService">;
+    const val: Inject<{ id: number }, "pkg:MyService"> = { id: 1 };
+    expect(val.id).toBe(1);
   });
 });
