@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { DiBuilder, hole, defineDeps } from "@fnioc/di";
+import { DiBuilder, defineDeps, union } from "@fnioc/di";
 
 // Smoke test: @fnioc/di is importable, the engine surface is present, and the
 // @fnioc/core re-export resolves across the workspace boundary. Exhaustive
@@ -7,7 +7,7 @@ import { DiBuilder, hole, defineDeps } from "@fnioc/di";
 test("@fnioc/di exports the engine and re-exports the core substrate", () => {
   expect(typeof DiBuilder).toBe("function");
   expect(typeof defineDeps).toBe("function");
-  expect(hole).toBe(hole); // sentinel — identity, not a literal value
+  expect(typeof union).toBe("function"); // union helper re-exported from core
 
   const services = new DiBuilder<"singleton">();
   class Probe {

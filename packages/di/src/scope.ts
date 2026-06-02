@@ -18,8 +18,8 @@
 // resolve. That is what makes a long-lived service depending on a shorter-lived
 // one fail loudly instead of silently capturing it.
 
-import { getDeps } from "@fnioc/core";
-import type { DepSlot, FactoryRef, ScopeRef, Token } from "@fnioc/core";
+import { getDeps, isFactoryRef as coreIsFactoryRef, isScopeRef as coreIsScopeRef, isUnionSlot } from "@fnioc/core";
+import type { DepSlot, FactoryRef, ScopeRef, Token, Union } from "@fnioc/core";
 import type { Func } from "@rhombus-toolkit/func";
 
 import {
@@ -29,6 +29,7 @@ import {
   MissingMetadataError,
   MissingScopeError,
   NoSatisfiableSignatureError,
+  NoSatisfiableUnionError,
   UnregisteredTokenError,
 } from "./errors.js";
 import type {
@@ -72,31 +73,23 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
 }
 
 /**
- * True when a `DepSlot` is a `FactoryRef` — a factory-injected parameter. A
- * slot is a string token, the `hole` sentinel, or this object form. The
- * non-null-object check naturally excludes the hole sentinel whatever its
- * underlying value (a symbol or `null`), so this stays robust to that changing.
+ * True when a `DepSlot` is a `FactoryRef` — a factory-injected parameter.
+ * Delegates to the core guard which checks the `.type` field (T0 rename).
  */
-function isFactoryRef(slot: DepSlot): slot is FactoryRef {
-  return (
-    slot !== null &&
-    typeof slot === "object" &&
-    typeof (slot as { factory?: unknown }).factory === "string"
-  );
-}
+const isFactoryRef: (slot: DepSlot) => slot is FactoryRef = coreIsFactoryRef;
 
 /**
  * True when a `DepSlot` is a `ScopeRef` — a parameter to be filled with the
  * live resolution provider itself (emitted for a factory/ctor param typed
  * `Resolver`, `ScopeFactory`, or the legacy `ResolveScope`).
  */
-function isScopeRef(slot: DepSlot): slot is ScopeRef {
-  return (
-    slot !== null &&
-    typeof slot === "object" &&
-    (slot as { scope?: unknown }).scope === true
-  );
-}
+const isScopeRef: (slot: DepSlot) => slot is ScopeRef = coreIsScopeRef as (slot: DepSlot) => slot is ScopeRef;
+
+/**
+ * True when a `DepSlot` is a `Union` — a set of alternative slots tried in
+ * declaration order.
+ */
+const isUnion: (slot: DepSlot) => slot is Union = isUnionSlot;
 
 /**
  * A scope frame — a node in the parent-linked chain. Holds this scope's name,
@@ -204,15 +197,15 @@ export class ServiceProvider<S extends string = string>
   }
 
   /**
-   * Returns a FACTORY for `token` rather than an instance — the resolve-site
-   * mirror of a `FactoryRef` ctor param. The authored `resolve<(a: A) => T>()`
-   * lowers here. The returned callable exposes the target's UNREGISTERED /
-   * caller-supplied parameters in order (PRD §7 "Partial / positional
-   * factories"); a fully-resolvable target yields a zero-arg lazy factory that
-   * respects the target's registered lifetime.
+   * Returns a FACTORY for `type` rather than an instance. When `params` is
+   * absent or empty, returns a strict zero-arg `() => T` — every ctor slot must
+   * resolve from the container (an unresolvable slot throws). When `params` is
+   * present, it is the complete authored-order list of caller-supplied parameter
+   * tokens; the returned factory has shape `(...params) => T`. The authored
+   * `resolve<(a: A) => T>()` lowers to `resolveFactory("pkg:T", ["pkg:A"])`.
    */
-  public resolveFactory(token: Token): unknown {
-    return this.makeFactory({ factory: token }, this.frame);
+  public resolveFactory(type: Token, params?: readonly Token[]): unknown {
+    return this.makeFactory({ type, params }, this.frame);
   }
 
   // ── Registration lookup ─────────────────────────────────────────────────────
@@ -353,8 +346,8 @@ export class ServiceProvider<S extends string = string>
         }
         return sp.resolveWith<U>(depToken, owningFrame, stack);
       },
-      resolveFactory: (depToken: Token): unknown =>
-        sp.makeFactory({ factory: depToken }, owningFrame),
+      resolveFactory: (depToken: Token, depParams?: readonly Token[]): unknown =>
+        sp.makeFactory({ type: depToken, params: depParams }, owningFrame),
       createScope: (...args: ["scoped"?] | [S]): ServiceProvider<S> => {
         const name = (args[0] ?? "scoped") as string;
         const childFrame = new Scope(name, owningFrame);
@@ -393,8 +386,8 @@ export class ServiceProvider<S extends string = string>
     const args = signature.map((slot) => {
       if (isScopeRef(slot)) return providerView;
       if (isFactoryRef(slot)) return this.makeFactory(slot, owningFrame);
-      // Selection guarantees every remaining slot is a resolvable token (a hole
-      // would have made this signature unsatisfiable).
+      if (isUnion(slot)) return this.resolveUnion(slot, owningFrame, stack);
+      // Selection guarantees every remaining slot is a resolvable string token.
       return this.resolveWith<unknown>(slot as Token, owningFrame, stack);
     });
     return factory(...args) as T;
@@ -437,14 +430,17 @@ export class ServiceProvider<S extends string = string>
         return providerView;
       }
       if (isFactoryRef(slot)) {
-        // A factory-injected parameter: a callable that builds `slot.factory`'s
-        // target on demand, resolving the target's own deps relative to the
-        // owning frame so §5.4 still holds at call time.
+        // A factory-injected parameter: a callable that builds the target on demand,
+        // resolving the target's own deps relative to the owning frame so §5.4
+        // still holds at call time.
         return this.makeFactory(slot, owningFrame);
       }
-      // A string token — resolve it through the owning frame's chain. (Selection
-      // guarantees no hole reaches here: a hole is unresolvable, so a signature
-      // containing one is never chosen for a direct resolve.)
+      if (isUnion(slot)) {
+        // A union slot: try members in declaration order, return first resolvable.
+        return this.resolveUnion(slot, owningFrame, stack);
+      }
+      // A string token — resolve it through the owning frame's chain. Selection
+      // guarantees every string-token slot here is resolvable.
       return this.resolveWith<unknown>(slot as Token, owningFrame, stack);
     });
 
@@ -454,18 +450,24 @@ export class ServiceProvider<S extends string = string>
   /**
    * Builds the callable injected for a `FactoryRef` parameter.
    *
-   * The target ctor's signature is partitioned at CALL time against the live
-   * registration map: each slot that is a registered token is resolved; each
-   * slot that is an unregistered token or a `hole` takes the next
-   * caller-supplied argument, positionally. The injected callable therefore
-   * exposes only the target's unregistered parameters, in their relative order.
+   * When `ref.params` is absent or empty, the factory is STRICT: every ctor slot
+   * of the target must resolve from the container. An unresolvable slot throws at
+   * build time (via `selectSignature`). The result is a zero-arg `() => T` that
+   * respects the target's registered lifetime.
+   *
+   * When `ref.params` is present, it is the COMPLETE authored-order list of
+   * caller-supplied parameter tokens. The caller-supplied set is pinned to those
+   * tokens (by first-occurrence left-to-right matching against ctor slots). A
+   * slot token that appears in `params` is caller-supplied even if it is also
+   * registered (caller wins). A slot that is neither claimed by `params` nor
+   * resolvable from the container → error. The factory shape is exactly
+   * `(...params) => T`; a fresh instance is built on every call (bypassing the
+   * instance cache — caller args differ per call so caching would be wrong).
    *
    * Lifetime semantics:
-   *   - A ZERO-ARG factory routes through the normal `resolve` path, so it
-   *     RESPECTS the target's registered lifetime.
-   *   - A PARAMETERIZED factory constructs a FRESH instance on every call and
-   *     BYPASSES the instance cache. Caller args differ per call, so caching
-   *     would be wrong.
+   *   - A ZERO-ARG (no-params) factory routes through the normal `resolve` path
+   *     and RESPECTS the target's registered lifetime.
+   *   - A PARAMETERIZED factory constructs a FRESH instance every call.
    *
    * The closure captures `owningFrame`. §5.4 holds at call time: the target's
    * deps resolve relative to the scope that owns the factory-holding instance.
@@ -475,20 +477,31 @@ export class ServiceProvider<S extends string = string>
     owningFrame: Scope | undefined,
   ): Func<unknown[], unknown> {
     const sp = this;
-    const target = this.lookup(ref.factory);
+    const target = this.lookup(ref.type);
 
     if (target === undefined) {
-      throw new FactoryTargetError(ref.factory, "unregistered");
+      throw new FactoryTargetError(ref.type, "unregistered");
     }
 
     // A value target has no construction step — the "factory" is a thunk that
     // returns the stored instance (its lifetime is moot: a value is itself).
     if (target.kind === "value") {
-      return () => sp.resolveWith<unknown>(ref.factory, owningFrame, []);
+      return () => sp.resolveWith<unknown>(ref.type, owningFrame, []);
     }
 
-    // The dep-metadata target is the ctor (class) or the factory function. Both
-    // partition the same way; only the final build step differs (new vs call).
+    const callerParams = ref.params !== undefined && ref.params.length > 0
+      ? ref.params
+      : undefined;
+
+    if (callerParams === undefined) {
+      // Strict zero-arg mode: every slot must resolve. Route through the normal
+      // resolve path so the registered lifetime is respected.
+      return () => sp.resolveWith<unknown>(ref.type, owningFrame, []);
+    }
+
+    // Parameterized mode: the dep-metadata target is the ctor (class) or the
+    // factory function. Select the target signature and partition slots against
+    // the caller-supplied params list.
     const depTarget = target.kind === "class" ? target.ctor : target.factory;
     const record = getDeps(depTarget);
     const targetSignature =
@@ -496,65 +509,97 @@ export class ServiceProvider<S extends string = string>
         ? undefined
         : sp.selectTargetSignature(record.signatures);
 
-    // A target slot is caller-supplied when it is a hole or a string token NOT
-    // in the live registration map. A nested FactoryRef / ScopeRef is itself
-    // injected, never caller-supplied. If the target has any caller-supplied
-    // slot the factory is parameterized; otherwise it is a bare zero-arg factory.
-    const parameterized =
-      targetSignature !== undefined &&
-      targetSignature.some(
-        (slot) =>
-          !isFactoryRef(slot) &&
-          !isScopeRef(slot) &&
-          !sp.isResolvable(slot),
-      );
-
-    if (!parameterized) {
-      return () => sp.resolveWith<unknown>(ref.factory, owningFrame, []);
-    }
-
-    // Parameterized factory: build a fresh instance each call, partitioning the
-    // target signature against the live registration map and threading caller
-    // args into the holes / unregistered slots. A fresh cycle stack per call —
-    // the factory runs outside the resolve that created it.
+    // Build a fresh instance on every call, threading caller args into the
+    // params-claimed slots and resolving the remainder from the container.
+    // A fresh cycle stack per call — the factory runs outside the resolve that
+    // created it.
     return (...callArgs: unknown[]) =>
       sp.buildPartitioned(
         target,
-        targetSignature as ReadonlyArray<DepSlot>,
+        targetSignature as ReadonlyArray<DepSlot> | undefined,
+        callerParams,
         callArgs,
         owningFrame,
       );
   }
 
   /**
-   * Builds a factory target, partitioning its already-selected signature
-   * against the live registration map: a registered token is resolved; a
-   * `ScopeRef` is the live provider view; a `FactoryRef` is injected; an
-   * unregistered token or a `hole` takes the next caller-supplied argument
-   * positionally. A class target is `new`ed, a factory target is called.
-   * Always a fresh result — a parameterized factory bypasses the instance cache.
-   * Runs on a fresh cycle stack since the factory is invoked outside the
+   * Builds a factory target with the params-driven caller-supplied partition.
+   *
+   * `callerParams` is the authored-order list of tokens whose values are
+   * supplied by the caller (from the `FactoryRef.params` list). Each ctor slot
+   * whose token appears in `callerParams` (first-occurrence left-to-right match)
+   * takes the corresponding `callArgs` value; every other slot resolves from the
+   * container. A slot that is neither claimed nor resolvable → error (the factory
+   * cannot be built). A claimed slot that is also registered → caller wins.
+   *
+   * Always builds a fresh result — a parameterized factory bypasses the instance
+   * cache. Runs on a fresh cycle stack since the factory is invoked outside the
    * original resolve.
+   *
+   * `signature` may be `undefined` when the target has no DepRecord (zero-arg
+   * ctor or record-less factory) — in that case args is empty.
    */
   private buildPartitioned<T>(
     target: ClassRegistration | FactoryRegistration,
-    signature: ReadonlyArray<DepSlot>,
-    callerArgs: readonly unknown[],
+    signature: ReadonlyArray<DepSlot> | undefined,
+    callerParams: readonly Token[],
+    callArgs: readonly unknown[],
     owningFrame: Scope | undefined,
   ): T {
     const stack: Token[] = [];
     const providerView = this.makeProviderView(owningFrame, stack);
-    let nextCallerArg = 0;
+
+    if (signature === undefined || signature.length === 0) {
+      // No metadata: zero-arg ctor or record-less factory. Build directly.
+      return (
+        target.kind === "class"
+          ? new target.ctor()
+          : target.factory(providerView)
+      ) as T;
+    }
+
+    // Build the remaining callerParams pool — we consume each token once
+    // (first-occurrence matching), tracking which positions in callArgs remain.
+    // We iterate the signature left-to-right and match ctor-slot tokens against
+    // the callerParams list in authored order.
+    //
+    // Strategy: for each slot that is a plain string token, check if it appears
+    // in the remaining (unmatched) callerParams. The first match in callerParams
+    // order consumes the corresponding callArgs entry.
+    //
+    // We pre-build a mutable copy of the callerParams remaining indices so we
+    // consume each param entry at most once.
+    const remainingParamIndices: number[] = callerParams.map((_, i) => i);
+
     const args = signature.map((slot) => {
       if (isScopeRef(slot)) return providerView;
       if (isFactoryRef(slot)) return this.makeFactory(slot, owningFrame);
-      // An unregistered token (a hole is just one) is caller-supplied: take the
-      // next arg. A registered token resolves through the chain.
-      if (!this.isResolvable(slot)) {
-        return callerArgs[nextCallerArg++];
+      if (isUnion(slot)) return this.resolveUnion(slot, owningFrame, stack);
+
+      // String token slot: check if it is claimed by callerParams (caller wins,
+      // even if the token is also registered).
+      const token = slot as Token;
+      const matchIdx = remainingParamIndices.findIndex(
+        (pi) => callerParams[pi] === token,
+      );
+      if (matchIdx !== -1) {
+        const paramIdx = remainingParamIndices[matchIdx]!;
+        remainingParamIndices.splice(matchIdx, 1); // consume this param entry
+        return callArgs[paramIdx];
       }
-      return this.resolveWith<unknown>(slot as Token, owningFrame, stack);
+
+      // Not claimed by callerParams. Must resolve from the container.
+      if (!this.isResolvable(token)) {
+        throw new NoSatisfiableSignatureError(
+          token,
+          token,
+          [token],
+        );
+      }
+      return this.resolveWith<unknown>(token, owningFrame, stack);
     });
+
     return (
       target.kind === "class"
         ? new target.ctor(...(args as never[]))
@@ -567,12 +612,12 @@ export class ServiceProvider<S extends string = string>
    * the first SATISFIABLE one. A slot is satisfiable when it is:
    *
    *   - a `FactoryRef` — always satisfiable; injected as a callable;
-   *   - a `ScopeRef` — always satisfiable; filled with the live provider view; or
+   *   - a `ScopeRef` — always satisfiable; filled with the live provider view;
+   *   - a `Union` — satisfiable iff at least one member is resolvable; or
    *   - a string token whose registration exists in the sealed map.
    *
-   * A `hole` (`null`) is NOT satisfiable on a direct resolve. An unregistered
-   * string token is also not satisfiable. Equal-arity ties break by registration
-   * order. None satisfiable ⇒ throw naming the unsatisfiable tokens.
+   * An unregistered string token is not satisfiable. Equal-arity ties break by
+   * registration order. None satisfiable ⇒ throw naming the unsatisfiable tokens.
    */
   private selectSignature(
     token: Token,
@@ -595,6 +640,13 @@ export class ServiceProvider<S extends string = string>
       let satisfiable = true;
       for (const slot of sig) {
         if (isFactoryRef(slot) || isScopeRef(slot)) continue;
+        if (isUnion(slot)) {
+          // A union slot is satisfiable iff at least one member is resolvable.
+          if (!this.isResolvableSlot(slot)) {
+            satisfiable = false;
+          }
+          continue;
+        }
         if (!this.isResolvable(slot)) {
           satisfiable = false;
           if (typeof slot === "string") unsatisfiable.add(slot);
@@ -626,12 +678,59 @@ export class ServiceProvider<S extends string = string>
   }
 
   /**
-   * True when `slot` is a registered string token in the sealed map. A hole
-   * (`null`), `FactoryRef`, or `ScopeRef` is not a registered token, so it is
-   * never "resolvable" in this sense.
+   * True when `slot` is a registered string token in the sealed map. A
+   * `FactoryRef`, `ScopeRef`, or `Union` is not tested here — use
+   * `isResolvableSlot` for a full slot check.
    */
   private isResolvable(slot: DepSlot): boolean {
     return typeof slot === "string" && this.lookup(slot) !== undefined;
+  }
+
+  /**
+   * True when a slot is resolvable in ANY form:
+   *   - `FactoryRef` / `ScopeRef` — always satisfiable (injected);
+   *   - `Union` — satisfiable iff at least one member is resolvable (recursive);
+   *   - string token — registered in the sealed map.
+   */
+  private isResolvableSlot(slot: DepSlot): boolean {
+    if (isFactoryRef(slot) || isScopeRef(slot)) return true;
+    if (isUnion(slot)) {
+      return slot.union.some((member) => this.isResolvableSlot(member as DepSlot));
+    }
+    return this.isResolvable(slot);
+  }
+
+  /**
+   * Resolves a `Union` slot: tries each member in declaration order and returns
+   * the first resolvable one. If no member is resolvable, throws
+   * `NoSatisfiableUnionError`.
+   */
+  private resolveUnion<T>(
+    slot: Union,
+    owningFrame: Scope | undefined,
+    stack: Token[],
+  ): T {
+    for (const member of slot.union) {
+      if (this.isResolvableSlot(member as DepSlot)) {
+        return this.resolveSlot<T>(member as DepSlot, owningFrame, stack);
+      }
+    }
+    throw new NoSatisfiableUnionError(slot.union);
+  }
+
+  /**
+   * Resolves a single `DepSlot` to its value, dispatching on slot kind.
+   * Used by `resolveUnion` to recurse into members.
+   */
+  private resolveSlot<T>(
+    slot: DepSlot,
+    owningFrame: Scope | undefined,
+    stack: Token[],
+  ): T {
+    if (isScopeRef(slot)) return this.makeProviderView(owningFrame, stack) as T;
+    if (isFactoryRef(slot)) return this.makeFactory(slot, owningFrame) as T;
+    if (isUnion(slot)) return this.resolveUnion<T>(slot, owningFrame, stack);
+    return this.resolveWith<T>(slot as Token, owningFrame, stack);
   }
 
   // ── Disposal ────────────────────────────────────────────────────────────────
