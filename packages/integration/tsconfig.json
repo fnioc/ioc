@@ -2,7 +2,13 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
-    "types": ["bun"],
+    // `@fnioc/transformer` is listed so its `declare module "@fnioc/di"`
+    // augmentation (the type-only authoring forms `add<I>(C)`, `.as<"x">()`,
+    // `resolve<T>()`) enters this program — the sample wiring authors those
+    // forms and the transformer lowers them at build time, but plain `tsc` (the
+    // lint task) only sees them via this types entry. A `types` array disables
+    // automatic @types inclusion, so `bun` is listed explicitly too.
+    "types": ["bun", "@fnioc/transformer"],
     // Integration tests cross a dynamic-module-load boundary (`import()` of the
     // transformer-compiled output) and index token maps heavily. Relaxing
     // `noUncheckedIndexedAccess` here keeps the assertions readable without

@@ -61,13 +61,13 @@ export type Registration =
  * record-less factory. A structural subset of `Scope`: resolve further tokens
  * and open child scopes.
  *
- * `resolve` has three shapes:
- *   - `resolve<T>()`        — tokenless; the transformer lowers it to a token.
+ * `resolve` has two published shapes (the tokenless authoring form
+ * `resolve<T>()` is a PURE TYPING contributed by the `@fnioc/transformer`
+ * augmentation, not part of di's published surface):
  *   - `resolve<T>(token)`   — explicit token, typed return.
  *   - `resolve(token)`      — explicit token, `unknown` return (dynamic).
  */
 export interface ResolveScope {
-  resolve<T>(): T;
   resolve<T>(token: Token): T;
   resolve(token: Token): unknown;
   /**

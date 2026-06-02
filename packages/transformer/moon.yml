@@ -4,24 +4,30 @@ $schema: 'https://moonrepo.dev/schemas/project.json'
 layer: 'library'
 language: 'typescript'
 
-# Build-time only. The transformer's own source carries no @fnioc/core runtime
-# import (the @fnioc/di reference it emits lives in generated strings), so its
-# bundle is naturally @fnioc-free; `deps: ['core:build']` keeps core's typecheck
-# ordered first. Does NOT depend on @fnioc/di.
+# Build-time only. The transformer's RUNTIME bundle carries no @fnioc import
+# (the @fnioc/di reference it emits lives in generated strings), so the emitted
+# JS stays @fnioc-free. But its TYPE surface now augments @fnioc/di: `augment.ts`
+# carries the `declare module "@fnioc/di"` block (the type-only authoring forms
+# `add<I>(C)`, `.as<"x">()`, `resolve<T>()`) and references di's exported types,
+# so the typecheck + d.ts rollup need di's built `dist` present. Hence the
+# `di:build` deps below. `deps: ['core:build']` keeps core's typecheck first.
 dependsOn:
   - 'core'
+  - 'di'
 
 tasks:
   build:
     command: 'bun run build'
     deps:
       - 'core:build'
+      - 'di:build'
     inputs:
       - 'src/**/*'
       - 'build.ts'
       - 'rollup.dts.mjs'
       - 'tsconfig.json'
       - '/tsconfig.base.json'
+      - '/packages/di/dist/**/*'
     outputs:
       - 'dist'
   test:
@@ -41,5 +47,9 @@ tasks:
       - 'package.json'
   lint:
     command: 'bun run lint'
+    # `augment.ts` typechecks against @fnioc/di's exported types, so di's `dist`
+    # must be built first for the lint typecheck to resolve `@fnioc/di`.
+    deps:
+      - 'di:build'
     options:
       cache: false

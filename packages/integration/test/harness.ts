@@ -96,6 +96,13 @@ export function compileWithTransformer(files: SampleFiles): CompiledProject {
         skipLibCheck: true,
         noEmitOnError: false,
         experimentalDecorators: false,
+        // Pull in @fnioc/transformer's `declare module "@fnioc/di"` augmentation
+        // so the sample's type-driven authoring forms (`add<I>(C)`, `.as<"x">()`)
+        // type-check. di's published types no longer carry these token-free
+        // forms — they exist only when the transformer is in the program, which
+        // is exactly the setup tspc compiles here. The temp project links no
+        // ambient @types, so restricting `types` to the transformer is safe.
+        types: ["@fnioc/transformer"],
         plugins: [{ transform: "@fnioc/transformer", import: "transform" }],
       },
       include: ["src/**/*"],
