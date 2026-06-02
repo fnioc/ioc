@@ -2,29 +2,37 @@
 //
 // Given a concrete class's constructor, read each parameter's type via the
 // TypeChecker and compute one slot per parameter:
-//   - primitives / any / unknown / void   →  `null` (a hole)
-//   - `Promise<X>`                         →  the token for `X`
-//   - an inline function type `() => IFoo` →  a factory ref { factory: token-of-IFoo }
+//   - Inject<T, "tok"> branded param       →  the branded token string
+//   - `Promise<X>`                          →  the token for `X`
+//   - an inline function type `() => IFoo` →  a factory ref { type: token-of-IFoo }
+//   - an inline union `A | B`              →  a UnionSlot { union: [slotA, slotB] }
 //   - everything else                      →  a string token
+//   - unresolvable type with no brand      →  hard diagnostic (UnderivableToken)
 // The result is ONE signature (a positional array), matching the single
-// canonical ctor the transformer sees statically. The runtime decides at
-// resolve time whether a `null` is a genuine hole or an error, and partitions a
-// factory's call args against the live registration map.
+// canonical ctor the transformer sees statically.
 
 import ts from "typescript";
 import {
   tokenForType,
   tokenForReturnType,
+  injectTokenFor,
   type TokenContext,
 } from "./tokens.js";
+import {
+  DiagnosticCode,
+  error,
+  type DiagnosticSink,
+} from "./diagnostics.js";
 
 /**
  * A factory slot in an extracted signature — the transformer's in-memory mirror
- * of the runtime `FactoryRef` shape. Emitted as a `{ factory: "<token>" }`
- * object literal in the `defineDeps(...)` signature array.
+ * of the runtime `FactoryRef` shape. Emitted as `{ type: "<token>" }` (or
+ * `{ type: "<token>", params: [...] }` when params are present) in the
+ * `defineDeps(...)` signature array.
  */
 export interface FactorySlot {
-  readonly factory: string;
+  readonly type: string;
+  readonly params?: readonly string[];
 }
 
 /**
@@ -37,20 +45,31 @@ export interface ScopeSlot {
 }
 
 /**
- * One positional slot: a token string, `null` for a hole, a factory ref, or a
- * scope ref.
+ * A union slot — the transformer's in-memory mirror of the runtime `Union` shape.
+ * Produced when a parameter's type annotation is an inline union type node
+ * (`A | B`), NOT a named type alias referencing a union. Emitted as
+ * `{ union: [slotA, slotB, ...] }` in the `defineDeps(...)` signature array.
+ * Detection is purely syntactic (the annotation node shape).
  */
-export type Slot = string | null | FactorySlot | ScopeSlot;
+export interface UnionSlot {
+  readonly union: readonly Slot[];
+}
+
+/**
+ * One positional slot: a token string, a factory ref, a scope ref, or a union of
+ * alternatives. There is no `null` / hole sentinel — an unresolvable type causes
+ * a hard compile error (`UnderivableToken`).
+ */
+export type Slot = string | FactorySlot | ScopeSlot | UnionSlot;
 
 /** One emitted signature: positional slots (token / hole / factory / scope). */
 export type Signature = ReadonlyArray<Slot>;
 
-/** True when a slot is a factory ref rather than a plain token / hole / scope. */
+/** True when a slot is a factory ref rather than a plain token / scope / union. */
 export function isFactorySlot(slot: Slot): slot is FactorySlot {
   return (
     typeof slot === "object" &&
-    slot !== null &&
-    typeof (slot as { factory?: unknown }).factory === "string"
+    typeof (slot as { type?: unknown }).type === "string"
   );
 }
 
@@ -58,9 +77,41 @@ export function isFactorySlot(slot: Slot): slot is FactorySlot {
 export function isScopeSlot(slot: Slot): slot is ScopeSlot {
   return (
     typeof slot === "object" &&
-    slot !== null &&
     (slot as { scope?: unknown }).scope === true
   );
+}
+
+/** True when a slot is a union of alternatives (`{ union: [...] }`). */
+export function isUnionSlot(slot: Slot): slot is UnionSlot {
+  return (
+    typeof slot === "object" &&
+    Array.isArray((slot as { union?: unknown }).union)
+  );
+}
+
+/**
+ * Structural equality for slots. Two slots are equal when:
+ *   - both are the same string token
+ *   - both are factory refs with the same type and params
+ *   - both are scope refs
+ *   - both are union slots with element-wise equal members (recursive)
+ */
+export function slotsEqual(a: Slot, b: Slot): boolean {
+  if (a === b) return true;
+  if (typeof a === "string" || typeof b === "string") return false;
+  if (isScopeSlot(a) && isScopeSlot(b)) return true;
+  if (isFactorySlot(a) && isFactorySlot(b)) {
+    if (a.type !== b.type) return false;
+    const ap = a.params ?? [];
+    const bp = b.params ?? [];
+    if (ap.length !== bp.length) return false;
+    return ap.every((p, i) => p === bp[i]);
+  }
+  if (isUnionSlot(a) && isUnionSlot(b)) {
+    if (a.union.length !== b.union.length) return false;
+    return a.union.every((s, i) => slotsEqual(s, b.union[i]!));
+  }
+  return false;
 }
 
 /**
@@ -83,6 +134,15 @@ export interface ConstructorExtraction {
 }
 
 /**
+ * Context required by dep-extraction helpers that emit diagnostics.
+ * Extends TokenContext with the diagnostic sink and anchor source file.
+ */
+export interface DepContext extends TokenContext {
+  readonly sink: DiagnosticSink;
+  readonly sourceFile: ts.SourceFile;
+}
+
+/**
  * Resolve the class a registration's concrete-argument expression refers to and
  * extract its constructor signature. Returns `undefined` when the expression
  * does not statically resolve to a class with a declaration (a dynamic
@@ -90,7 +150,7 @@ export interface ConstructorExtraction {
  */
 export function extractFromExpression(
   expr: ts.Expression,
-  ctx: TokenContext,
+  ctx: DepContext,
 ): ConstructorExtraction | undefined {
   const symbol = ctx.checker.getSymbolAtLocation(expr);
   const resolved = symbol && aliasTarget(symbol, ctx.checker);
@@ -125,7 +185,7 @@ function classDeclarationOf(symbol: ts.Symbol): ts.ClassDeclaration | undefined 
  */
 export function extractSignatureFromClass(
   classDecl: ts.ClassDeclaration,
-  ctx: TokenContext,
+  ctx: DepContext,
 ): Signature[] {
   const ctor = findConstructor(classDecl);
   if (!ctor) return [[]];
@@ -137,37 +197,144 @@ export function extractSignatureFromClass(
 /**
  * Classify a single constructor parameter into a slot.
  *
- * Factory discriminator (PRD §7, syntactic):
- *   - The parameter's type ANNOTATION is an inline function-type literal
- *     (`() => IFoo`, `(a: B, b: D) => IFoo`) — a `ts.FunctionTypeNode` — so it
- *     becomes a factory ref keyed on the return type's token.
- *   - A NAMED type reference (`thunk: IFooThunk`, even when `IFooThunk` is a
- *     callable function-interface) is NOT a factory — it resolves to the named
- *     type's own token. This is the deliberate opt-out: name the interface to
- *     escape factory interpretation.
+ * Priority order:
+ *   1. `ResolveScope`-typed → ScopeSlot (live scope injection).
+ *   2. `Inject<T, "tok">` brand on the type → the branded token string.
+ *   3. Inline function-type annotation (`() => IFoo`) → FactorySlot (PRD §7).
+ *   4. Inline union type annotation (`A | B`, NOT `T | undefined`) → UnionSlot.
+ *   5. Normal type → string token via `tokenForType`.
+ *   6. No derivable token + no brand → hard diagnostic (UnderivableToken).
  *
- * Detection is purely on the syntactic shape of the annotation, never on the
+ * Detection is purely syntactic (the annotation node shape), never on the
  * resolved type — the resolved `ts.Type` of an inline arrow and of a named
  * callable interface are structurally identical, so only the syntax tells them
  * apart.
  */
 function extractParamSlot(
   param: ts.ParameterDeclaration,
-  ctx: TokenContext,
+  ctx: DepContext,
 ): Slot {
-  // A `ResolveScope`-typed parameter is the live scope, not a token. Checked
-  // first so it wins over the structural token/factory reads below.
+  // 1. A `ResolveScope`-typed parameter is the live scope, not a token.
   if (isResolveScopeParam(param, ctx)) return { scope: true };
 
+  // 2. Check for the Inject<T, "tok"> brand FIRST, before factory / union /
+  //    normal derivation. If branded, the branded token wins unconditionally.
+  const rawType = ctx.checker.getTypeAtLocation(param);
+  const brandedToken = injectTokenFor(rawType, ctx.checker);
+  if (brandedToken !== undefined) return brandedToken;
+
+  // 3. Inline factory (syntactic: annotation is a FunctionTypeNode).
   const factory = factorySlotFor(param, ctx);
   if (factory) return factory;
 
-  // Strip a `| undefined` (the optionality marker) so `dep?: IFoo` derives
-  // `IFoo`'s token — the param is made optional via a "without that arg"
-  // overload (`withOptionalOverloads`), not by holing the dep.
-  const type = nonNullish(ctx.checker.getTypeAtLocation(param));
+  // 4. Inline union (syntactic: annotation is a UnionTypeNode, but NOT T|undefined).
+  //    Named type aliases that expand to a union are TypeReferenceNodes at the
+  //    annotation site — they naturally fall through to step 5.
+  const typeNode = param.type;
+  if (typeNode && ts.isUnionTypeNode(typeNode)) {
+    // Filter out the `| undefined` optionality marker.
+    // In the AST, `| undefined` appears as a keyword TypeNode with kind
+    // `UndefinedKeyword`. If after filtering there is only one member, this is
+    // the `T | undefined` optional-param path — fall through to step 5
+    // (nonNullish strips undefined from the resolved type).
+    const nonUndefinedMembers = typeNode.types.filter(
+      (t) => t.kind !== ts.SyntaxKind.UndefinedKeyword,
+    );
+
+    // Only treat as a union slot when two or more non-undefined members remain.
+    if (nonUndefinedMembers.length >= 2) {
+      // Recursively lower each member through a synthetic param-like context.
+      const memberSlots = nonUndefinedMembers.map((memberTypeNode) =>
+        extractParamSlotFromTypeNode(memberTypeNode, param, ctx),
+      );
+      return { union: memberSlots };
+    }
+  }
+
+  // 5. Normal derivation. Strip a `| undefined` (the optionality marker) so
+  //    `dep?: IFoo` derives `IFoo`'s token.
+  const type = nonNullish(rawType);
   const result = tokenForType(type, ctx);
-  return result.kind === "hole" ? null : result.token;
+  if (result !== undefined) return result.token;
+
+  // 6. Hard error: no derivable token and no Inject brand.
+  ctx.sink.addDiagnostic(
+    error(
+      ctx.sourceFile,
+      param.type ?? param,
+      DiagnosticCode.UnderivableToken,
+      "cannot derive a token for this type — name the type or brand the parameter with `Inject<T, 'my:token'>`",
+    ),
+  );
+  // Return a sentinel string so the signature array is still well-shaped for
+  // downstream processing; the hard error will stop compilation.
+  return "??unresolvable??";
+}
+
+/**
+ * Lower a single type node from an inline union into a Slot, reusing the
+ * parent parameter's context. The type node is a union constituent — we
+ * synthesise a temporary ParameterDeclaration-like context for recursive calls.
+ */
+function extractParamSlotFromTypeNode(
+  typeNode: ts.TypeNode,
+  parentParam: ts.ParameterDeclaration,
+  ctx: DepContext,
+): Slot {
+  // Check for Inject brand on the resolved type of this member.
+  const memberType = ctx.checker.getTypeFromTypeNode(typeNode);
+  const brandedToken = injectTokenFor(memberType, ctx.checker);
+  if (brandedToken !== undefined) return brandedToken;
+
+  // Nested factory: an inline function type node within a union member.
+  if (ts.isFunctionTypeNode(typeNode)) {
+    const signature = ctx.checker.getSignatureFromDeclaration(typeNode);
+    if (signature) {
+      const token = tokenForReturnType(signature, ctx);
+      if (token !== undefined) return { type: token };
+    }
+  }
+
+  // Nested union (uncommon but allowed by DepSlot).
+  if (ts.isUnionTypeNode(typeNode)) {
+    const nonUndefinedMembers = typeNode.types.filter(
+      (t) => t.kind !== ts.SyntaxKind.UndefinedKeyword,
+    );
+    if (nonUndefinedMembers.length >= 2) {
+      const memberSlots = nonUndefinedMembers.map((m) =>
+        extractParamSlotFromTypeNode(m, parentParam, ctx),
+      );
+      return { union: memberSlots };
+    }
+    if (nonUndefinedMembers.length === 1) {
+      return extractParamSlotFromTypeNode(nonUndefinedMembers[0]!, parentParam, ctx);
+    }
+  }
+
+  // Normal derivation.
+  const token = deriveTokenForTypeNode(typeNode, ctx);
+  if (token !== undefined) return token;
+
+  // Hard error for this union member.
+  ctx.sink.addDiagnostic(
+    error(
+      ctx.sourceFile,
+      typeNode,
+      DiagnosticCode.UnderivableToken,
+      "cannot derive a token for this type — name the type or brand the parameter with `Inject<T, 'my:token'>`",
+    ),
+  );
+  return "??unresolvable??";
+}
+
+/** Derive a token for a type node (used in union-member extraction). */
+function deriveTokenForTypeNode(
+  typeNode: ts.TypeNode,
+  ctx: DepContext,
+): string | undefined {
+  const type = ctx.checker.getTypeFromTypeNode(typeNode);
+  const result = tokenForType(type, ctx);
+  return result?.token;
 }
 
 /** True when `param`'s type resolves to the `ResolveScope` contract interface. */
@@ -183,12 +350,12 @@ function isResolveScopeParam(
 /**
  * Extract the parameter signature of a registration-level FACTORY function (an
  * arrow or function expression). Mirrors `extractSignatureFromClass` but over a
- * function literal's parameters — each becomes a token / hole / factory ref /
- * scope ref via the same per-parameter classifier.
+ * function literal's parameters — each becomes a token / factory ref /
+ * scope ref / union slot via the same per-parameter classifier.
  */
 export function extractSignatureFromFunction(
   fn: ts.ArrowFunction | ts.FunctionExpression,
-  ctx: TokenContext,
+  ctx: DepContext,
 ): Signature[] {
   const slots = fn.parameters.map((param) => extractParamSlot(param, ctx));
   return withOptionalOverloads(slots, trailingOptionalCount(fn.parameters, ctx));
@@ -204,7 +371,7 @@ export function extractSignatureFromFunction(
  */
 function signatureToSlots(
   signature: ts.Signature,
-  ctx: TokenContext,
+  ctx: DepContext,
 ): Signature[] | undefined {
   const slots: Slot[] = [];
   const params: ts.ParameterDeclaration[] = [];
@@ -228,7 +395,7 @@ function signatureToSlots(
  */
 export function extractFactoryReferenceSignature(
   expr: ts.Expression,
-  ctx: TokenContext,
+  ctx: DepContext,
 ): Signature[] | undefined {
   const type = ctx.checker.getTypeAtLocation(expr);
   // A class/constructable resolves down the class path, never here.
@@ -248,7 +415,7 @@ export function extractFactoryReferenceSignature(
  */
 export function extractCtorReferenceSignature(
   expr: ts.Expression,
-  ctx: TokenContext,
+  ctx: DepContext,
 ): Signature[] | undefined {
   const constructSignatures = ctx.checker
     .getTypeAtLocation(expr)
@@ -262,6 +429,8 @@ export function extractCtorReferenceSignature(
  * factory slot (keyed on the return type's token). Returns `undefined` when the
  * annotation is anything else — including a named function-interface reference
  * (the opt-out) — or when the return type yields no derivable token.
+ *
+ * The `.type` field replaces the former `.factory` field (T0 rename).
  */
 function factorySlotFor(
   param: ts.ParameterDeclaration,
@@ -275,7 +444,7 @@ function factorySlotFor(
 
   const token = tokenForReturnType(signature, ctx);
   if (token === undefined) return undefined;
-  return { factory: token };
+  return { type: token };
 }
 
 /** The first constructor declaration WITH a body (the implementation). */
@@ -295,12 +464,11 @@ export function classDeclarationOfType(
 }
 
 /**
- * The token (or hole `null`) a single inline-factory parameter resolves to —
+ * The token (or `null` for an unresolvable/hole type) for a single parameter —
  * used by the §4.5 diagnostic to compare a factory's declared call signature
- * against the produced ctor's unregistered params. Mirrors `extractParamSlot`'s
- * non-factory branch (a nested inline factory param collapses to its own
- * token via `tokenForType`'s structural read, which is acceptable for the
- * shallow positional comparison the diagnostic performs).
+ * against the produced ctor's unregistered params. Returns `null` when the type
+ * yields no derivable token (replaces the former `hole`-based check). The
+ * diagnostic still works: `null` slots are "holes" from the diagnostic's perspective.
  */
 export function slotForParam(
   param: ts.ParameterDeclaration,
@@ -308,7 +476,7 @@ export function slotForParam(
 ): string | null {
   const type = nonNullish(ctx.checker.getTypeAtLocation(param));
   const result = tokenForType(type, ctx);
-  return result.kind === "hole" ? null : result.token;
+  return result === undefined ? null : result.token;
 }
 
 // ── optionality + overload expansion ─────────────────────────────────────────

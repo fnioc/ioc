@@ -17,6 +17,11 @@ import type { Ctor, Func } from "@rhombus-toolkit/func";
 
 import type { AddBuilder } from "@fnioc/di";
 
+// Re-export `Inject` so transformer consumers can use `Inject<T, "tok">` without
+// importing from `@fnioc/core` directly. A single import of `@fnioc/transformer`
+// brings both the transformer plugin and the brand type into scope.
+export type { Inject } from "@fnioc/core";
+
 declare module "@fnioc/di" {
   interface DiBuilder<Root extends string, Children extends string> {
     /**
@@ -54,6 +59,13 @@ declare module "@fnioc/di" {
      * function-typed arg) before runtime.
      */
     resolve<T>(): T;
+    /**
+     * Tokenless authored factory resolve — `resolve<(a: A, b: B) => T>()`. The
+     * transformer lowers it to `resolveFactory("T-token", ["A-token", "B-token"])`.
+     * Zero-param form `resolve<() => T>()` lowers to `resolveFactory("T-token")`.
+     * Never runs post-transform.
+     */
+    resolve<F extends (...args: any[]) => any>(): ReturnType<F>;
   }
 
   // A class does NOT inherit interface overloads, so `sp.resolve<I>()` needs
@@ -61,5 +73,6 @@ declare module "@fnioc/di" {
   // the structural `Resolver` it implements.
   interface ServiceProvider<S extends string> {
     resolve<T>(): T;
+    resolve<F extends (...args: any[]) => any>(): ReturnType<F>;
   }
 }

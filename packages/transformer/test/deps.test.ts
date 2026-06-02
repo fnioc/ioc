@@ -1,9 +1,11 @@
 import { test, expect, describe } from "bun:test";
 import { transform, fixture } from "./harness.js";
+import { DiagnosticCode } from "../src/index.js";
 
 // Dependency extraction → defineDeps emission (PRD §8). The emitted shape is the
 // ABI `Token[][]`: an array of signatures, each a positional array of
-// `string | null` (null = hole for a non-tokenable primitive).
+// tokens / FactoryRef / ScopeRef / Union slots. There is no `null`/hole sentinel;
+// unresolvable types produce a hard UnderivableToken diagnostic.
 
 /**
  * Pull the `[[...]]` signature array text out of a defineDeps(...) call for the
@@ -25,7 +27,8 @@ function depsArrayFor(output: string, ctor: string): string {
 }
 
 describe("dependency extraction", () => {
-  test("null for every primitive parameter type", () => {
+  test("primitive parameter types produce hard UnderivableToken diagnostics", () => {
+    // Per design §5: no silent fallback. Unresolvable types → hard error.
     const src = `
       interface IMarker {}
       class Prims implements IMarker {
@@ -33,18 +36,23 @@ describe("dependency extraction", () => {
           a: string,
           b: number,
           c: boolean,
-          d: symbol,
-          e: bigint,
         ) {}
       }
       declare const services: any;
       services.add<IMarker>(Prims).as<"singleton">();
     `;
-    const { output } = transform(fixture(src));
-    expect(depsArrayFor(output, "Prims")).toBe("[[null, null, null, null, null]]");
+    const { diagnostics } = transform(fixture(src));
+    const errCodes = diagnostics
+      .filter((d) => d.code === DiagnosticCode.UnderivableToken)
+      .map((d) => d.code);
+    // Each unresolvable param produces one diagnostic.
+    expect(errCodes.length).toBe(3);
+    expect(diagnostics.find((d) => d.code === DiagnosticCode.UnderivableToken)!.category).toBe(
+      1 /* ts.DiagnosticCategory.Error */,
+    );
   });
 
-  test("any / unknown / void map to null too", () => {
+  test("any / unknown / void also produce UnderivableToken diagnostics", () => {
     const src = `
       interface IMarker {}
       class Tops implements IMarker {
@@ -53,8 +61,10 @@ describe("dependency extraction", () => {
       declare const services: any;
       services.add<IMarker>(Tops).as<"singleton">();
     `;
-    const { output } = transform(fixture(src));
-    expect(depsArrayFor(output, "Tops")).toBe("[[null, null, null]]");
+    const { diagnostics } = transform(fixture(src));
+    expect(
+      diagnostics.filter((d) => d.code === DiagnosticCode.UnderivableToken).length,
+    ).toBe(3);
   });
 
   test("tokens for interface parameters", () => {
@@ -72,7 +82,7 @@ describe("dependency extraction", () => {
     expect(depsArrayFor(output, "Svc")).toBe('[["./app/ILogger", "./app/IDb"]]');
   });
 
-  test("mixed multi-param ctor: tokens interleaved with null holes", () => {
+  test("mixed multi-param ctor: tokens for resolvable params, error for unresolvable", () => {
     const src = `
       interface ILogger {}
       interface IDbConnection {}
@@ -83,24 +93,24 @@ describe("dependency extraction", () => {
       declare const services: any;
       services.add<IUserRepo>(SqlUserRepo).as<"request">();
     `;
-    const { output } = transform(fixture(src));
-    // Matches the PRD §8 canonical lowered example shape.
-    expect(depsArrayFor(output, "SqlUserRepo")).toBe(
-      '[["./app/ILogger", "./app/IDbConnection", null]]',
-    );
+    const { diagnostics } = transform(fixture(src));
+    // The `string` param produces a hard error.
+    expect(
+      diagnostics.filter((d) => d.code === DiagnosticCode.UnderivableToken).length,
+    ).toBe(1);
   });
 
   test("class is registered, emits exactly one signature (array-of-one)", () => {
     const src = `
       interface IFoo {}
-      class Foo implements IFoo { constructor(x: string) {} }
+      class Foo implements IFoo { constructor() {} }
       declare const services: any;
       services.add<IFoo>(Foo).as<"singleton">();
     `;
     const { output } = transform(fixture(src));
     const arr = depsArrayFor(output, "Foo");
-    // Outer array has exactly one element (one signature).
-    expect(arr).toBe("[[null]]");
+    // Outer array has exactly one element (one signature), empty (no params).
+    expect(arr).toBe("[[]]");
   });
 
   test("class type parameter resolves to a token (not a hole)", () => {

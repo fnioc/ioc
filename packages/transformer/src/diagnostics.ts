@@ -32,6 +32,11 @@ export const enum DiagnosticCode {
   AsyncMismatch = 990004,
   /** Two overload signatures of equal length for the same constructor. */
   OverloadAmbiguity = 990005,
+  /**
+   * A constructor / factory parameter whose type has no derivable token and
+   * carries no `Inject<T, "tok">` brand — a hard compile error.
+   */
+  UnderivableToken = 990006,
 }
 
 const SOURCE = "@fnioc/transformer";
@@ -66,6 +71,24 @@ export function warning(
     start: node.getStart(file),
     length: node.getWidth(file),
     category: ts.DiagnosticCategory.Warning,
+    code,
+    messageText,
+    source: SOURCE,
+  };
+}
+
+/** Build an error diagnostic anchored at `node` in `file`. */
+export function error(
+  file: ts.SourceFile,
+  node: ts.Node,
+  code: DiagnosticCode,
+  messageText: string,
+): Diagnostic {
+  return {
+    file,
+    start: node.getStart(file),
+    length: node.getWidth(file),
+    category: ts.DiagnosticCategory.Error,
     code,
     messageText,
     source: SOURCE,
