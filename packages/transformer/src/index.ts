@@ -10,6 +10,12 @@
 // `{ factory: "<token>" }` slots) and emits the factory-signature /
 // async-mismatch / overload-ambiguity diagnostics (see `deps.ts` + `checks.ts`).
 
+// The type-only authoring surface this transformer contributes to `@fnioc/di`
+// (`add<I>(C)`, `.as<"x">()`, `resolve<T>()`, …). Side-effect import: it carries
+// a `declare module "@fnioc/di"` augmentation that must enter the program of any
+// consumer that references `@fnioc/transformer`'s types.
+import "./augment.js";
+
 // ts-patch entry point (default + named `transform`) and the test-drivable
 // factory.
 export {

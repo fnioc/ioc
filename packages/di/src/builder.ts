@@ -33,23 +33,17 @@ import type {
  */
 export interface AddBuilder<Scopes extends string> {
   /**
-   * Attaches the lifetime. Must name a declared scope.
+   * Attaches the lifetime — the RUNTIME (lowered) form. Must name a declared
+   * scope.
    *
-   * Two call shapes, by design (PRD §7):
-   *   - AUTHORED   `.as<"singleton">()` — the scope name is a TYPE argument; the
-   *     `S extends Scopes` bound is the compile-time captive-misconfiguration
-   *     guard. No value argument is passed; this form is never executed (the
-   *     transformer rewrites it before it runs).
-   *   - LOWERED    `.as("singleton")` — the transformer rewrites the type
-   *     argument to a value argument. This is the form the engine executes; the
-   *     runtime reads the scope from the value arg.
-   *
-   * `scope` is therefore OPTIONAL at the type level: the authored form supplies
-   * it as a type arg only, the lowered form as a value. A bare `.as()` with no
-   * type arg leaves `S = Scopes` and is a degenerate (scopeless) call — use the
-   * type arg.
+   * `.as("singleton")` is what the engine executes: the transformer rewrites the
+   * authored type-arg form (`.as<"singleton">()`) to this value-arg form before
+   * runtime, and a plugin-less caller writes it directly. The AUTHORED type-arg
+   * form (`.as<S extends Scopes>(): void`) is a PURE TYPING contributed by the
+   * `@fnioc/transformer` augmentation — it is not part of di's published surface,
+   * so it only type-checks when the transformer's types are in the program.
    */
-  as<S extends Scopes>(scope?: S): void;
+  as(scope: Scopes): void;
 }
 
 /**
@@ -128,18 +122,6 @@ export class DiBuilder<
   }
 
   /**
-   * Type-only authoring overloads — the forms the transformer rewrites FROM:
-   *   - `add<I>(C)`  → `add("token", C)`            (class)
-   *   - `add<I>(fn)` → `addFactory("token", fn)`    (factory; the transformer
-   *     knows the arg is a function and routes it to `addFactory`).
-   * The ctor is typed `Ctor<any[], I>` (plain construct signature, so an
-   * abstract class is rejected); the factory is any `(...args) => I`. Neither
-   * runs post-transform — they exist purely so type-driven authoring
-   * type-checks before lowering.
-   */
-  public add<I>(ctor: Ctor<any[], I>): AddBuilder<Root | Children>;
-  public add<I>(factory: Func<any[], I>): AddBuilder<Root | Children>;
-  /**
    * Class registration — a string token bound to a concrete constructor. The
    * runtime form: what the transformer emits for a class, and what a
    * plugin-less caller writes directly. Returns the `.as(scope?)` continuation.
@@ -200,9 +182,10 @@ export class DiBuilder<
    * Value registration — an already-built instance, no deps and no lifetime.
    * Separate from `add` because a value may itself be a function (a callable
    * service), which is structurally indistinguishable from a factory inside one
-   * overload. Authoring `addValue<I>(v)` lowers to `addValue("token", v)`.
+   * overload. The authoring form `addValue<I>(v)` (which lowers to
+   * `addValue("token", v)`) is a PURE TYPING contributed by the
+   * `@fnioc/transformer` augmentation, not part of di's published surface.
    */
-  public addValue<I>(value: I): void;
   public addValue(token: Token, value: unknown): void;
   public addValue(
     ...args: [value: unknown] | [token: Token, value: unknown]

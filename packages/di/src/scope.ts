@@ -210,7 +210,6 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
    * registration and the owning scope. The public entry point starts a fresh
    * cycle-detection stack.
    */
-  public resolve<T>(): T;
   public resolve<T>(token: Token): T;
   public resolve(token: Token): unknown;
   public resolve<T>(token?: Token): T {
