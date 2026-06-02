@@ -17,6 +17,7 @@
 //      was lowered and the file does not already import it.
 
 import ts from "typescript";
+import type { Func } from "@rhombus-toolkit/func";
 import { lowerStatement, type LowerContext } from "./lower.js";
 import {
   deriveToken,
@@ -39,7 +40,7 @@ const DEFINE_DEPS = "defineDeps";
 export function createTransformerFactory(
   program: ts.Program,
   sink: DiagnosticSink,
-  options: { readFile?: (path: string) => string | undefined } = {},
+  options: { readFile?: Func<[string], string | undefined> } = {},
 ): ts.TransformerFactory<ts.SourceFile> {
   const checker = program.getTypeChecker();
   const projectRoot = computeProjectRoot(program);
@@ -330,7 +331,7 @@ function computeProjectRoot(program: ts.Program): string {
   // `getCommonSourceDirectory` exists at runtime but is not in the public
   // typings; fall back to the current directory when unavailable.
   const withCommon = program as ts.Program & {
-    getCommonSourceDirectory?: () => string;
+    getCommonSourceDirectory?: Func<[], string>;
   };
   const common = withCommon.getCommonSourceDirectory?.();
   return (common || program.getCurrentDirectory()).replace(/\\/g, "/");

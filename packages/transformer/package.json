@@ -35,6 +35,9 @@
     "test": "bun test",
     "lint": "tsc --noEmit -p tsconfig.json"
   },
+  "dependencies": {
+    "@rhombus-toolkit/func": "3.5.3"
+  },
   "peerDependencies": {
     "@fnioc/di": "workspace:^",
     "typescript": ">=5.2"

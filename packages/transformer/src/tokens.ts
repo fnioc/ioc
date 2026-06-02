@@ -23,6 +23,7 @@
 // registration's factory, not a separate token.
 
 import ts from "typescript";
+import type { Func } from "@rhombus-toolkit/func";
 
 export interface TokenContext {
   readonly checker: ts.TypeChecker;
@@ -37,7 +38,7 @@ export interface TokenContext {
    * Defaults to `ts.sys.readFile` in production; the test harness injects a
    * reader that sees its virtual filesystem.
    */
-  readonly readFile?: (path: string) => string | undefined;
+  readonly readFile?: Func<[string], string | undefined>;
 }
 
 /**

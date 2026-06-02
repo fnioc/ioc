@@ -1,4 +1,4 @@
-import type { Ctor } from "@rhombus-toolkit/func";
+import type { Ctor, Func } from "@rhombus-toolkit/func";
 
 import type { hole } from "./store.js";
 
@@ -9,7 +9,7 @@ import type { hole } from "./store.js";
  * `never[]` rest keeps any concrete function assignable here regardless of its
  * own parameter list.
  */
-export type DepTarget = Ctor | ((...args: never[]) => unknown);
+export type DepTarget = Ctor | Func<never[], unknown>;
 
 /**
  * A stable string identifying an interface — the DI key.
