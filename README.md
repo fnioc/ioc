@@ -51,7 +51,7 @@ services.add<IUserContext>(HttpUserContext).as<"request">();
 // UserService depends on IUserContext — a request-scoped service
 services.add<IUserService>(UserService).as<"singleton">();
 
-const root = services.createScope("singleton");
+const root = services.build();
 const req  = root.createScope("request");
 
 req.resolve<IUserService>("pkg:IUserService");
@@ -150,7 +150,7 @@ services.add<IGreeter>(Greeter).as<"singleton">();
 ### Create scopes and resolve
 
 ```typescript
-const root = services.createScope("singleton");
+const root = services.build();
 
 const greeter = root.resolve<IGreeter>("pkg:IGreeter");
 greeter.greet("world"); // Hello, world!

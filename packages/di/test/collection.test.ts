@@ -52,18 +52,18 @@ describe("service collection — last-wins over a retained list", () => {
     expect(resolved.which).toBe("winner");
   });
 
-  test("a scope-local override appends to the local list, last-wins", () => {
+  test("multiple builder registrations for the same token — last-wins", () => {
     const services = new DiBuilder<"singleton", "request">();
-    services.addValue(T.Config, "base");
+    services.addValue(T.Config, "v1");
+    services.addValue(T.Config, "v2");
+    services.addValue(T.Config, "v3");
 
     const root = services.build();
+    // Most-recent (last appended) registration wins.
+    expect(root.resolve<string>(T.Config)).toBe("v3");
+    // Child scope sees the same sealed map — no local overrides exist.
     const req = root.createScope("request");
-    req.addValue(T.Config, "local-1");
-    req.addValue(T.Config, "local-2");
-
-    expect(req.resolve<string>(T.Config)).toBe("local-2");
-    // The base registration is still the one a sibling-less ancestor sees.
-    expect(root.resolve<string>(T.Config)).toBe("base");
+    expect(req.resolve<string>(T.Config)).toBe("v3");
   });
 });
 
