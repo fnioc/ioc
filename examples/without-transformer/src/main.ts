@@ -10,14 +10,21 @@
 // the transformer would have done automatically are done explicitly here:
 //   1. `services.add("app/IGreeter", Greeter)` — the string token, written out.
 //   2. `forCtor(Greeter).signature(...)` — the constructor dependency metadata.
+//
+// This file also demonstrates two additional manual-surface features:
+//   3. `union("tok:A", "tok:B")` — a slot with alternatives (first resolvable wins).
+//   4. `forCtor(ThirdParty).signature(...)` — complete manual signature for a
+//      class you do not own (no @signature decorator, no transformer).
 
-import { DiBuilder, forCtor } from "@fnioc/di";
+import { DiBuilder, forCtor, union } from "@fnioc/di";
 
 import {
   ConsoleLogger,
+  DiagnosticsReporter,
   Greeter,
   RequestId,
   SystemClock,
+  ThirdPartyFormatter,
 } from "./services.js";
 
 // Our chosen tokens. The transformer would have derived source-relative ones
@@ -26,13 +33,26 @@ const ILogger = "app/ILogger";
 const IClock = "app/IClock";
 const IGreeter = "app/IGreeter";
 const IRequestId = "app/IRequestId";
+const IDiagnosticsReporter = "app/IDiagnosticsReporter";
+const IThirdPartyFormatter = "app/IThirdPartyFormatter";
 
-// Hand-written dependency metadata. Greeter is the only class with ctor deps;
-// its two parameters map positionally to the logger + clock tokens. The other
-// classes are zero-arg, so they need no metadata. `forCtor(...).signature(...)`
-// is the fluent equivalent of the `defineDeps(Greeter, [[ILogger, IClock]])`
-// the transformer emits.
+// Hand-written dependency metadata. Greeter is the only class with ctor deps
+// from the core example; its two parameters map positionally to the logger +
+// clock tokens. `forCtor(...).signature(...)` is the fluent equivalent of the
+// `defineDeps(Greeter, [[ILogger, IClock]])` the transformer emits.
 forCtor(Greeter).signature(ILogger, IClock);
+
+// Union slot: DiagnosticsReporter accepts either ILogger or IClock as its sink.
+// The `union(...)` helper builds a { union: [...] } DepSlot. Members are tried
+// in declaration order; the first registered one wins. Since ILogger IS registered,
+// it resolves to the logger.
+forCtor(DiagnosticsReporter).signature(union(ILogger, IClock));
+
+// Third-party class: ThirdPartyFormatter is a class we do not own — there is no
+// @signature decorator and the transformer is not running. `forCtor(...).signature(...)`
+// supplies the complete ctor signature manually, exactly as the transformer would
+// have emitted via defineDeps.
+forCtor(ThirdPartyFormatter).signature(ILogger, IClock);
 
 // `singleton` is the root (app-lifetime) scope; `request` is a child scope.
 const services = new DiBuilder<"singleton", "request">();
@@ -41,6 +61,8 @@ services.add(ILogger, ConsoleLogger).as("singleton");
 services.add(IClock, SystemClock).as("singleton");
 services.add(IGreeter, Greeter).as("singleton");
 services.add(IRequestId, RequestId).as("request");
+services.add(IDiagnosticsReporter, DiagnosticsReporter).as("singleton");
+services.add(IThirdPartyFormatter, ThirdPartyFormatter).as("singleton");
 
 const root = services.build();
 
@@ -54,15 +76,21 @@ greeterB.greet("Linus");
 
 const logger = root.resolve<ConsoleLogger>(ILogger);
 
-// Two request child scopes, each owning its own request-scoped id. Resolving the
-// id twice within one scope yields the same instance; a fresh scope yields a new
-// one — proof of request-scoped lifetime via createScope().
+// Two request child scopes, each owning its own request-scoped id.
 const req1 = root.createScope("request");
 const id1a = req1.resolve<RequestId>(IRequestId);
 const id1b = req1.resolve<RequestId>(IRequestId);
 
 const req2 = root.createScope("request");
 const id2 = req2.resolve<RequestId>(IRequestId);
+
+// Union demo: DiagnosticsReporter resolved to ILogger (first in union, registered).
+const reporter = root.resolve<DiagnosticsReporter>(IDiagnosticsReporter);
+reporter.report("startup");
+
+// Third-party class demo: ThirdPartyFormatter wired via complete manual signature.
+const formatter = root.resolve<ThirdPartyFormatter>(IThirdPartyFormatter);
+const formatted = formatter.format("demo message");
 
 const lines = [
   "=== @fnioc/di — without transformer ===",
@@ -75,6 +103,8 @@ const lines = [
   `request 1 id stable within scope: ${id1a === id1b} (value ${id1a.value})`,
   `request 2 id is distinct: ${id2.value !== id1a.value} (value ${id2.value})`,
   `RequestId instances built: ${RequestId.built}`,
+  `union resolved to logger (first member): ${reporter.sink === logger}`,
+  `third-party formatter wired: ${formatted.startsWith("[2026-01-01")}`,
 ];
 
 for (const line of lines) {

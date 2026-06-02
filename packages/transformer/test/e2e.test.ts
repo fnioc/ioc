@@ -47,7 +47,7 @@ export interface IUserRepo {}
 export interface IWidget {}
 export class ConsoleLogger implements ILogger {}
 export class SqlUserRepo implements IUserRepo {
-  constructor(log: ILogger, db: IDbConnection, table: string) {}
+  constructor(log: ILogger, db: IDbConnection) {}
 }
 export class WidgetHost implements IWidget {
   constructor(makeRepo: () => IUserRepo) {}
@@ -106,7 +106,7 @@ describe("ts-patch production e2e (ESM)", () => {
     expect(emitted).toContain('import { defineDeps } from "@fnioc/di"');
     expect(emitted).toContain("defineDeps(ɵreg0, [[]]);");
     expect(emitted).toContain(
-      'defineDeps(ɵreg1, [["./services/ILogger", "./services/IDbConnection", null]]);',
+      'defineDeps(ɵreg1, [["./services/ILogger", "./services/IDbConnection"]]);',
     );
     // The lowered registrations reference the hoisted consts, not the raw classes.
     expect(emitted).toContain(
@@ -117,9 +117,9 @@ describe("ts-patch production e2e (ESM)", () => {
     );
 
     // An inline `() => IUserRepo` ctor param lowers to a FactoryRef slot keyed
-    // on the return type's token (PRD §7).
+    // on the return type's token (PRD §7). Field renamed: `type` (was `factory`).
     expect(emitted).toContain(
-      'defineDeps(ɵreg2, [[{ factory: "./services/IUserRepo" }]]);',
+      'defineDeps(ɵreg2, [[{ type: "./services/IUserRepo" }]]);',
     );
     expect(emitted).toContain(
       'services.add("./services/IWidget", ɵreg2).as("singleton");',

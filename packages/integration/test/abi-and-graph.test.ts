@@ -54,14 +54,13 @@ describe("emit contract — transformer-emitted lowered output (PRD §8)", () =>
     expect(wiring).toContain('import { defineDeps } from "@fnioc/di"');
   });
 
-  test("class with optional table param emits two overloads: long [tokens..., null] + short [tokens...] (overload expansion)", () => {
+  test("class with two registered deps emits a single two-slot signature", () => {
     const wiring = project.emitted("sample/wiring.js");
-    // `table?: string` triggers overload expansion: the full [logger, db, null] overload
-    // AND the shorter [logger, db] fallback. Greedy selection tries longest first; the
-    // null slot is unsatisfiable on a direct resolve → falls to the 2-slot form.
+    // SqlUserRepo has exactly two ctor params (logger + db), both registered.
+    // No optional params → single signature, no overload expansion.
     const n = hoistName(wiring, "SqlUserRepo");
     expect(wiring).toContain(
-      `defineDeps(${n}, [["./sample/contracts/ILogger", "./sample/contracts/IDbConnection", null], ["./sample/contracts/ILogger", "./sample/contracts/IDbConnection"]]);`,
+      `defineDeps(${n}, [["./sample/contracts/ILogger", "./sample/contracts/IDbConnection"]]);`,
     );
     expect(wiring).toContain(
       `services.add("./sample/contracts/IUserRepo", ${n}).as("request");`,
@@ -77,11 +76,13 @@ describe("emit contract — transformer-emitted lowered output (PRD §8)", () =>
     }
   });
 
-  test("inline `() => I` ctor params lower to `{ factory: token }` slots", () => {
+  test("inline `() => I` ctor param lowers to a `{ type: token }` slot", () => {
     const wiring = project.emitted("sample/wiring.js");
     const n = hoistName(wiring, "ReportService");
+    // ReportService now has one factory param: `makeCtx: () => IRequestContext`.
+    // The transformer emits the return type as the slot token.
     expect(wiring).toContain(
-      `defineDeps(${n}, [[{ factory: "./sample/contracts/IRequestContext" }, { factory: "./sample/contracts/IReport" }]]);`,
+      `defineDeps(${n}, [[{ type: "./sample/contracts/IRequestContext" }]]);`,
     );
   });
 
@@ -132,8 +133,7 @@ describe("lowered output resolves the full graph against @fnioc/di", () => {
     expect(repo.find(7)).toBe("result(SELECT * FROM users WHERE id=7)");
     expect((resolved.logger as { lines: string[] }).lines).toContain("find 7");
 
-    // The unregistered `table` ctor param landed as a hole (undefined on a direct
-    // resolve — there is no caller).
+    // SqlUserRepo has only two ctor params; `table` is not a property.
     expect((repo as unknown as { table: unknown }).table).toBeUndefined();
 
     // The named-callable opt-out: ThunkConsumer.thunk is the resolved IThunk
@@ -167,7 +167,7 @@ describe("lowered output resolves the full graph against @fnioc/di", () => {
   });
 });
 
-// ── Coverage 3: factory e2e (bare + partitioned + named-callable opt-out) ─────
+// ── Coverage 3: factory e2e (bare zero-arg factory + named-callable opt-out) ───
 
 describe("factory injection e2e (transformer-emitted FactoryRef → di callable)", () => {
   test("a bare `() => IRequestContext` factory respects the target's request lifetime", async () => {
@@ -182,37 +182,13 @@ describe("factory injection e2e (transformer-emitted FactoryRef → di callable)
     const req = rootScope().createScope("request");
     const reportService = req.resolve<{
       makeCtx: () => { id: number };
-      makeReport: (ctx: unknown) => unknown;
     }>(T.reportService);
 
-    // The bare factory (hole-free target) routes through the normal resolve
-    // path: a request-scoped target yields the SAME instance within one request.
+    // The bare zero-arg factory routes through the normal resolve path: a
+    // request-scoped target yields the SAME instance within one request.
     const a = reportService.makeCtx();
     const b = reportService.makeCtx();
     expect(a).toBe(b);
     expect(req.resolve<{ id: number }>(T.ctx)).toBe(a);
-  });
-
-  test("a partitioned `(requestId) => IReport` factory fills the string hole positionally; fresh per call", async () => {
-    const app = await project.load("sample/app.js");
-    const rootScope = app.rootScope as () => {
-      createScope: (n: string) => { resolve: <T>(t: string) => T };
-    };
-    const T = app.T as Record<string, string>;
-
-    const req = rootScope().createScope("request");
-    const reportService = req.resolve(T.reportService) as {
-      makeReport: (requestId: string) => { repo: unknown; requestId: string | undefined };
-    };
-
-    // The registered repo dep is resolved; the `requestId: string` hole (string
-    // is always null in the transformer output → always caller-supplied) is
-    // filled positionally by the caller-supplied string arg.
-    const report1 = reportService.makeReport("req-99");
-    const report2 = reportService.makeReport("req-99");
-    expect(report1.requestId).toBe("req-99");
-    expect(report1.repo).toBeDefined();
-    // A parameterized factory bypasses the cache: fresh instance per call.
-    expect(report1).not.toBe(report2);
   });
 });

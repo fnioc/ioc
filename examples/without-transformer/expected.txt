@@ -6,6 +6,9 @@ SystemClock instances built: 1
 logged lines:
   [2026-01-01T00:00:00Z] Hello, Ada!
   [2026-01-01T00:00:00Z] Hello, Linus!
+  [diag] startup
 request 1 id stable within scope: true (value 1)
 request 2 id is distinct: true (value 2)
 RequestId instances built: 2
+union resolved to logger (first member): true
+third-party formatter wired: true

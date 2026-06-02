@@ -2,7 +2,7 @@
 // the transformer has lowered `wiring.ts`, so when this runs the `defineDeps`
 // metadata is in the global WeakMap and `services` holds string-token
 // registrations. Exercises the full graph: a singleton chain, a request-scoped
-// repo, factory params (bare + partitioned), the named-callable opt-out, and the
+// repo, a bare zero-arg factory param, the named-callable opt-out, and the
 // async-config value path.
 
 import type { ServiceProvider } from "@fnioc/di";

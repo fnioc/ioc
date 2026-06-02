@@ -1,23 +1,5 @@
 import type { DepRecord, DepTarget } from "./types.js";
 
-/**
- * The hole sentinel: marks a constructor parameter as caller-supplied rather
- * than container-resolved.
- *
- * Used in signatures to communicate "this position is a hole — the factory
- * caller supplies this argument, not the DI container." Detected by identity
- * (`slot === hole`), and `null` is the sentinel value: it is exactly what the
- * transformer emits for a hole slot, so the authoring surface and the lowered
- * output agree on one representation.
- *
- * @example
- * ```ts
- * @signature("pkg:ILogger", hole, "pkg:IDb")
- * class SqlRepo { constructor(log: ILogger, tableName: string, db: IDb) { ... } }
- * ```
- */
-export const hole = null as null;
-
 // ── Global-symbol metadata store ─────────────────────────────────────────────
 //
 // Anchored on globalThis under a Symbol.for key.

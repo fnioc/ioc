@@ -13,7 +13,7 @@ describe("registration lowering", () => {
       interface IDbConnection {}
       interface IUserRepo {}
       class SqlUserRepo implements IUserRepo {
-        constructor(log: ILogger, db: IDbConnection, table: string) {}
+        constructor(log: ILogger, db: IDbConnection) {}
       }
       declare const services: any;
       services.add<IUserRepo>(SqlUserRepo).as<"request">();
@@ -24,9 +24,9 @@ describe("registration lowering", () => {
     expect(output).toContain('services.add("./app/IUserRepo", ɵreg0).as("request")');
 
     // A defineDeps prelude is emitted against the hoisted const, with the ctor
-    // params as a single positional signature; `string` → null hole.
+    // params as a single positional signature (no primitives here).
     expect(output).toContain(
-      'defineDeps(ɵreg0, [["./app/ILogger", "./app/IDbConnection", null]])',
+      'defineDeps(ɵreg0, [["./app/ILogger", "./app/IDbConnection"]])',
     );
 
     // The prelude precedes the lowered registration.

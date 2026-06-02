@@ -178,7 +178,7 @@ function checkAsyncParam(
 
   const type = ctx.checker.getTypeAtLocation(param);
   const result = tokenForType(type, ctx);
-  if (result.kind !== "resolvable") return;
+  if (result === undefined) return;
 
   if (!ctx.asyncTokens.has(result.token)) return;
 

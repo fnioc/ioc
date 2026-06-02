@@ -32,6 +32,7 @@ export { nameof } from "./nameof.js";
 export {
   deriveToken,
   tokenForType,
+  injectTokenFor,
   type TokenContext,
   type TokenResult,
 } from "./tokens.js";
@@ -40,14 +41,23 @@ export {
   extractFromExpression,
   hasSignatureDecorator,
   isFactorySlot,
+  isScopeSlot,
+  isUnionSlot,
+  slotsEqual,
   type Signature,
   type Slot,
   type FactorySlot,
+  type ScopeSlot,
+  type UnionSlot,
   type ConstructorExtraction,
+  type DepContext,
 } from "./deps.js";
 export { collectAsyncTokens, type CheckContext } from "./checks.js";
 export {
   DiagnosticCode,
   type Diagnostic,
   type DiagnosticSink,
+  error,
+  warning,
+  info,
 } from "./diagnostics.js";

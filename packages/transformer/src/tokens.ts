@@ -25,6 +25,19 @@
 import ts from "typescript";
 import type { Func } from "@rhombus-toolkit/func";
 
+// The unique symbol key name that the Inject brand uses. We look for a property
+// named exactly "TOK" on the intersection — the brand is declared as:
+//   declare const TOK: unique symbol;
+//   type Inject<T, K> = T & { readonly [TOK]?: K };
+// At the type level the property key is the symbol, but we cannot refer to the
+// symbol across package boundaries. Instead we detect the brand by walking the
+// type's properties for one whose declaration is a `readonly [TOK]?: K`
+// (computed-symbol property key). The literal string token `K` is what we extract.
+//
+// A simpler approach: look for a property whose key is a unique symbol AND whose
+// type is a string literal. That is unique enough to be the brand in practice.
+const INJECT_TOK_PROPERTY = "TOK";
+
 export interface TokenContext {
   readonly checker: ts.TypeChecker;
   /**
@@ -42,13 +55,12 @@ export interface TokenContext {
 }
 
 /**
- * Classification of a parameter type for dep extraction. A `hole` type can
- * never be a token (primitive / `any` / `unknown` / `void`) and lowers to
- * `null`; a `resolvable` type lowers to its string token.
+ * Classification of a parameter type for dep extraction. Only `resolvable` is
+ * now representable — when no token can be derived the caller is responsible for
+ * emitting a hard diagnostic (UnderivableToken). The `hole` variant has been
+ * removed; there is no silent fallback.
  */
-export type TokenResult =
-  | { readonly kind: "hole" }
-  | { readonly kind: "resolvable"; readonly token: string };
+export type TokenResult = { readonly kind: "resolvable"; readonly token: string };
 
 /** Unwrap a single `Promise<X>` layer, returning `X`'s type (or the input). */
 function unwrapPromise(type: ts.Type, checker: ts.TypeChecker): ts.Type {
@@ -62,23 +74,79 @@ function unwrapPromise(type: ts.Type, checker: ts.TypeChecker): ts.Type {
 }
 
 /**
- * Classify a constructor-parameter type into a hole or a token. Unwraps a
- * single `Promise<X>` layer first.
+ * Classify a constructor-parameter type into a token result. Unwraps a single
+ * `Promise<X>` layer first.
+ *
+ * Returns `{ kind: "resolvable", token }` when a token can be derived, or
+ * `undefined` when the type yields no derivable token (a wide primitive / top /
+ * bottom type with no symbol, an anonymous structural type with no name). The
+ * caller is responsible for emitting the `UnderivableToken` hard diagnostic
+ * when `undefined` is returned and no `Inject` brand is present.
  *
  * There is NO pre-emptive "primitive → hole" mask: the type is looked up exactly
- * as written, and a slot is a hole ONLY when its type is unresolvable — i.e.
- * `deriveToken` finds no token (a wide primitive / top / bottom type has no
- * symbol, an anonymous structural type has no name). A literal type IS a token
- * (`"dev"` → `"dev"`), since it resolves. This mirrors the manual surface, where
- * a hole is something the author marks explicitly, never something inferred from
- * a parameter being "primitive-shaped".
+ * as written. A literal type IS a token (`"dev"` → `"dev"`), since it resolves.
  */
-export function tokenForType(type: ts.Type, ctx: TokenContext): TokenResult {
+export function tokenForType(
+  type: ts.Type,
+  ctx: TokenContext,
+): TokenResult | undefined {
   const unwrapped = unwrapPromise(type, ctx.checker);
   const token = deriveToken(unwrapped, ctx);
-  return token === undefined
-    ? { kind: "hole" }
-    : { kind: "resolvable", token };
+  return token === undefined ? undefined : { kind: "resolvable", token };
+}
+
+/**
+ * Inspect whether `type` carries the `Inject<T, K>` brand and, if so, return
+ * the literal string token `K`. Returns `undefined` when the type is not
+ * branded.
+ *
+ * Detection strategy: walk the type's properties for one that is a unique-symbol
+ * keyed optional property whose value type is a string literal. That is exactly
+ * the shape of `declare const TOK: unique symbol; T & { readonly [TOK]?: K }`.
+ * We also accept a property whose internal name is "TOK" as a fallback for
+ * environments where the unique-symbol key is represented by its declaration name.
+ */
+export function injectTokenFor(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): string | undefined {
+  // Walk all properties of the type (handles intersections automatically via the
+  // checker, which flattens them for getProperties()).
+  const props = checker.getPropertiesOfType(type);
+  for (const prop of props) {
+    const decls = prop.getDeclarations();
+    // We need the property to be declared as a computed-symbol property or with
+    // internal name matching the TOK symbol. The unique symbol shows up as a
+    // symbol-keyed property.
+    if (!decls || decls.length === 0) continue;
+
+    // Check if the property name is our unique symbol by looking for a property
+    // whose valueDeclaration is a PropertySignature with a computed name referencing
+    // a const declaration named "TOK".
+    const isInjectProp = decls.some((decl) => {
+      if (!ts.isPropertySignature(decl)) return false;
+      const name = decl.name;
+      if (!ts.isComputedPropertyName(name)) return false;
+      const expr = name.expression;
+      if (!ts.isIdentifier(expr)) return false;
+      return expr.text === INJECT_TOK_PROPERTY;
+    });
+
+    if (!isInjectProp) continue;
+
+    // The property type must be a string literal — that is the token K.
+    const propType = checker.getTypeOfSymbol(prop);
+    if (propType.isStringLiteral()) {
+      return propType.value;
+    }
+    // Handle optional: the property type may be `K | undefined`; extract K.
+    if (propType.isUnion()) {
+      for (const member of propType.types) {
+        if (member.isStringLiteral()) return member.value;
+      }
+    }
+  }
+  return undefined;
 }
 
 /**

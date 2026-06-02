@@ -9,8 +9,8 @@ import { defineDeps } from "./defineDeps.js";
 export interface ForCtorBuilder {
   /**
    * Appends one constructor signature (a positional array of DepSlot —
-   * Token | hole | FactoryRef) to the ctor's dependency metadata. Returns
-   * `this` for chaining.
+   * Token | FactoryRef | ScopeRef | Union) to the ctor's dependency metadata.
+   * Returns `this` for chaining.
    *
    * Each `.signature(...)` call is one overload. Chaining two calls is
    * equivalent to stacking two `@signature` decorators.

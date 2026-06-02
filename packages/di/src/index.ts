@@ -10,8 +10,8 @@
 // detection, the useFactory/useValue registration shapes, and native disposal.
 //
 // Phase 2D.2 adds factory injection (a ctor param typed `() => IFoo` becomes an
-// injected callable) and hole-filling (a caller-supplied parameter filled
-// positionally at factory call time).
+// injected callable) and caller-supplied parameter support via the FactoryRef
+// params list.
 //
 // Container redesign: `Scope` is now a pure frame (cache + disposal + parent
 // link), and `ServiceProvider` is the public container surface implementing
@@ -42,6 +42,7 @@ export {
   MissingScopeError,
   MissingMetadataError,
   NoSatisfiableSignatureError,
+  NoSatisfiableUnionError,
   FactoryTargetError,
   CircularDependencyError,
   AsyncDisposalRequiredError,
@@ -51,5 +52,5 @@ export {
 // pure metadata writers with zero resolution dependency; living in `core` keeps
 // the ABI self-contained, but consumers writing both registrations and manual
 // annotations get them from a single import here.
-export { signature, forCtor, hole, defineDeps } from "@fnioc/core";
-export type { Token, DepRecord, ForCtorBuilder } from "@fnioc/core";
+export { signature, forCtor, defineDeps, union } from "@fnioc/core";
+export type { Token, DepRecord, ForCtorBuilder, Union } from "@fnioc/core";

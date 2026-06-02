@@ -22,8 +22,14 @@ import { lowerStatement, type LowerContext } from "./lower.js";
 import {
   deriveToken,
   tokenForReturnType,
+  tokenForType,
+  injectTokenFor,
   type TokenContext,
 } from "./tokens.js";
+import {
+  DiagnosticCode,
+  error,
+} from "./diagnostics.js";
 import { collectAsyncTokens } from "./checks.js";
 import type { DiagnosticSink } from "./diagnostics.js";
 import { NAMEOF_NAME } from "./nameof.js";
@@ -156,7 +162,7 @@ function isTokenlessResolveCall(call: ts.CallExpression): boolean {
   return call.arguments.length === 0;
 }
 
-/** `*.resolve<I>()` → `*.resolve("tok")` / `*.resolveFactory("tok:return")`. */
+/** `*.resolve<I>()` → `*.resolve("tok")` / `*.resolveFactory("tok:return", [...])`. */
 function lowerResolveCall(
   call: ts.CallExpression,
   ctx: LowerContext,
@@ -166,10 +172,48 @@ function lowerResolveCall(
 
   let method = "resolve";
   let token: string | undefined;
+  let paramTokens: string[] | undefined;
+
   if (ts.isFunctionTypeNode(typeArg)) {
     method = "resolveFactory";
     const signature = ctx.checker.getSignatureFromDeclaration(typeArg);
     token = signature ? tokenForReturnType(signature, ctx) : undefined;
+
+    // Extract parameter tokens for the resolveFactory call (design §2).
+    // Each param in the function type must tokenize; a param that cannot is a
+    // hard error (same diagnostic as ctor params).
+    if (signature) {
+      paramTokens = [];
+      for (const paramSym of signature.parameters) {
+        const decl = paramSym.valueDeclaration;
+        if (!decl || !ts.isParameter(decl)) {
+          paramTokens = undefined;
+          break;
+        }
+        const paramType = ctx.checker.getTypeAtLocation(decl);
+        // Check Inject brand first.
+        const branded = injectTokenFor(paramType, ctx.checker);
+        if (branded !== undefined) {
+          paramTokens.push(branded);
+          continue;
+        }
+        const result = tokenForType(paramType, ctx);
+        if (result !== undefined) {
+          paramTokens.push(result.token);
+        } else {
+          // Hard error: param in resolveFactory<(...) => T> cannot tokenize.
+          ctx.sink.addDiagnostic(
+            error(
+              ctx.sourceFile,
+              decl.type ?? decl,
+              DiagnosticCode.UnderivableToken,
+              "cannot derive a token for this type — name the type or brand the parameter with `Inject<T, 'my:token'>`",
+            ),
+          );
+          paramTokens.push("??unresolvable??");
+        }
+      }
+    }
   } else {
     token = deriveToken(ctx.checker.getTypeFromTypeNode(typeArg), ctx);
   }
@@ -182,9 +226,19 @@ function lowerResolveCall(
     token === undefined
       ? ctx.factory.createNull()
       : ctx.factory.createStringLiteral(token);
-  return ctx.factory.updateCallExpression(call, newCallee, undefined, [
-    tokenLiteral,
-  ]);
+
+  // Build the argument list: always token, then params array if non-empty.
+  const args: ts.Expression[] = [tokenLiteral];
+  if (paramTokens && paramTokens.length > 0) {
+    args.push(
+      ctx.factory.createArrayLiteralExpression(
+        paramTokens.map((p) => ctx.factory.createStringLiteral(p)),
+        false,
+      ),
+    );
+  }
+
+  return ctx.factory.updateCallExpression(call, newCallee, undefined, args);
 }
 
 /** Rewrite every `nameof<T>()` call within `node` to its string token. */

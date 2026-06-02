@@ -74,11 +74,11 @@ services.add<IReport>(Report).as<"request">();
 services.add<IThunkConsumer>(ThunkConsumer).as<"singleton">();
 services.add<IConfigConsumer>(ConfigConsumer).as<"singleton">();
 
-// ReportService holds two inline factory params. The transformer detects
-// `() => IUserRepo` + `(ctx) => IReport` and emits `{ factory }` slots. It is
-// REQUEST-scoped: its factory closures are owned by the request scope, so the
-// request-scoped targets they build resolve correctly (§5.4 — a singleton
-// holding these factories would fail when invoked, which is the captive rule).
+// ReportService holds one inline factory param — a bare `() => IRequestContext`.
+// The transformer detects the inline arrow type and emits a `{ type }` slot. It
+// is REQUEST-scoped: its factory closure is owned by the request scope, so the
+// request-scoped target it builds resolves correctly (§5.4 — a singleton holding
+// this factory would fail when invoked, which is the captive rule).
 services.add<IReportService>(ReportService).as<"request">();
 
 // Plugin-less path: async config via a Promise-returning factory, cached as a

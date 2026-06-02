@@ -1,13 +1,14 @@
 # Examples
 
-Two runnable apps demonstrating [`@fnioc/di`](../packages/di). Both implement the
-**identical** app — a singleton logger, clock, and greeter plus a request-scoped
-id — so the contrast between them is purely the **wiring style**.
+Two runnable apps demonstrating [`@fnioc/di`](../packages/di). Both share a core
+app — a singleton logger, clock, and greeter plus a request-scoped id — and each
+adds surface-specific feature demonstrations, so the contrast is purely the
+**wiring style** plus the new contract features each path surfaces.
 
-| Example | Authoring | Build |
-| --- | --- | --- |
-| [`with-transformer`](./with-transformer) | type-driven: `add<IGreeter>(Greeter)`, no string tokens | `tspc` (the [`@fnioc/transformer`](../packages/transformer) ts-patch plugin) |
-| [`without-transformer`](./without-transformer) | plugin-less: explicit tokens + hand-written metadata | plain `tsc` |
+| Example | Authoring | Build | Extra features |
+| --- | --- | --- | --- |
+| [`with-transformer`](./with-transformer) | type-driven: `add<IGreeter>(Greeter)`, no string tokens | `tspc` (the [`@fnioc/transformer`](../packages/transformer) ts-patch plugin) | `Inject<T,"tok">` brand, inline `A \| B` union |
+| [`without-transformer`](./without-transformer) | plugin-less: explicit tokens + hand-written metadata | plain `tsc` | `union("tok:A","tok:B")`, `forCtor(ThirdParty).signature(...)` |
 
 Both import `@fnioc/di` (and the transformer, in the first) as **bare
 specifiers** via `workspace:*` deps — modeling a real external consumer, never
