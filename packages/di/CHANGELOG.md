@@ -1,5 +1,16 @@
 # Changelog
 
+## [4.0.0](https://github.com/fnioc/ioc/compare/di-v3.0.0...di-v4.0.0) (2026-06-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* token-surface redesign — full token-user parity (Union, Inject, resolveFactory params, drop hole) ([#35](https://github.com/fnioc/ioc/issues/35))
+
+### Features
+
+* token-surface redesign — full token-user parity (Union, Inject, resolveFactory params, drop hole) ([#35](https://github.com/fnioc/ioc/issues/35)) ([77a2384](https://github.com/fnioc/ioc/commit/77a2384155109ff33e73eceb5b957f13a6d18b52))
+
 ## [3.0.0](https://github.com/fnioc/ioc/compare/di-v2.0.0...di-v3.0.0) (2026-06-02)
 
 
