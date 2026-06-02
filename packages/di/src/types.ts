@@ -2,7 +2,7 @@
 // registration kinds, and the resolver-facing scope contract.
 
 import type { Token } from "@fnioc/core";
-import type { Ctor } from "@rhombus-toolkit/func";
+import type { Ctor, Func } from "@rhombus-toolkit/func";
 
 export type { Ctor };
 
@@ -18,7 +18,7 @@ export type { Ctor };
  * Promise flows through the sync resolution channel as a value (§"Async as
  * values"). A consumer that depends on it declares `Promise<T>` and awaits.
  */
-export type Factory = (...args: any[]) => unknown;
+export type Factory = Func<any[], unknown>;
 
 /** A class registration: a token bound to a concrete constructor. */
 export interface ClassRegistration {

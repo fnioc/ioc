@@ -11,6 +11,7 @@
 // class-vs-factory.
 
 import type { Token } from "@fnioc/core";
+import type { Func } from "@rhombus-toolkit/func";
 
 import { Scope } from "./scope.js";
 import type {
@@ -137,7 +138,7 @@ export class DiBuilder<
    * type-checks before lowering.
    */
   public add<I>(ctor: Ctor<any[], I>): AddBuilder<Root | Children>;
-  public add<I>(factory: (...args: any[]) => I): AddBuilder<Root | Children>;
+  public add<I>(factory: Func<any[], I>): AddBuilder<Root | Children>;
   /**
    * Class registration — a string token bound to a concrete constructor. The
    * runtime form: what the transformer emits for a class, and what a
@@ -147,7 +148,7 @@ export class DiBuilder<
   public add(
     ...args:
       | [ctor: Ctor<any[], unknown>]
-      | [factory: (...args: any[]) => unknown]
+      | [factory: Func<any[], unknown>]
       | [token: Token, ctor: Ctor]
   ): AddBuilder<Root | Children> {
     // Only the two-arg string-token form reaches the engine at runtime. The
@@ -182,7 +183,7 @@ export class DiBuilder<
    */
   public addFactory(
     token: Token,
-    factory: (scope: ResolveScope) => unknown,
+    factory: Func<[ResolveScope], unknown>,
   ): AddBuilder<Root | Children>;
   public addFactory(
     token: Token,
@@ -225,7 +226,6 @@ export class DiBuilder<
   public build(): Scope<Root | Children> {
     return new Scope<Root | Children>(
       this.rootName as Root | Children,
-      undefined,
       this.registrations,
     );
   }

@@ -13,6 +13,7 @@
 
 import { getDeps } from "@fnioc/core";
 import type { DepSlot, FactoryRef, ScopeRef, Token } from "@fnioc/core";
+import type { Func } from "@rhombus-toolkit/func";
 
 import type { AddBuilder } from "./builder.js";
 import {
@@ -118,10 +119,10 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
   public constructor(
     /** This scope's name. The root scope's name is its lifetime. */
     public readonly name: Scopes,
-    /** The parent scope, or `undefined` for the root. */
-    private readonly parent: Scope<Scopes> | undefined,
     /** The builder's base registration map (shared, walked last). */
     private readonly baseRegistrations: ReadonlyMap<Token, Registration[]>,
+    /** The parent scope, or omitted for the root. */
+    private readonly parent?: Scope<Scopes>,
   ) {}
 
   /** Appends a registration to a token's list in the given map. */
@@ -144,7 +145,7 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
    * by `DiBuilder.build()`; every other scope descends from one via this call.
    */
   public createScope(childName: Scopes): Scope<Scopes> {
-    return new Scope<Scopes>(childName, this, this.baseRegistrations);
+    return new Scope<Scopes>(childName, this.baseRegistrations, this);
   }
 
   /**
@@ -186,7 +187,7 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
    */
   public addFactory(
     token: Token,
-    factory: (scope: ResolveScope) => unknown,
+    factory: Func<[ResolveScope], unknown>,
   ): AddBuilder<Scopes> {
     return this.appendScopedLocal(token, {
       kind: "factory",
@@ -496,7 +497,7 @@ export class Scope<Scopes extends string = string> implements ResolveScope {
    * captured by a singleton that tries to build a request-scoped target still
    * throws `MissingScopeError` when invoked.
    */
-  private makeFactory(ref: FactoryRef): (...callArgs: unknown[]) => unknown {
+  private makeFactory(ref: FactoryRef): Func<unknown[], unknown> {
     const owningScope = this;
     const target = this.lookup(ref.factory);
 
