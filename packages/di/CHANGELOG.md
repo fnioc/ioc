@@ -1,5 +1,16 @@
 # Changelog
 
+## [3.0.0](https://github.com/fnioc/ioc/compare/di-v2.0.0...di-v3.0.0) (2026-06-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* **di:** ServiceProvider, Resolver/ScopeFactory split, seal-on-build ([#32](https://github.com/fnioc/ioc/issues/32))
+
+### Features
+
+* **di:** ServiceProvider, Resolver/ScopeFactory split, seal-on-build ([#32](https://github.com/fnioc/ioc/issues/32)) ([07c2ae6](https://github.com/fnioc/ioc/commit/07c2ae6b9a0ffc52dafd27cd4a4aeaec0d7fb251))
+
 ## [2.0.0](https://github.com/fnioc/ioc/compare/di-v1.0.0...di-v2.0.0) (2026-06-01)
 
 
