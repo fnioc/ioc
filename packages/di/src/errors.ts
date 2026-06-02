@@ -5,7 +5,7 @@
 // written for a human reading a stack trace at the moment a graph fails to
 // resolve.
 
-import type { Token } from "@fnioc/core";
+import type { DepSlot, Token } from "@fnioc/core";
 
 /** Base class for every error the container raises. */
 export class DiError extends Error {
@@ -133,6 +133,22 @@ export class FactoryTargetError extends DiError {
             `its target with \`new\`, so the target must be a class ` +
             `registration. Resolve it directly instead of as a factory, or ` +
             `register the class with services.add(...).`,
+    );
+  }
+}
+
+/**
+ * A `Union` slot was encountered during resolution but none of its member slots
+ * was resolvable. Resolution cannot proceed without at least one registered member.
+ */
+export class NoSatisfiableUnionError extends DiError {
+  public constructor(public readonly members: readonly DepSlot[]) {
+    const memberList = members
+      .map((m) => (typeof m === "string" ? `"${m}"` : JSON.stringify(m)))
+      .join(", ");
+    super(
+      `No satisfiable union member found. Tried: [${memberList}]. ` +
+        `Register at least one of the union members before resolving.`,
     );
   }
 }

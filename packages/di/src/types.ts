@@ -1,8 +1,10 @@
 // Shared runtime types for the engine: the concrete-constructor shape, the
 // registration kinds, and the resolver-facing provider contract.
 
-import type { Token } from "@fnioc/core";
+import type { Token, Union } from "@fnioc/core";
 import type { Ctor, Func } from "@rhombus-toolkit/func";
+
+export type { Union };
 
 export type { Ctor };
 
@@ -78,11 +80,14 @@ export interface Resolver {
   resolve<T>(token: Token): T;
   resolve(token: Token): unknown;
   /**
-   * Returns a FACTORY for the token rather than an instance — the resolve-site
-   * mirror of a `FactoryRef` ctor param. The authored `resolve<(a: A) => T>()`
-   * (a function-typed type arg) lowers to this.
+   * Returns a FACTORY for `type` rather than an instance. When `params` is
+   * absent or empty, returns a strict zero-arg `() => T` — every ctor slot must
+   * resolve from the container. When `params` is present, it is the complete
+   * authored-order list of caller-supplied parameter tokens; the returned factory
+   * has shape `(...params) => T`. The authored `resolve<(a: A) => T>()` lowers
+   * to `resolveFactory("pkg:T", ["pkg:A"])`.
    */
-  resolveFactory(token: Token): unknown;
+  resolveFactory(type: Token, params?: readonly Token[]): unknown;
 }
 
 /**

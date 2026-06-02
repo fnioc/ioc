@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { DiBuilder, signature, forCtor, hole } from "@fnioc/di";
+import { DiBuilder, signature, forCtor, union } from "@fnioc/di";
 import { getDeps } from "@fnioc/core";
 import { T } from "./fixtures.js";
 
@@ -33,8 +33,9 @@ describe("DiBuilder.add runtime guard", () => {
 });
 
 describe("re-exports from @fnioc/core", () => {
-  test("hole compares to itself by identity (sentinel, not a literal value)", () => {
-    expect(hole).toBe(hole);
+  test("union() constructs a Union slot with the given members", () => {
+    const slot = union("pkg:IA", "pkg:IB");
+    expect(slot).toEqual({ union: ["pkg:IA", "pkg:IB"] });
   });
 
   test("signature writes a DepRecord readable via core's getDeps", () => {

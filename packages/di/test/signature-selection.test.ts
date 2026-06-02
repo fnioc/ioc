@@ -1,16 +1,20 @@
 import { test, expect, describe } from "bun:test";
 import { DiBuilder, NoSatisfiableSignatureError } from "@fnioc/di";
-import { defineDeps, hole } from "@fnioc/core";
+import { defineDeps } from "@fnioc/core";
 import { T } from "./fixtures.js";
 
-// Greedy signature selection over Token|null|FactoryRef signatures from
-// getDeps. Scan longest → shortest; first SATISFIABLE wins. A FactoryRef and
-// ScopeRef are always satisfiable (injected). A null hole is NOT satisfiable
-// on a direct resolve — it is an unresolvable slot that blocks the signature.
-// An unregistered string token also blocks. Equal-arity ties → registration
-// order. None satisfiable → throw naming the unsatisfiable tokens.
+// Greedy signature selection over Token|FactoryRef|ScopeRef|Union signatures
+// from getDeps. Scan longest → shortest; first SATISFIABLE wins. A FactoryRef
+// and ScopeRef are always satisfiable (injected). A Union slot is satisfiable
+// iff at least one member is resolvable. An unregistered string token is NOT
+// satisfiable on a direct resolve. Equal-arity ties → registration order.
+// None satisfiable → throw naming the unsatisfiable tokens.
 // Optional/defaulted params are modeled as multiple overloads (longest first);
 // when the longer one can't be satisfied, selection falls to the shorter one.
+
+// A sentinel token that is never registered — used to model "caller-supplied"
+// slots in the new design (replaces hole).
+const UNREGISTERED = "test:unregistered" as const;
 
 class LoggerImpl {
   public readonly kind = "logger";
@@ -67,10 +71,9 @@ describe("greedy signature selection", () => {
     expect(svc.args[0]).toBeInstanceOf(LoggerImpl);
   });
 
-  test("a hole in a required slot blocks the signature; falls to the shorter overload", () => {
-    // Semantic change: hole is no longer "satisfiable" on a direct resolve.
-    // A hole is an unresolvable slot — it blocks [Logger, hole] — so selection
-    // falls to the shorter [Logger] overload and constructs with one arg.
+  test("an unregistered slot blocks the signature; falls to the shorter overload", () => {
+    // An unregistered token is an unresolvable slot — it blocks [Logger, UNREGISTERED]
+    // so selection falls to the shorter [Logger] overload and constructs with one arg.
     // (This models an optional/defaulted param: the transformer emits both
     // overloads; the shorter one is chosen when the longer one can't be satisfied.)
     class Svc {
@@ -80,12 +83,13 @@ describe("greedy signature selection", () => {
       }
     }
     defineDeps(Svc, [
-      [T.Logger, hole],
+      [T.Logger, UNREGISTERED],
       [T.Logger],
     ]);
 
     const services = new DiBuilder<"singleton">();
     services.add(T.Logger, LoggerImpl).as("singleton");
+    // UNREGISTERED deliberately NOT registered.
     services.add(T.Service, Svc).as("singleton");
 
     const svc = services.build().resolve<Svc>(T.Service);
@@ -139,36 +143,38 @@ describe("greedy signature selection", () => {
     }
   });
 
-  test("an all-hole signature is unsatisfiable on direct resolve; throws NoSatisfiableSignatureError", () => {
-    // Semantic change: a hole is NOT satisfiable on a direct resolve. It is an
-    // unresolvable slot that blocks the signature. A class with only holes and no
-    // shorter fallback overload surfaces NoSatisfiableSignatureError.
-    // (To get the "undefined/default" behavior, model as an optional overload:
-    //  defineDeps(Svc, [[hole], []]) — the zero-arg overload is the fallback.)
+  test("an all-unregistered signature is unsatisfiable on direct resolve; throws NoSatisfiableSignatureError", () => {
+    // An unregistered token is not satisfiable on a direct resolve. A class with
+    // only unregistered slots and no shorter fallback overload surfaces
+    // NoSatisfiableSignatureError.
+    // (To get the "optional" behavior, model as multiple overloads:
+    //  defineDeps(Svc, [[UNREGISTERED], []]) — the zero-arg overload is the fallback.)
     class Svc {
       public readonly a: unknown;
       public constructor(a: unknown) {
         this.a = a;
       }
     }
-    defineDeps(Svc, [[hole]]);
+    defineDeps(Svc, [[UNREGISTERED]]);
 
     const services = new DiBuilder<"singleton">();
     services.add(T.Service, Svc).as("singleton");
+    // UNREGISTERED not registered.
 
     const root = services.build();
     expect(() => root.resolve<Svc>(T.Service)).toThrow(NoSatisfiableSignatureError);
   });
 
-  test("throws naming only the unsatisfiable token, ignoring holes", () => {
-    // [Db, hole] — the hole is fine, but Db is unregistered ⇒ unsatisfiable.
+  test("throws naming only the unregistered token in a mixed signature", () => {
+    // [Db, UNREGISTERED] — UNREGISTERED is fine as a caller-supplied slot would be,
+    // but Db is also unregistered ⇒ both are unsatisfiable.
     class Svc {
       public constructor(..._args: unknown[]) {}
     }
-    defineDeps(Svc, [[T.Db, hole]]);
+    defineDeps(Svc, [[T.Db, UNREGISTERED]]);
 
     const services = new DiBuilder<"singleton">();
-    services.add(T.Service, Svc).as("singleton"); // Db NOT registered
+    services.add(T.Service, Svc).as("singleton"); // T.Db NOT registered
 
     const root = services.build();
     expect(() => root.resolve(T.Service)).toThrow(NoSatisfiableSignatureError);
@@ -176,7 +182,9 @@ describe("greedy signature selection", () => {
       root.resolve(T.Service);
     } catch (err) {
       const e = err as NoSatisfiableSignatureError;
-      expect(e.unsatisfiable).toEqual([T.Db]); // only the token, never the hole
+      // Both T.Db and UNREGISTERED are unregistered string tokens.
+      expect(e.unsatisfiable).toContain(T.Db);
+      expect(e.unsatisfiable).toContain(UNREGISTERED);
     }
   });
 });
