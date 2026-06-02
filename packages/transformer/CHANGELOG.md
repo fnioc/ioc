@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.0.0](https://github.com/fnioc/ioc/compare/transformer-v1.1.0...transformer-v2.0.0) (2026-06-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* **di:** ServiceProvider, Resolver/ScopeFactory split, seal-on-build ([#32](https://github.com/fnioc/ioc/issues/32))
+* **di:** A required (non-optional) parameter whose type is unresolvable now causes resolve<T>() to throw NoSatisfiableSignatureError instead of silently constructing with undefined. Migration: make the param optional or defaulted (overload expansion handles it), or use the factory form resolve<(arg: T) => R>() to supply the value at call time. The object-shape add(token, { useFactory }) / add(token, { useValue }) API is also removed.
+
+### Features
+
+* **di:** redesign dependency-registration and resolution surface ([#28](https://github.com/fnioc/ioc/issues/28)) ([18fe261](https://github.com/fnioc/ioc/commit/18fe2615f1ad9ccad02014354d8e4a1843ba280f))
+* **di:** ServiceProvider, Resolver/ScopeFactory split, seal-on-build ([#32](https://github.com/fnioc/ioc/issues/32)) ([07c2ae6](https://github.com/fnioc/ioc/commit/07c2ae6b9a0ffc52dafd27cd4a4aeaec0d7fb251))
+
 ## [1.1.0](https://github.com/fnioc/ioc/compare/transformer-v1.0.0...transformer-v1.1.0) (2026-06-01)
 
 
