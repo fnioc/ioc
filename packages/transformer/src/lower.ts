@@ -28,6 +28,7 @@ import {
   extractFromExpression,
   extractSignatureFromFunction,
   hasSignatureDecorator,
+  isAnyOfSlot,
   isFactorySlot,
   isScopeSlot,
   type ConstructorExtraction,
@@ -357,9 +358,8 @@ function defineDepsStatement(
 
 /**
  * Render one signature slot as its emitted literal: `null` for a hole, a string
- * literal for a token, a `{ factory: "<token>" }` for a factory ref, and a
- * `{ scope: true }` for a scope ref (the `ScopeRef` ABI shape the runtime fills
- * with the live scope).
+ * literal for a token, a `{ factory: "<token>" }` for a factory ref, a
+ * `{ scope: true }` for a scope ref, and a `{ anyOf: [...] }` for an anyOf slot.
  */
 function slotLiteral(slot: Slot, factory: ts.NodeFactory): ts.Expression {
   if (slot === null) return factory.createNull();
@@ -375,6 +375,19 @@ function slotLiteral(slot: Slot, factory: ts.NodeFactory): ts.Expression {
         factory.createPropertyAssignment(
           "factory",
           factory.createStringLiteral(slot.factory),
+        ),
+      ],
+      false,
+    );
+  }
+  if (isAnyOfSlot(slot)) {
+    // Emit: { anyOf: [<slot0>, <slot1>, ...] }
+    const members = slot.anyOf.map((s) => slotLiteral(s, factory));
+    return factory.createObjectLiteralExpression(
+      [
+        factory.createPropertyAssignment(
+          "anyOf",
+          factory.createArrayLiteralExpression(members, false),
         ),
       ],
       false,

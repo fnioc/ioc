@@ -62,19 +62,33 @@ function unwrapPromise(type: ts.Type, checker: ts.TypeChecker): ts.Type {
 }
 
 /**
+ * Returns the bare token for a wide primitive type (`string`, `number`,
+ * `boolean`), or `undefined` for any other type. Wide primitives lower to their
+ * keyword string as a token rather than becoming holes, so a `string | IFoo`
+ * union can try `"string"` first. Literal variants (`"hello"`, `42`, `true`)
+ * are NOT wide primitives and fall through to `literalToken` / `deriveToken`.
+ */
+export function widePrimitiveToken(type: ts.Type): string | undefined {
+  if (type.flags & ts.TypeFlags.String) return "string";
+  if (type.flags & ts.TypeFlags.Number) return "number";
+  if (type.flags & ts.TypeFlags.Boolean) return "boolean";
+  return undefined;
+}
+
+/**
  * Classify a constructor-parameter type into a hole or a token. Unwraps a
  * single `Promise<X>` layer first.
  *
- * There is NO pre-emptive "primitive → hole" mask: the type is looked up exactly
- * as written, and a slot is a hole ONLY when its type is unresolvable — i.e.
- * `deriveToken` finds no token (a wide primitive / top / bottom type has no
- * symbol, an anonymous structural type has no name). A literal type IS a token
- * (`"dev"` → `"dev"`), since it resolves. This mirrors the manual surface, where
- * a hole is something the author marks explicitly, never something inferred from
- * a parameter being "primitive-shaped".
+ * Wide primitives (`string`, `number`, `boolean`) lower to their bare keyword
+ * as a token (e.g. `"string"`) rather than becoming holes. This means an
+ * unregistered `string`/`number`/`boolean` parameter makes a signature
+ * unsatisfiable rather than silently becoming a hole. Use `hole` explicitly
+ * for caller-supplied primitive parameters.
  */
 export function tokenForType(type: ts.Type, ctx: TokenContext): TokenResult {
   const unwrapped = unwrapPromise(type, ctx.checker);
+  const widePrimitive = widePrimitiveToken(unwrapped);
+  if (widePrimitive !== undefined) return { kind: "resolvable", token: widePrimitive };
   const token = deriveToken(unwrapped, ctx);
   return token === undefined
     ? { kind: "hole" }
@@ -152,7 +166,7 @@ export function deriveToken(
  * by their value here. Template-literal types and `unique symbol` have no fixed
  * value and return `undefined` (they fall through to symbol-based derivation).
  */
-function literalText(type: ts.Type): string | undefined {
+export function literalText(type: ts.Type): string | undefined {
   if (type.isStringLiteral()) return JSON.stringify(type.value);
   if (type.isNumberLiteral()) return String(type.value);
   if (type.flags & ts.TypeFlags.BigIntLiteral) {

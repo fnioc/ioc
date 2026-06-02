@@ -15,6 +15,9 @@ import ts from "typescript";
 import {
   tokenForType,
   tokenForReturnType,
+  deriveToken,
+  literalText,
+  widePrimitiveToken,
   type TokenContext,
 } from "./tokens.js";
 
@@ -37,10 +40,19 @@ export interface ScopeSlot {
 }
 
 /**
- * One positional slot: a token string, `null` for a hole, a factory ref, or a
- * scope ref.
+ * An anyOf slot — the transformer's in-process mirror of the runtime `AnyOf`
+ * shape. Emitted as a `{ anyOf: [...] }` object literal. Produced for a
+ * parameter whose type is an inline union (no alias, no `undefined` member).
  */
-export type Slot = string | null | FactorySlot | ScopeSlot;
+export interface AnyOfSlot {
+  readonly anyOf: readonly Slot[];
+}
+
+/**
+ * One positional slot: a token string, `null` for a hole, a factory ref, a
+ * scope ref, or an anyOf (inline union of alternatives).
+ */
+export type Slot = string | null | FactorySlot | ScopeSlot | AnyOfSlot;
 
 /** One emitted signature: positional slots (token / hole / factory / scope). */
 export type Signature = ReadonlyArray<Slot>;
@@ -60,6 +72,15 @@ export function isScopeSlot(slot: Slot): slot is ScopeSlot {
     typeof slot === "object" &&
     slot !== null &&
     (slot as { scope?: unknown }).scope === true
+  );
+}
+
+/** True when a slot is an anyOf ref (`{ anyOf: [...] }`). */
+export function isAnyOfSlot(slot: Slot): slot is AnyOfSlot {
+  return (
+    slot !== null &&
+    typeof slot === "object" &&
+    Array.isArray((slot as { anyOf?: unknown }).anyOf)
   );
 }
 
@@ -161,6 +182,12 @@ function extractParamSlot(
 
   const factory = factorySlotFor(param, ctx);
   if (factory) return factory;
+
+  // Check for an inline union type (AnyOf path). Must run after ScopeRef and
+  // FactoryRef checks but before tokenForType, because a union containing a
+  // function-typed member could otherwise route to the factory path incorrectly.
+  const anyOf = anyOfSlotFor(param, ctx);
+  if (anyOf !== undefined) return anyOf;
 
   // Strip a `| undefined` (the optionality marker) so `dep?: IFoo` derives
   // `IFoo`'s token — the param is made optional via a "without that arg"
@@ -276,6 +303,116 @@ function factorySlotFor(
   const token = tokenForReturnType(signature, ctx);
   if (token === undefined) return undefined;
   return { factory: token };
+}
+
+/**
+ * True when all members of a union type are literal types (string/number/bigint/
+ * boolean literals). A pure-literal union is handled by `literalToken` and must
+ * NOT produce an `AnyOf`.
+ */
+function isAllLiteralMembers(types: readonly ts.Type[]): boolean {
+  return types.every((t) => literalText(t) !== undefined);
+}
+
+/**
+ * Lower a single union member type into a `Slot`. Wide primitives become bare
+ * token strings; named types resolve via `deriveToken`; unresolvable types
+ * become `null` (hole-like, skipped by the resolver).
+ */
+function memberToSlot(type: ts.Type, ctx: TokenContext): Slot {
+  // Wide primitive → bare token (same rule as tokenForType).
+  const wide = widePrimitiveToken(type);
+  if (wide !== undefined) return wide;
+  // Named/symbolic type → token via deriveToken; no symbol → null (hole-like).
+  const token = deriveToken(type, ctx);
+  return token !== undefined ? token : null;
+}
+
+/**
+ * TypeScript expands the wide `boolean` type into its two boolean-literal
+ * constituents (`false | true`) when it appears inside a union. Collapse them
+ * back into a single `"boolean"` slot in the `anyOf` member list.
+ *
+ * The collapse is applied to an array of (Type, already-lowered-Slot) pairs:
+ * whenever both BooleanLiteral members (`false` and `true`) appear in the
+ * types array, they are replaced by a single `"boolean"` slot at the position
+ * of the FIRST boolean literal encountered. The second is dropped.
+ */
+function collapseBooleanLiterals(
+  pairs: ReadonlyArray<{ type: ts.Type; slot: Slot }>,
+): ReadonlyArray<{ type: ts.Type; slot: Slot }> {
+  const hasFalse = pairs.some((p) => {
+    const lit = literalText(p.type);
+    return lit === "false";
+  });
+  const hasTrue = pairs.some((p) => {
+    const lit = literalText(p.type);
+    return lit === "true";
+  });
+  if (!hasFalse || !hasTrue) return pairs;
+
+  let seen = false;
+  const out: Array<{ type: ts.Type; slot: Slot }> = [];
+  for (const pair of pairs) {
+    const lit = literalText(pair.type);
+    if (lit === "false" || lit === "true") {
+      if (!seen) {
+        // Replace the first boolean-literal with the wide "boolean" token.
+        out.push({ type: pair.type, slot: "boolean" });
+        seen = true;
+      }
+      // Drop the second boolean-literal member.
+      continue;
+    }
+    out.push(pair);
+  }
+  return out;
+}
+
+/**
+ * If `param`'s type is an inline, unaliased, non-literal union (after stripping
+ * `undefined | null | void`), return an `AnyOfSlot` whose members mirror the
+ * union types in declaration order. Returns `undefined` when the parameter
+ * should route through the normal `tokenForType` path instead:
+ *   - not a union at all
+ *   - has an alias symbol (named union → single token via `deriveToken`)
+ *   - all members are literals (handled by `literalToken`)
+ *   - ≤1 non-nullish member (optional param → handled by `withOptionalOverloads`)
+ *
+ * Boolean expansion: TypeScript represents `boolean` as `false | true` when
+ * it appears inside a larger union. Pairs of BooleanLiteral members are
+ * collapsed back to the single bare token `"boolean"`.
+ */
+function anyOfSlotFor(
+  param: ts.ParameterDeclaration,
+  ctx: TokenContext,
+): AnyOfSlot | undefined {
+  const rawType = ctx.checker.getTypeAtLocation(param);
+  if (!rawType.isUnion()) return undefined;
+
+  // If the type has an aliasSymbol it is a named/aliased union — deriveToken
+  // handles it via the aliasSymbol path; not an AnyOf.
+  if (rawType.aliasSymbol) return undefined;
+
+  // Filter out undefined/null/void — those are optionality, not alternatives.
+  const members = rawType.types.filter(
+    (t) =>
+      !(t.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void)),
+  );
+  if (members.length <= 1) return undefined;
+
+  // If all members are literals, literalToken produces a combined token — not AnyOf.
+  if (isAllLiteralMembers(members)) return undefined;
+
+  // Lower each member into a Slot, then collapse the wide-boolean expansion:
+  // TypeScript expands `boolean` into `false | true` inside unions; we fold
+  // the pair back to a single `"boolean"` slot.
+  const pairs = members.map((memberType) => ({
+    type: memberType,
+    slot: memberToSlot(memberType, ctx),
+  }));
+  const collapsed = collapseBooleanLiterals(pairs);
+  return { anyOf: collapsed.map((p) => p.slot) };
 }
 
 /** The first constructor declaration WITH a body (the implementation). */

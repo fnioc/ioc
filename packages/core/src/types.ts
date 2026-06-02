@@ -42,13 +42,27 @@ export interface ScopeRef {
 }
 
 /**
+ * Marks a constructor/factory parameter whose type is an inline union of
+ * resolvable alternatives. The engine tries each member left-to-right
+ * (declaration order) and uses the first that resolves; exhausting all
+ * members is a normal "unresolved" error, not a null injection.
+ *
+ * Emitted by the transformer when a parameter's type is an inline union
+ * (no alias, no `undefined` member) — e.g. `IUserRepo | IReadonlyRepo`.
+ */
+export interface AnyOf {
+  readonly anyOf: readonly DepSlot[];
+}
+
+/**
  * One positional slot in a constructor / factory signature:
  *   - a `Token` string  — a container-resolved dependency,
  *   - the `hole` sentinel — a caller-supplied parameter,
- *   - a `FactoryRef` — a factory-injected parameter (see `FactoryRef`), or
- *   - a `ScopeRef` — the live resolution scope (see `ScopeRef`).
+ *   - a `FactoryRef` — a factory-injected parameter (see `FactoryRef`),
+ *   - a `ScopeRef` — the live resolution scope (see `ScopeRef`), or
+ *   - an `AnyOf` — an inline union of alternatives tried in declaration order.
  */
-export type DepSlot = Token | typeof hole | FactoryRef | ScopeRef;
+export type DepSlot = Token | typeof hole | FactoryRef | ScopeRef | AnyOf;
 
 /**
  * Per-constructor dependency metadata stored in the global WeakMap.

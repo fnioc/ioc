@@ -1,6 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import { hole, defineDeps, getDeps, signature, forCtor } from "@fnioc/core";
-import type { FactoryRef, DepSlot } from "@fnioc/core";
+import type { AnyOf, FactoryRef, DepSlot } from "@fnioc/core";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -356,5 +356,84 @@ describe("FactoryRef dep slot", () => {
     const rec = getDeps(ForCtorFactory);
     expect(rec!.signatures).toHaveLength(1);
     expect(rec!.signatures[0]).toEqual(["fc:ILogger", { factory: "fc:IFoo" }]);
+  });
+});
+
+// ── AnyOf dep slot ──────────────────────────────────────────────────────────
+
+describe("AnyOf dep slot", () => {
+  test("AnyOf is accepted where a DepSlot is expected (type-level + runtime)", () => {
+    // Type-level: if this compiles, AnyOf is a valid DepSlot.
+    const anyOf: AnyOf = { anyOf: ["pkg:IA", "pkg:IB"] };
+    const slots: readonly DepSlot[] = [anyOf];
+    expect(slots).toHaveLength(1);
+    expect((slots[0] as AnyOf).anyOf).toEqual(["pkg:IA", "pkg:IB"]);
+  });
+
+  test("defineDeps accepts AnyOf inside a signature and round-trips through getDeps", () => {
+    class AnyOfCtor {}
+
+    defineDeps(AnyOfCtor, [[{ anyOf: ["pkg:IA", "pkg:IB"] }]]);
+
+    const rec = getDeps(AnyOfCtor);
+    expect(rec).toBeDefined();
+    expect(rec!.signatures).toHaveLength(1);
+    expect(rec!.signatures[0]).toEqual([{ anyOf: ["pkg:IA", "pkg:IB"] }]);
+  });
+
+  test("AnyOf round-trips via @signature decorator", () => {
+    @signature({ anyOf: ["dec:IA", "dec:IB"] })
+    class AnyOfDecorated {}
+
+    const rec = getDeps(AnyOfDecorated);
+    expect(rec!.signatures[0]).toEqual([{ anyOf: ["dec:IA", "dec:IB"] }]);
+  });
+
+  test("discriminant safety: AnyOf is distinct from FactoryRef and ScopeRef and hole", () => {
+    const anyOf: DepSlot = { anyOf: ["tok:IA", "tok:IB"] };
+    const factoryRef: DepSlot = { factory: "tok:IX" };
+    const scopeRef: DepSlot = { scope: true };
+    const holeSlot: DepSlot = hole;
+
+    // AnyOf discriminant: `anyOf` property is an Array
+    expect(
+      anyOf !== null &&
+        typeof anyOf === "object" &&
+        Array.isArray((anyOf as { anyOf?: unknown }).anyOf),
+    ).toBe(true);
+
+    // FactoryRef is NOT an AnyOf
+    expect(
+      factoryRef !== null &&
+        typeof factoryRef === "object" &&
+        Array.isArray((factoryRef as { anyOf?: unknown }).anyOf),
+    ).toBe(false);
+
+    // ScopeRef is NOT an AnyOf
+    expect(
+      scopeRef !== null &&
+        typeof scopeRef === "object" &&
+        Array.isArray((scopeRef as { anyOf?: unknown }).anyOf),
+    ).toBe(false);
+
+    // hole (null) is NOT an AnyOf
+    expect(
+      holeSlot !== null &&
+        typeof holeSlot === "object" &&
+        Array.isArray((holeSlot as unknown as { anyOf?: unknown }).anyOf),
+    ).toBe(false);
+  });
+
+  test("AnyOf containing FactoryRef and ScopeRef members round-trips verbatim", () => {
+    class AnyOfComplexCtor {}
+
+    defineDeps(AnyOfComplexCtor, [
+      [{ anyOf: [{ factory: "tok:IFoo" }, "tok:IBar", { scope: true }] }],
+    ]);
+
+    const rec = getDeps(AnyOfComplexCtor);
+    expect(rec!.signatures[0]).toEqual([
+      { anyOf: [{ factory: "tok:IFoo" }, "tok:IBar", { scope: true }] },
+    ]);
   });
 });

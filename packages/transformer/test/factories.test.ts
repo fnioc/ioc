@@ -89,13 +89,15 @@ describe("factory detection", () => {
     expect(depsArrayFor(output, "Svc")).toBe('[[{ factory: "./app/IFoo" }]]');
   });
 
-  test("factory mixes with plain tokens and holes in one signature", () => {
+  test("factory mixes with plain tokens and bare-token primitives in one signature", () => {
+    // `name: string` now emits the bare token "string" (wide-primitive→bare-token
+    // rule) rather than null. Use symbol to get a genuine null hole.
     const src = `
       interface ILogger {}
       interface IFoo {}
       interface ISvc {}
       class Svc implements ISvc {
-        constructor(log: ILogger, makeFoo: () => IFoo, name: string) {}
+        constructor(log: ILogger, makeFoo: () => IFoo, name: symbol) {}
       }
       declare const services: any;
       services.add<ISvc>(Svc).as<"singleton">();

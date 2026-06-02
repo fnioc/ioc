@@ -8,6 +8,8 @@ import { transform, fixture, ROOT } from "./harness.js";
 
 describe("registration lowering", () => {
   test("lowers add<I>(C).as<\"x\">() to the string-token form", () => {
+    // `table: string` now emits the bare token "string" (wide-primitive→bare-token
+    // rule). A genuine null hole would require symbol/any/bigint/etc.
     const src = `
       interface ILogger {}
       interface IDbConnection {}
@@ -24,9 +26,9 @@ describe("registration lowering", () => {
     expect(output).toContain('services.add("./app/IUserRepo", ɵreg0).as("request")');
 
     // A defineDeps prelude is emitted against the hoisted const, with the ctor
-    // params as a single positional signature; `string` → null hole.
+    // params as a single positional signature; `string` → bare token "string".
     expect(output).toContain(
-      'defineDeps(ɵreg0, [["./app/ILogger", "./app/IDbConnection", null]])',
+      'defineDeps(ɵreg0, [["./app/ILogger", "./app/IDbConnection", "string"]])',
     );
 
     // The prelude precedes the lowered registration.

@@ -13,18 +13,20 @@ function codes(diags: readonly { code: number }[]): number[] {
 
 describe("factory-signature diagnostic (§4.5)", () => {
   test("fires when the factory takes the wrong number of args", () => {
-    // Foo ctor: (a: IA, b: string) — IA is a resolvable token, b is a hole. The
-    // factory must supply exactly the 1 hole; declaring 2 params is a mismatch.
+    // Foo ctor: (a: IA, b: symbol) — IA is a resolvable token, b is a hole
+    // (symbol stays null; wide primitives like string/number/boolean are now bare
+    // tokens). The factory must supply exactly the 1 hole; declaring 2 params is
+    // a mismatch.
     const src = `
       interface IA {}
       class B2 {}
       interface IFoo {}
       class Foo implements IFoo {
-        constructor(a: IA, b: string) {}
+        constructor(a: IA, b: symbol) {}
       }
       interface ISvc {}
       class Svc implements ISvc {
-        constructor(makeFoo: (x: B2, y: number) => Foo) {}
+        constructor(makeFoo: (x: B2, y: symbol) => Foo) {}
       }
       declare const services: any;
       services.add<ISvc>(Svc).as<"singleton">();
@@ -40,16 +42,18 @@ describe("factory-signature diagnostic (§4.5)", () => {
   });
 
   test("no diagnostic when the factory arity matches the produced holes", () => {
-    // Foo ctor: (a: IA registered, b: string hole) → factory supplies just b.
+    // Foo ctor: (a: IA registered, b: symbol hole) → factory supplies just b.
+    // Wide primitives (string/number/boolean) are now bare tokens, not holes —
+    // symbol remains a genuine hole.
     const src = `
       interface IA {}
       interface IFoo {}
       class Foo implements IFoo {
-        constructor(a: IA, b: string) {}
+        constructor(a: IA, b: symbol) {}
       }
       interface ISvc {}
       class Svc implements ISvc {
-        constructor(makeFoo: (b: string) => Foo) {}
+        constructor(makeFoo: (b: symbol) => Foo) {}
       }
       declare const services: any;
       services.add<ISvc>(Svc).as<"singleton">();
@@ -64,21 +68,22 @@ describe("factory-signature diagnostic (§4.5)", () => {
     // SqlUserRepo is hand-annotated via @signature (authoritative — no
     // transformer-synthesized defineDeps). Its ctor still carries an inline
     // factory param `makeFoo: (...) => Foo`. Foo's ctor has exactly one hole
-    // (b: string; a: IA is resolvable), so the factory must take 1 arg; it
-    // declares 2 → mismatch. The §8 factory-signature diagnostic must still
-    // fire for the hand-declared slot, not be skipped by the annotated path.
+    // (b: symbol; a: IA is resolvable — wide primitives are now tokens, not holes),
+    // so the factory must take 1 arg; it declares 2 → mismatch. The §8
+    // factory-signature diagnostic must still fire for the hand-declared slot,
+    // not be skipped by the annotated path.
     const src = `
       import { signature } from "@fnioc/core";
       interface IA {}
       class B2 {}
       interface IFoo {}
       class Foo implements IFoo {
-        constructor(a: IA, b: string) {}
+        constructor(a: IA, b: symbol) {}
       }
       interface ISvc {}
       @signature("manual:IA")
       class Svc implements ISvc {
-        constructor(makeFoo: (x: B2, y: number) => Foo) {}
+        constructor(makeFoo: (x: B2, y: symbol) => Foo) {}
       }
       declare const services: any;
       services.add<ISvc>(Svc).as<"singleton">();
@@ -120,17 +125,20 @@ describe("factory-signature diagnostic (§4.5)", () => {
   });
 
   test("no diagnostic for a hand-declared factory slot with matching arity", () => {
+    // Foo ctor: (a: IA, b: symbol) — IA is a resolvable token, b is a hole.
+    // Wide primitives (string/number/boolean) are now bare tokens, so symbol
+    // is used as the genuine hole here.
     const src = `
       import { signature } from "@fnioc/core";
       interface IA {}
       interface IFoo {}
       class Foo implements IFoo {
-        constructor(a: IA, b: string) {}
+        constructor(a: IA, b: symbol) {}
       }
       interface ISvc {}
       @signature("manual:IA")
       class Svc implements ISvc {
-        constructor(makeFoo: (b: string) => Foo) {}
+        constructor(makeFoo: (b: symbol) => Foo) {}
       }
       declare const services: any;
       services.add<ISvc>(Svc).as<"singleton">();

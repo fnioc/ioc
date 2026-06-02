@@ -19,7 +19,7 @@
 // one fail loudly instead of silently capturing it.
 
 import { getDeps } from "@fnioc/core";
-import type { DepSlot, FactoryRef, ScopeRef, Token } from "@fnioc/core";
+import type { AnyOf, DepSlot, FactoryRef, ScopeRef, Token } from "@fnioc/core";
 import type { Func } from "@rhombus-toolkit/func";
 
 import {
@@ -95,6 +95,19 @@ function isScopeRef(slot: DepSlot): slot is ScopeRef {
     slot !== null &&
     typeof slot === "object" &&
     (slot as { scope?: unknown }).scope === true
+  );
+}
+
+/**
+ * True when a `DepSlot` is an `AnyOf` — an inline union of alternatives tried
+ * in declaration order. The first member that resolves wins; exhausting all
+ * members throws `UnregisteredTokenError`.
+ */
+function isAnyOf(slot: DepSlot): slot is AnyOf {
+  return (
+    slot !== null &&
+    typeof slot === "object" &&
+    Array.isArray((slot as { anyOf?: unknown }).anyOf)
   );
 }
 
@@ -393,6 +406,7 @@ export class ServiceProvider<S extends string = string>
     const args = signature.map((slot) => {
       if (isScopeRef(slot)) return providerView;
       if (isFactoryRef(slot)) return this.makeFactory(slot, owningFrame);
+      if (isAnyOf(slot)) return this.resolveAnyOf(slot, owningFrame, stack);
       // Selection guarantees every remaining slot is a resolvable token (a hole
       // would have made this signature unsatisfiable).
       return this.resolveWith<unknown>(slot as Token, owningFrame, stack);
@@ -441,6 +455,11 @@ export class ServiceProvider<S extends string = string>
         // target on demand, resolving the target's own deps relative to the
         // owning frame so §5.4 still holds at call time.
         return this.makeFactory(slot, owningFrame);
+      }
+      if (isAnyOf(slot)) {
+        // An inline-union parameter: try each member in declaration order; first
+        // that resolves wins.
+        return this.resolveAnyOf(slot, owningFrame, stack);
       }
       // A string token — resolve it through the owning frame's chain. (Selection
       // guarantees no hole reaches here: a hole is unresolvable, so a signature
@@ -548,6 +567,13 @@ export class ServiceProvider<S extends string = string>
     const args = signature.map((slot) => {
       if (isScopeRef(slot)) return providerView;
       if (isFactoryRef(slot)) return this.makeFactory(slot, owningFrame);
+      if (isAnyOf(slot)) {
+        if (this.isResolvable(slot)) {
+          return this.resolveAnyOf(slot, owningFrame, stack);
+        }
+        // No member is resolvable — treat as caller-supplied.
+        return callerArgs[nextCallerArg++];
+      }
       // An unregistered token (a hole is just one) is caller-supplied: take the
       // next arg. A registered token resolves through the chain.
       if (!this.isResolvable(slot)) {
@@ -560,6 +586,55 @@ export class ServiceProvider<S extends string = string>
         ? new target.ctor(...(args as never[]))
         : target.factory(...args)
     ) as T;
+  }
+
+  /**
+   * Resolves an `AnyOf` slot by trying each member in declaration order. The
+   * first member that resolves wins. Exhausting all members throws
+   * `UnregisteredTokenError` on a joined description of the tried tokens.
+   *
+   * Members that are not `isResolvable` (holes, unregistered tokens) are skipped
+   * immediately. Members that throw `MissingScopeError` (captive misregistration)
+   * are caught and treated as "not resolved" — the next member is tried. This
+   * means a `ScopeRef`-above-vantage member gracefully falls through to the next
+   * candidate, rather than propagating the captive error.
+   */
+  private resolveAnyOf<T>(
+    slot: AnyOf,
+    owningFrame: Scope | undefined,
+    stack: Token[],
+  ): T {
+    for (const member of slot.anyOf) {
+      if (!this.isResolvable(member)) continue;
+      try {
+        return this.resolveSlot<T>(member, owningFrame, stack);
+      } catch {
+        // Member failed (UnregisteredTokenError, MissingScopeError, etc.) — try next.
+        continue;
+      }
+    }
+    // All members exhausted — unresolved.
+    const tried = slot.anyOf
+      .filter((m): m is Token => typeof m === "string")
+      .join(" | ");
+    throw new UnregisteredTokenError(tried || "<AnyOf>");
+  }
+
+  /**
+   * Dispatch a single `DepSlot` to its resolution path. Factors out the
+   * per-slot dispatch used inside `resolveAnyOf` (and could be shared with
+   * `construct` / `invokeFactory`).
+   */
+  private resolveSlot<T>(
+    slot: DepSlot,
+    owningFrame: Scope | undefined,
+    stack: Token[],
+  ): T {
+    if (isScopeRef(slot)) return this.makeProviderView(owningFrame, stack) as unknown as T;
+    if (isFactoryRef(slot)) return this.makeFactory(slot, owningFrame) as unknown as T;
+    if (isAnyOf(slot)) return this.resolveAnyOf<T>(slot, owningFrame, stack);
+    // Must be a string token at this point.
+    return this.resolveWith<T>(slot as Token, owningFrame, stack);
   }
 
   /**
@@ -597,7 +672,14 @@ export class ServiceProvider<S extends string = string>
         if (isFactoryRef(slot) || isScopeRef(slot)) continue;
         if (!this.isResolvable(slot)) {
           satisfiable = false;
-          if (typeof slot === "string") unsatisfiable.add(slot);
+          if (typeof slot === "string") {
+            unsatisfiable.add(slot);
+          } else if (isAnyOf(slot)) {
+            // Collect the string-token members for the error message.
+            for (const member of slot.anyOf) {
+              if (typeof member === "string") unsatisfiable.add(member);
+            }
+          }
         }
       }
       if (satisfiable) return sig;
@@ -626,12 +708,19 @@ export class ServiceProvider<S extends string = string>
   }
 
   /**
-   * True when `slot` is a registered string token in the sealed map. A hole
-   * (`null`), `FactoryRef`, or `ScopeRef` is not a registered token, so it is
-   * never "resolvable" in this sense.
+   * True when `slot` can be auto-resolved by the engine (not caller-supplied).
+   *   - A string token: registered in the sealed map.
+   *   - An `AnyOf`: at least one member is resolvable (recursive).
+   *   - A `ScopeRef`: always resolvable (filled with the live provider view).
+   *   - A `FactoryRef`: resolvable when its target is registered.
+   *   - A hole (`null`): never resolvable (always caller-supplied).
    */
   private isResolvable(slot: DepSlot): boolean {
-    return typeof slot === "string" && this.lookup(slot) !== undefined;
+    if (typeof slot === "string") return this.lookup(slot) !== undefined;
+    if (isAnyOf(slot)) return slot.anyOf.some((member) => this.isResolvable(member));
+    if (isScopeRef(slot)) return true;
+    if (isFactoryRef(slot)) return this.lookup(slot.factory) !== undefined;
+    return false; // hole (null) — caller-supplied
   }
 
   // ── Disposal ────────────────────────────────────────────────────────────────

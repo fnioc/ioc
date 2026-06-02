@@ -105,8 +105,9 @@ describe("ts-patch production e2e (ESM)", () => {
     // ɵreg2=WidgetHost (declaration order in main.ts).
     expect(emitted).toContain('import { defineDeps } from "@fnioc/di"');
     expect(emitted).toContain("defineDeps(ɵreg0, [[]]);");
+    // `table: string` now emits bare token "string" (wide-primitive→bare-token rule).
     expect(emitted).toContain(
-      'defineDeps(ɵreg1, [["./services/ILogger", "./services/IDbConnection", null]]);',
+      'defineDeps(ɵreg1, [["./services/ILogger", "./services/IDbConnection", "string"]]);',
     );
     // The lowered registrations reference the hoisted consts, not the raw classes.
     expect(emitted).toContain(

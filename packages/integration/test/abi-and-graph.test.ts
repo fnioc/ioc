@@ -54,14 +54,16 @@ describe("emit contract — transformer-emitted lowered output (PRD §8)", () =>
     expect(wiring).toContain('import { defineDeps } from "@fnioc/di"');
   });
 
-  test("class with optional table param emits two overloads: long [tokens..., null] + short [tokens...] (overload expansion)", () => {
+  test("class with optional table param emits two overloads: long [tokens..., \"string\"] + short [tokens...] (overload expansion)", () => {
     const wiring = project.emitted("sample/wiring.js");
-    // `table?: string` triggers overload expansion: the full [logger, db, null] overload
-    // AND the shorter [logger, db] fallback. Greedy selection tries longest first; the
-    // null slot is unsatisfiable on a direct resolve → falls to the 2-slot form.
+    // `table?: string` triggers overload expansion: the full [logger, db, "string"]
+    // overload AND the shorter [logger, db] fallback. Greedy selection tries longest
+    // first; the "string" slot is unsatisfiable (not registered) on a direct resolve
+    // → falls to the 2-slot form. Wide primitives emit bare token strings (not null)
+    // per the wide-primitive→bare-token rule.
     const n = hoistName(wiring, "SqlUserRepo");
     expect(wiring).toContain(
-      `defineDeps(${n}, [["./sample/contracts/ILogger", "./sample/contracts/IDbConnection", null], ["./sample/contracts/ILogger", "./sample/contracts/IDbConnection"]]);`,
+      `defineDeps(${n}, [["./sample/contracts/ILogger", "./sample/contracts/IDbConnection", "string"], ["./sample/contracts/ILogger", "./sample/contracts/IDbConnection"]]);`,
     );
     expect(wiring).toContain(
       `services.add("./sample/contracts/IUserRepo", ${n}).as("request");`,
@@ -132,8 +134,9 @@ describe("lowered output resolves the full graph against @fnioc/di", () => {
     expect(repo.find(7)).toBe("result(SELECT * FROM users WHERE id=7)");
     expect((resolved.logger as { lines: string[] }).lines).toContain("find 7");
 
-    // The unregistered `table` ctor param landed as a hole (undefined on a direct
-    // resolve — there is no caller).
+    // The `table` ctor param emits as bare token "string" (not null). Since
+    // "string" is not registered, the engine falls to the shorter overload and
+    // `table` receives `undefined` (not provided).
     expect((repo as unknown as { table: unknown }).table).toBeUndefined();
 
     // The named-callable opt-out: ThunkConsumer.thunk is the resolved IThunk
@@ -205,9 +208,9 @@ describe("factory injection e2e (transformer-emitted FactoryRef → di callable)
       makeReport: (requestId: string) => { repo: unknown; requestId: string | undefined };
     };
 
-    // The registered repo dep is resolved; the `requestId: string` hole (string
-    // is always null in the transformer output → always caller-supplied) is
-    // filled positionally by the caller-supplied string arg.
+    // The registered repo dep is resolved; the `requestId: string` slot emits as
+    // the bare token "string" (wide-primitive→bare-token rule). Since "string" is
+    // not registered in the container, it is caller-supplied and filled positionally.
     const report1 = reportService.makeReport("req-99");
     const report2 = reportService.makeReport("req-99");
     expect(report1.requestId).toBe("req-99");

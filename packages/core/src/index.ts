@@ -20,6 +20,7 @@ export type {
   Token,
   FactoryRef,
   ScopeRef,
+  AnyOf,
   DepSlot,
   DepTarget,
   DepRecord,
