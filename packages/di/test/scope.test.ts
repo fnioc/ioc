@@ -7,9 +7,10 @@ import {
 import { defineDeps } from "@fnioc/core";
 import { T } from "./fixtures.js";
 
-// Scope chain + hierarchical lookup, child-shadows-parent override, the
-// captive-dependency throw, and THE critical rule (§"construct relative to the
-// owning scope").
+// ServiceProvider / Scope chain + hierarchical lookup, the captive-dependency
+// throw, and THE critical rule (§"construct relative to the owning scope").
+// Scope-local registration was removed in the container redesign — all
+// registrations are sealed on DiBuilder.build().
 
 class RealDb {
   public readonly kind = "real";
@@ -18,42 +19,28 @@ class FakeDb {
   public readonly kind = "fake";
 }
 
-describe("scope chain + child-shadows-parent override", () => {
-  test("a child-scope override shadows the builder's base registration", () => {
+describe("scope chain + sealed registration lookup", () => {
+  test("a later builder registration shadows the earlier one (last-wins)", () => {
     const services = new DiBuilder<"singleton", "request">();
     services.add(T.Db, RealDb).as("request");
+    services.addValue(T.Db, new FakeDb());
 
     const root = services.build();
     const req = root.createScope("request");
-    // Local value override on the request scope: a fake DB just for this subtree.
-    req.addValue(T.Db, new FakeDb());
 
+    // addValue was registered last — it wins across all scopes.
     const resolved = req.resolve<RealDb | FakeDb>(T.Db);
     expect(resolved.kind).toBe("fake");
   });
 
-  test("a parent override is shadowed by a nearer child override", () => {
-    const services = new DiBuilder<"singleton", "request">();
-    services.add(T.Db, RealDb).as("request");
-
-    const root = services.build();
-    root.addValue(T.Db, new FakeDb()); // override at root...
-    const req = root.createScope("request");
-    const realInstance = new RealDb();
-    req.addValue(T.Db, realInstance); // ...shadowed nearer the leaf
-
-    expect(req.resolve<RealDb>(T.Db)).toBe(realInstance);
-    expect(root.resolve<FakeDb>(T.Db).kind).toBe("fake");
-  });
-
-  test("lookup falls through to the builder base map when no local override", () => {
+  test("lookup falls through to the builder base map when no override", () => {
     const services = new DiBuilder<"singleton", "request">();
     services.add(T.Db, RealDb).as("singleton");
 
     const root = services.build();
     const req = root.createScope("request");
 
-    // No override anywhere in req's locals — resolves through to the base map,
+    // No override anywhere — resolves through to the base map,
     // owned by the singleton ancestor.
     const fromReq = req.resolve<RealDb>(T.Db);
     const fromRoot = root.resolve<RealDb>(T.Db);
@@ -64,6 +51,20 @@ describe("scope chain + child-shadows-parent override", () => {
     const services = new DiBuilder<"singleton">();
     const root = services.build();
     expect(() => root.resolve(T.Db)).toThrow(UnregisteredTokenError);
+  });
+
+  test("SEAL-ON-BUILD: builder mutations after build() do not affect the root", () => {
+    const services = new DiBuilder<"singleton">();
+    services.add(T.Db, RealDb).as("singleton");
+    const root = services.build();
+
+    // Adding a new registration after build() must not leak into the sealed map.
+    services.addValue(T.Db, new FakeDb());
+
+    // The root still resolves the original class registration.
+    const resolved = root.resolve<RealDb | FakeDb>(T.Db);
+    expect(resolved.kind).toBe("real");
+    expect(resolved).toBeInstanceOf(RealDb);
   });
 });
 

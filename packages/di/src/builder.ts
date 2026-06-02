@@ -1,5 +1,5 @@
 // The registration builder. Holds the base token → registration list map and
-// mints the root Scope. Three registration surfaces:
+// mints the root ServiceProvider. Three registration surfaces:
 //   - `add`        — a class (its ctor deps are injected),
 //   - `addFactory` — a factory function (its call-param deps are injected),
 //   - `addValue`   — an already-built instance (no deps, no lifetime).
@@ -13,14 +13,14 @@
 import type { Token } from "@fnioc/core";
 import type { Func } from "@rhombus-toolkit/func";
 
-import { Scope } from "./scope.js";
+import { Scope, ServiceProvider } from "./scope.js";
 import type {
   ClassRegistration,
   Ctor,
   FactoryRegistration,
   Factory,
   Registration,
-  ResolveScope,
+  Resolver,
 } from "./types.js";
 
 /**
@@ -156,16 +156,16 @@ export class DiBuilder<
    * runtime form the transformer emits for an authored `add<I>(fn)`, and what a
    * plugin-less caller writes directly.
    *
-   * Parameter injection follows the metadata rule (see `Scope.instantiate`): a
+   * Parameter injection follows the metadata rule (see `ServiceProvider`): a
    * factory WITH a `defineDeps` record (emitted by the transformer) has each
    * parameter injected by its slot; a record-less factory (the plugin-less
-   * escape hatch) is called with the live scope — type it `(scope: ResolveScope)
-   * => T` and `scope.resolve(...)` its own deps. Returns the `.as(scope?)`
+   * escape hatch) is called with the live provider — type it `(sp: Resolver)
+   * => T` and `sp.resolve(...)` its own deps. Returns the `.as(scope?)`
    * continuation so a factory caches at a named scope exactly like a class.
    */
   public addFactory(
     token: Token,
-    factory: Func<[ResolveScope], unknown>,
+    factory: Func<[Resolver], unknown>,
   ): AddBuilder<Root | Children>;
   public addFactory(
     token: Token,
@@ -201,15 +201,24 @@ export class DiBuilder<
   }
 
   /**
-   * Mints the root scope. The root is a real, app-lifetime object — its name is
-   * `Root` (the lifetime that singletons, or whatever the app's longest
-   * lifetime is, bind to). No argument: `build()` owns the root name via the
-   * `Root` type parameter.
+   * Mints the root ServiceProvider with a SEALED copy of the registration map.
+   * Sealing (deep-freezing the map and each per-token list) ensures that any
+   * `.add()` call on the builder after `build()` cannot mutate what the root
+   * and its descendants see — the container's view is fixed at construction time.
    */
-  public build(): Scope<Root | Children> {
-    return new Scope<Root | Children>(
-      this.rootName as Root | Children,
-      this.registrations,
+  public build(): ServiceProvider<Root | Children> {
+    // Deep-copy the registrations so post-build builder mutations can't affect
+    // the sealed map. Each per-token list is frozen independently.
+    const sealed = new Map<Token, Registration[]>();
+    for (const [token, list] of this.registrations) {
+      sealed.set(token, Object.freeze([...list]) as Registration[]);
+    }
+    Object.freeze(sealed);
+
+    const rootFrame = new Scope(this.rootName as string);
+    return new ServiceProvider<Root | Children>(
+      sealed as ReadonlyMap<Token, Registration[]>,
+      rootFrame,
     );
   }
 }

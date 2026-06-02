@@ -5,7 +5,7 @@
 // repo, factory params (bare + partitioned), the named-callable opt-out, and the
 // async-config value path.
 
-import type { Scope } from "@fnioc/di";
+import type { ServiceProvider } from "@fnioc/di";
 import {
   services,
   CONFIG_TOKEN,
@@ -40,7 +40,7 @@ const T = {
 export { T, resetConfigFactoryRuns };
 
 /** Mints the root (singleton) scope from the transformer-lowered registrations. */
-export function rootScope(): Scope<SampleScopes> {
+export function rootScope(): ServiceProvider<SampleScopes> {
   return services.build();
 }
 
@@ -59,8 +59,8 @@ export interface ResolvedGraph {
  * returns the live instances so a test can assert wiring + scoping.
  */
 export function resolveGraph(): {
-  root: Scope<SampleScopes>;
-  req: Scope<SampleScopes>;
+  root: ServiceProvider<SampleScopes>;
+  req: ServiceProvider<SampleScopes>;
   resolved: ResolvedGraph;
 } {
   const root = rootScope();

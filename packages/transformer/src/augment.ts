@@ -47,7 +47,7 @@ declare module "@fnioc/di" {
     as<S extends Scopes>(): void;
   }
 
-  interface ResolveScope {
+  interface Resolver {
     /**
      * Tokenless authored resolve — `resolve<IFoo>()`. The transformer lowers it
      * to an explicit-token `resolve("token")` (or `resolveFactory` for a
@@ -56,10 +56,10 @@ declare module "@fnioc/di" {
     resolve<T>(): T;
   }
 
-  // A class does NOT inherit interface overloads, so `scope.resolve<I>()` needs
-  // the tokenless form merged onto the `Scope` class itself, not just the
-  // structural `ResolveScope` it implements.
-  interface Scope<Scopes extends string> {
+  // A class does NOT inherit interface overloads, so `sp.resolve<I>()` needs
+  // the tokenless form merged onto the `ServiceProvider` class itself, not just
+  // the structural `Resolver` it implements.
+  interface ServiceProvider<S extends string> {
     resolve<T>(): T;
   }
 }

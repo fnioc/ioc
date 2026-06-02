@@ -12,11 +12,15 @@
 // Phase 2D.2 adds factory injection (a ctor param typed `() => IFoo` becomes an
 // injected callable) and hole-filling (a caller-supplied parameter filled
 // positionally at factory call time).
+//
+// Container redesign: `Scope` is now a pure frame (cache + disposal + parent
+// link), and `ServiceProvider` is the public container surface implementing
+// `Resolver` + `ScopeFactory` + Disposable.
 
 export { DiBuilder } from "./builder.js";
 export type { AddBuilder } from "./builder.js";
 
-export { Scope } from "./scope.js";
+export { ServiceProvider, Scope } from "./scope.js";
 
 export type {
   Ctor,
@@ -25,6 +29,10 @@ export type {
   ClassRegistration,
   FactoryRegistration,
   ValueRegistration,
+  Resolver,
+  ScopeFactory,
+  Lifetime,
+  // Backwards-compat alias.
   ResolveScope,
 } from "./types.js";
 
