@@ -6,8 +6,8 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "test": "bun test",
-    "lint": "tsc -p tsconfig.json --noEmit"
+    "test": "moon run integration:test",
+    "lint": "moon run integration:lint"
   },
   "devDependencies": {
     "@fnioc/core": "workspace:*",

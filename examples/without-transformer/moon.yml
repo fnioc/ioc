@@ -13,7 +13,7 @@ dependsOn:
 
 tasks:
   build:
-    command: 'bun run build'
+    command: 'bun x tsc -p tsconfig.json'
     deps:
       - 'di:build'
     inputs:
@@ -24,7 +24,8 @@ tasks:
     outputs:
       - 'dist'
   test:
-    command: 'bun run test'
+    # Run the compiled output and diff against the golden snapshot.
+    script: 'node dist/main.js > /tmp/fnioc-without-transformer.out && diff -u expected.txt /tmp/fnioc-without-transformer.out'
     deps:
       - 'build'
     inputs:
@@ -33,7 +34,7 @@ tasks:
       - 'tsconfig.json'
       - 'package.json'
   lint:
-    command: 'bun run lint'
+    command: 'bun x tsc --noEmit -p tsconfig.json'
     deps:
       - 'di:build'
     inputs:

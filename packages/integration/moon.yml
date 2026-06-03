@@ -15,7 +15,7 @@ dependsOn:
 
 tasks:
   test:
-    command: 'bun run test'
+    command: 'bun test'
     deps:
       - 'core:build'
       - 'di:build'
@@ -25,7 +25,7 @@ tasks:
       - 'tsconfig.json'
       - 'package.json'
   lint:
-    command: 'bun run lint'
+    command: 'bun x tsc -p tsconfig.json --noEmit'
     deps:
       - 'core:build'
       - 'di:build'

@@ -22,9 +22,9 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "build": "tsc --noEmit -p tsconfig.json",
-    "test": "bun test",
-    "lint": "tsc --noEmit -p tsconfig.json"
+    "build": "moon run core:build",
+    "test": "moon run core:test",
+    "lint": "moon run core:lint"
   },
   "dependencies": {
     "@rhombus-toolkit/func": "3.5.3"

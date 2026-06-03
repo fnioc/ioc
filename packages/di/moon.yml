@@ -13,7 +13,9 @@ dependsOn:
 
 tasks:
   build:
-    command: 'bun run build'
+    # Typecheck first, then bundle: tsc --noEmit catches type errors before bun
+    # build.ts produces the dist artefacts.
+    script: 'bun x tsc --noEmit -p tsconfig.json && bun build.ts'
     deps:
       - 'core:build'
     inputs:
@@ -26,13 +28,13 @@ tasks:
     outputs:
       - 'dist'
   test:
-    command: 'bun run test'
+    command: 'bun test'
     inputs:
       - 'src/**/*'
       - 'test/**/*'
       - 'tsconfig.json'
       - 'package.json'
   lint:
-    command: 'bun run lint'
+    command: 'bun x tsc --noEmit -p tsconfig.json'
     options:
       cache: false
