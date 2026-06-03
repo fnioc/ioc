@@ -105,11 +105,32 @@ export function tokenForType(
  * the shape of `declare const TOK: unique symbol; T & { readonly [TOK]?: K }`.
  * We also accept a property whose internal name is "TOK" as a fallback for
  * environments where the unique-symbol key is represented by its declaration name.
+ *
+ * Union awareness: for a type like `(T & { [TOK]?: K }) | undefined` (which
+ * arises from `x?: Inject<T, K>` or `x: Inject<T, K> | undefined`),
+ * `getPropertiesOfType` returns only properties common to ALL union members —
+ * `undefined` contributes none, so the brand is invisible. We handle this by
+ * iterating union constituents, skipping nullish members, and checking each
+ * non-nullish member individually. The first branded token found wins.
  */
 export function injectTokenFor(
   type: ts.Type,
   checker: ts.TypeChecker,
 ): string | undefined {
+  // Union-aware: if the type is a union, recurse into each non-nullish member.
+  // This handles `Inject<T, K> | undefined` (from `x?: Inject<T, K>` or
+  // `x: Inject<T, K> | undefined`).
+  if (type.isUnion()) {
+    for (const member of type.types) {
+      const isNullish =
+        member.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null);
+      if (isNullish) continue;
+      const result = injectTokenFor(member, checker);
+      if (result !== undefined) return result;
+    }
+    return undefined;
+  }
+
   // Walk all properties of the type (handles intersections automatically via the
   // checker, which flattens them for getProperties()).
   const props = checker.getPropertiesOfType(type);
