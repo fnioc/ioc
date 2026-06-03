@@ -519,7 +519,7 @@ export class ServiceProvider<S extends string = string>
     return (...callArgs: unknown[]) =>
       sp.#buildPartitioned(
         target,
-        targetSignature as ReadonlyArray<DepSlot> | undefined,
+        targetSignature as readonly DepSlot[] | undefined,
         callerParams,
         callArgs,
         owningFrame,
@@ -545,7 +545,7 @@ export class ServiceProvider<S extends string = string>
    */
   #buildPartitioned<T>(
     target: ClassRegistration | FactoryRegistration,
-    signature: ReadonlyArray<DepSlot> | undefined,
+    signature: readonly DepSlot[] | undefined,
     callerParams: readonly Token[],
     callArgs: readonly unknown[],
     owningFrame: Scope | undefined,
@@ -625,9 +625,9 @@ export class ServiceProvider<S extends string = string>
   #selectSignature(
     token: Token,
     targetName: string,
-    signatures: ReadonlyArray<ReadonlyArray<DepSlot>>,
+    signatures: readonly (readonly DepSlot[])[],
     _owningFrame: Scope | undefined,
-  ): ReadonlyArray<DepSlot> {
+  ): readonly DepSlot[] {
     // Stable sort by descending length; index keeps equal-arity ties in
     // registration order.
     const ordered = signatures
@@ -669,8 +669,8 @@ export class ServiceProvider<S extends string = string>
    * registration order.
    */
   #selectTargetSignature(
-    signatures: ReadonlyArray<ReadonlyArray<DepSlot>>,
-  ): ReadonlyArray<DepSlot> {
+    signatures: readonly (readonly DepSlot[])[],
+  ): readonly DepSlot[] {
     return signatures
       .map((sig, index) => ({ sig, index }))
       .sort((a, b) =>

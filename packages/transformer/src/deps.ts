@@ -63,7 +63,7 @@ export interface UnionSlot {
 export type Slot = string | FactorySlot | ScopeSlot | UnionSlot;
 
 /** One emitted signature: positional slots (token / hole / factory / scope). */
-export type Signature = ReadonlyArray<Slot>;
+export type Signature = readonly Slot[];
 
 /** True when a slot is a factory ref rather than a plain token / scope / union. */
 export function isFactorySlot(slot: Slot): slot is FactorySlot {

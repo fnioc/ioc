@@ -14,11 +14,11 @@ import { DiagnosticCode } from "../src/index.js";
  */
 function depsArrayFor(output: string, ctor: string): string {
   const hoistMatch = output.match(new RegExp(`const (ɵreg\\d+) = ${ctor};`));
-  if (!hoistMatch) throw new Error(`no hoisted const for ${ctor} in:\n${output}`);
+  if (!hoistMatch) {throw new Error(`no hoisted const for ${ctor} in:\n${output}`);}
   const regName = hoistMatch[1]!;
   const marker = `defineDeps(${regName}, `;
   const start = output.indexOf(marker);
-  if (start < 0) throw new Error(`no defineDeps for ${regName} in:\n${output}`);
+  if (start < 0) {throw new Error(`no defineDeps for ${regName} in:\n${output}`);}
   const from = start + marker.length;
   // The emitted form is `defineDeps(ɵregN, [[...]]);`. The signature literal
   // `[[...]]` ends just before the call's `)` — i.e. at the first `]` of `]);`.
