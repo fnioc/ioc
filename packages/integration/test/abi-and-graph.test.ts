@@ -44,7 +44,7 @@ afterAll(() => {
 // Helper: find the ɵregN name for a class in the emitted wiring JS.
 function hoistName(wiring: string, className: string): string {
   const m = wiring.match(new RegExp(`const (ɵreg\\d+) = ${className};`));
-  if (!m) throw new Error(`No hoist const found for ${className} in emitted wiring`);
+  if (!m) {throw new Error(`No hoist const found for ${className} in emitted wiring`);}
   return m[1]!;
 }
 
