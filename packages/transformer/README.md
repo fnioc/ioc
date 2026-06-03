@@ -84,7 +84,7 @@ class Handler {
 
 Works in any type position the transformer reads: class ctor params, inline factory params, return types. The value type stays `T` — a plain `ICache` is assignable; the brand property is optional.
 
-`Inject` is the escape hatch when the transformer cannot derive a token for an arg (anonymous type, bare generic, symbol-less primitive object): brand it rather than leaving the transformer to error.
+`Inject` is the escape hatch for anonymous or purely structural types — types without a name that the transformer cannot tokenize. Named types (including primitive keywords like `string`, `number`, `boolean`) always produce a token; `Inject` is not needed for them.
 
 ### `nameof<T>()`
 
@@ -118,11 +118,11 @@ For each `services.add<IFoo>(Foo).as<"scope">()` call the transformer finds, it:
 
 1. Reads `Foo`'s constructor parameter types via the TypeChecker.
 2. Derives a slot per parameter:
-   - Interfaces and class types → string token per the derivation rule above.
+   - Interfaces, class types, named type aliases, and named built-ins (`string`, `number`, `boolean`, `symbol`, `bigint`, `any`, `unknown`, `never`) → string token per the derivation rule above (named built-ins tokenize by keyword name). An unregistered token is a runtime miss, not a compile error.
    - `Promise<X>` → token for `X` (not a `Promise<X>` token — see below).
    - **Inline function types** (`() => IFoo`, `(a: B) => IFoo`) → `{ type: "pkg:IFoo" }` (a `FactoryRef` — see factory detection below).
    - **Inline union types** (`A | B` written directly at the annotation site) → `{ union: ["pkg:A", "pkg:B"] }` (a `Union` slot — see named vs inline unions below).
-   - Types the transformer cannot tokenize (anonymous types, bare generics, symbol-less primitive objects) → **hard compile error**: "name this type or brand it with `Inject<T, 'token'>`."
+   - **Anonymous inline structural types** (no name, no `Inject` brand) → **hard compile error** (990006 `UnderivableToken`): "name this type or brand it with `Inject<T, 'token'>`."
 3. Emits `defineDeps(Foo, [[...slots]])` immediately before the registration call.
 4. Rewrites the call from the type-driven form to the plain-data form.
 
@@ -130,14 +130,15 @@ For each `services.add<IFoo>(Foo).as<"scope">()` call the transformer finds, it:
 // Author code
 services.add<IUserRepo>(SqlUserRepo).as<"request">();
 // SqlUserRepo constructor: (log: ILogger, db: IDbConnection, table: string)
-// 'table' is a string primitive — brand it or supply a registration override
+// 'table' has type string → token "string" (runtime miss if "string" is unregistered)
+// use Inject<string, "app:tableName"> to pin a custom token, or supply a registration override
 
 // Lowered output (with table branded as Inject<string, "app:tableName">)
 defineDeps(SqlUserRepo, [["pkg:ILogger", "pkg:IDbConnection", "app:tableName"]]);
 services.add("pkg:IUserRepo", SqlUserRepo).as("request");
 ```
 
-The transformer normally emits exactly one signature per class — the single canonical constructor signature it sees statically.
+For a class with a single constructor, the transformer emits exactly one signature. For a class with declared overloads, it emits one signature per bodyless overload declaration in order — the implementation signature is ignored (it is not caller-visible).
 
 ### `Promise<X>` unwrap
 
@@ -284,6 +285,17 @@ apart. Give them different lengths.
 ```
 
 This check runs on all registrations, including manually-annotated ones.
+
+### Underivable token (code 990006)
+
+A constructor or factory parameter whose type is an anonymous inline structural type — no name, no `Inject<T, "tok">` brand:
+
+```
+cannot derive a token for this type — name the type or brand the parameter
+with `Inject<T, 'my:token'>`
+```
+
+This is a hard compile error. Named types (interfaces, classes, type aliases, primitive keywords) always produce a token and never trigger this diagnostic. The fix is to either define a named type or brand the parameter with `Inject<T, "my:token">`.
 
 An `@fnioc/eslint-plugin` that surfaces these diagnostics in-editor is planned for a future release.
 
