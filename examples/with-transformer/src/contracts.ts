@@ -38,8 +38,8 @@ export interface IMetricsBackend {
 /**
  * A "third-party" diagnostics service — a class we cannot annotate with its
  * deps because we do not own the source. The Inject brand is used on one of its
- * parameters to pin a specific token, overriding the transformer's structural
- * derivation. The `forCtor`/registration override path (§6) is the alternative.
+ * parameters to pin a specific token, overriding the transformer's derived token.
+ * The `forCtor`/registration override path is the alternative.
  */
 export interface IDiagnosticsService {
   diagnose(): string;

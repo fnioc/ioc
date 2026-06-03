@@ -19,8 +19,8 @@ const services = new DiBuilder<"singleton" | "request">();
 services.add<ILogger>(ConsoleLogger).as<"singleton">();
 services.add<IUserRepo>(SqlUserRepo).as<"request">();
 // SqlUserRepo constructor: (log: ILogger, db: IDbConnection, table: string)
-// 'table' is not a registered service — brand it with Inject<string, "app:tableName">
-// or supply a signature override at registration
+// 'table' has type string → token "string" (runtime miss if "string" is unregistered)
+// use Inject<string, "app:tableName"> to pin a custom token, or supply a signature override
 ```
 
 ```ts

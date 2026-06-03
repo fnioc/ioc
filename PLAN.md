@@ -116,21 +116,21 @@ Phase 5  Dir rename (ioc@rhombus-toolkit → ioc@fnioc) + session transfer
 
 **Dependencies:** Phase 0 green.
 
-**Acceptance criteria:** All items below pass `bun test`. `core` builds to `dist/`. The ABI shape (`DepRecord`), `ABI_VERSION`, global-symbol WeakMap, `defineDeps`, `@signature`, `forCtor`, `Token`, and `hole` are all exported and typed correctly. Two copies of `core` at the same `ABI_VERSION` share one WeakMap via `Symbol.for`.
+**Acceptance criteria:** All items below pass `bun test`. `core` builds to `dist/`. The ABI shape (`DepRecord`), `ABI_VERSION`, global-symbol WeakMap, `defineDeps`, `@signature`, `forCtor`, and `Token` are all exported and typed correctly. Two copies of `core` at the same `ABI_VERSION` share one WeakMap via `Symbol.for`. [superseded: `hole` sentinel removed; `DepRecord.signatures` is `ReadonlyArray<ReadonlyArray<DepSlot>>`; unregistered tokens are runtime misses, not null holes]
 
 **Branch:** `feat-core` in a worktree.
 
 ### Checklist
 
 - [ ] `Token` type alias (`= string`, no branding, no literal types)
-- [ ] `hole` sentinel — exported `null` alias; wire value is `null` (JSON-friendly)
+- [ ] `hole` sentinel — exported `null` alias; wire value is `null` (JSON-friendly) [superseded: hole removed; primitives tokenize by name; unregistered = runtime miss]
 - [ ] `ABI_VERSION` — exported integer constant (`1`)
-- [ ] `DepRecord` shape — `{ abi: number, signatures: ReadonlyArray<ReadonlyArray<Token | null>> }`
+- [ ] `DepRecord` shape — `{ abi: number, signatures: ReadonlyArray<ReadonlyArray<Token | null>> }` [superseded: `abi` field removed; shape is `{ signatures: ReadonlyArray<ReadonlyArray<DepSlot>> }`; slots are `Token | FactoryRef | ScopeRef | Union | LiteralRef`, no null]
 - [ ] Global-symbol WeakMap — `globalThis[Symbol.for(\`@fnioc/core:deps@${ABI_VERSION}\`)] ??= new WeakMap()` at module init; all reads/writes through this key. `Symbol.for` only (never unique symbol); version-suffixed.
 - [ ] `defineDeps(ctor, signatures)` — merges (appends unique) signatures into the ctor's `DepRecord`; creates the record if absent; writes through the global-symbol WeakMap
 - [ ] `@signature(...tokens)` — TC39 class decorator (NOT legacy); on apply calls `defineDeps(ctor, [[...tokens]])`; stacking = overloads
 - [ ] `forCtor(ctor).signature(...tokens)` — fluent free-function; chaining = overloads; same `signature` verb as the ABI field and the decorator
-- [ ] Unit tests: `defineDeps` append-unique semantics; WeakMap key isolation by ABI version; two-copies-share-one-map scenario; `@signature` stacking; `forCtor` chaining; `hole` wire value
+- [ ] Unit tests: `defineDeps` append-unique semantics; WeakMap key isolation by ABI version; two-copies-share-one-map scenario; `@signature` stacking; `forCtor` chaining; `hole` wire value [superseded: hole removed; test coverage updated accordingly]
 - [ ] `packages/core/src/index.ts` exports all of the above
 - [ ] `moon run core:build` green (`dist/` generated with `.d.ts`)
 - [ ] `moon run core:test` green
@@ -159,7 +159,7 @@ Phase 5  Dir rename (ioc@rhombus-toolkit → ioc@fnioc) + session transfer
 - [ ] `services.add<IFoo>(MyConcrete)` — one type param; concrete typed `new (...args: any[]) => IFoo`; plain `new`, NOT `abstract new`
 - [ ] `.as<S extends Scopes>()` fluent — attaches lifetime tag; compile-time `S extends Scopes` check
 - [ ] WeakMap read via `@fnioc/core`'s global-symbol key to retrieve `DepRecord`
-- [ ] Positional resolution: for each signature token, resolve registered dep or treat as `hole`; `new Ctor(...resolvedArgs)`
+- [ ] Positional resolution: for each signature token, resolve registered dep or treat as `hole`; `new Ctor(...resolvedArgs)` [superseded: hole removed; unregistered token = runtime miss (UnregisteredTokenError)]
 - [ ] Hand-fed token tests: register `"my:IFoo"` → `MyFoo`; resolve; assert correct instance
 - [ ] `moon run di:test` green
 
@@ -190,7 +190,7 @@ Phase 5  Dir rename (ioc@rhombus-toolkit → ioc@fnioc) + session transfer
 
 **Branch:** `feat-di-overloads`
 
-- [ ] When a ctor has multiple registered signatures (`DepRecord.signatures.length > 1`): scan longest → shortest; pick first where every param is satisfiable (token registered ∨ `hole` ∨ factory-typed)
+- [ ] When a ctor has multiple registered signatures (`DepRecord.signatures.length > 1`): scan longest → shortest; pick first where every param is satisfiable (token registered ∨ `hole` ∨ factory-typed) [superseded: hole removed; LiteralRef slots are always satisfiable; Union slots resolved first-match]
 - [ ] Equal-arity ties → registration order
 - [ ] Tests: longest wins; shorter fallback when longest unsatisfiable; equal-arity registration-order tie
 
@@ -210,7 +210,7 @@ Phase 5  Dir rename (ioc@rhombus-toolkit → ioc@fnioc) + session transfer
 
 - [ ] `container.register(token, { useFactory: (c) => ... })` — no dep array, no decorator, closure wires deps
 - [ ] `container.register(token, { useValue: instance })` — static instance
-- [ ] Re-export `@signature`, `forCtor`, `hole` from `@fnioc/core` (one-import ergonomics for consumers)
+- [ ] Re-export `@signature`, `forCtor`, `hole` from `@fnioc/core` (one-import ergonomics for consumers) [superseded: hole removed; re-exports are `@signature`, `forCtor`, `union`, `defineDeps`, etc.]
 - [ ] Tests: `useFactory` wires correctly; `useValue` returns same instance; override shadows parent registration
 - [ ] `moon run di:build` green (full package)
 - [ ] `moon run di:test` green (full suite)
@@ -247,12 +247,12 @@ Phase 5  Dir rename (ioc@rhombus-toolkit → ioc@fnioc) + session transfer
 
 #### 2B.3 — Dep extraction + `defineDeps` emission + registration lowering
 
-- [ ] At each `services.add<IFoo>(MyConcrete)` site: read ctor param types via TypeChecker; compute token per param; emit `null` only for types that can never be tokens (primitives)
+- [ ] At each `services.add<IFoo>(MyConcrete)` site: read ctor param types via TypeChecker; compute token per param; emit `null` only for types that can never be tokens (primitives) [superseded: primitives now tokenize by name; null/hole removed; anonymous structural types → hard error 990006]
 - [ ] Emit `defineDeps(MyConcrete, [[...tokens]])` call before the registration site
 - [ ] Emit `services.add("pkg:IFoo", MyConcrete).as("tag")` (lowered form)
 - [ ] `Promise<X>` unwrap: param typed `Promise<X>` → same token as `X`
 - [ ] Lowered output format is the ABI contract — must match `DepRecord.signatures` shape exactly
-- [ ] Tests: dep extraction round-trips; `null` for primitives; `Promise<X>` unwrap; multi-param class; registration lowering output snapshot
+- [ ] Tests: dep extraction round-trips; `null` for primitives; `Promise<X>` unwrap; multi-param class; registration lowering output snapshot [superseded: primitives produce named tokens, not null; test coverage updated]
 
 #### 2B.4 — Diagnostics + edge cases
 

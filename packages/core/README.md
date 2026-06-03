@@ -108,7 +108,7 @@ class Handler {
 }
 ```
 
-Works in any type position the transformer reads: class ctor params, inline factory params, return types. Use it as the escape hatch for anonymous or symbol-less types the transformer cannot otherwise tokenize — `Inject<{ n: number }, "my:opts">`.
+Works in any type position the transformer reads: class ctor params, inline factory params, return types. Use it as the escape hatch for anonymous or purely structural types — types with no name that the transformer cannot otherwise tokenize — `Inject<{ n: number }, "my:opts">`. Named types (interfaces, classes, primitive keywords) derive a token on their own and do not need `Inject`.
 
 Re-exported by `@fnioc/transformer`.
 

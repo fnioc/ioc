@@ -7,7 +7,7 @@
 // no-emission).
 //
 // It also performs factory detection (`() => IFoo` ctor params become
-// `{ factory: "<token>" }` slots) and emits the factory-signature /
+// `{ type: "<token>" }` slots) and emits the factory-signature /
 // async-mismatch / overload-ambiguity diagnostics (see `deps.ts` + `checks.ts`).
 
 // The type-only authoring surface this transformer contributes to `@fnioc/di`
