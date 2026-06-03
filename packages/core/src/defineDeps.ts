@@ -3,6 +3,7 @@ import type {
   DepRecord,
   DepTarget,
   FactoryRef,
+  LiteralRef,
   Union,
 } from "./types.js";
 import { store } from "./store.js";
@@ -35,12 +36,28 @@ export function isUnionSlot(slot: DepSlot): slot is Union {
 }
 
 /**
+ * True when `slot` is a `LiteralRef` — an object slot carrying a `value` key.
+ * The value supplies a singular literal directly (`"dev"`, `42`, `true`, `1n`)
+ * OR the lone inhabitant of `void` / `undefined` / `null`.
+ *
+ * Identified by the PRESENCE of the `value` key (`"value" in slot`), never by
+ * `value !== undefined` — `value` is legitimately `undefined` for the
+ * `void`/`undefined` case. No other slot kind (FactoryRef `.type`, ScopeRef
+ * `.scope`, Union `.union`) carries a `value` key, so this is unambiguous.
+ */
+export function isLiteralRef(slot: DepSlot): slot is LiteralRef {
+  return typeof slot === "object" && slot !== null && "value" in slot;
+}
+
+/**
  * Structural equality of two signature slots:
  *   - two `FactoryRef`s are equal iff their `.type` tokens match and their
  *     `.params` arrays are element-wise identical (or both absent),
  *   - two `ScopeRef`s are always equal,
  *   - two `Union`s are equal iff their `union` arrays are element-wise equal
  *     under recursive `slotsEqual`,
+ *   - two `LiteralRef`s are equal iff their `.value`s are strictly equal (bigint
+ *     compares by value),
  *   - strings compare by value,
  *   - slots of different kinds are never equal.
  */
@@ -72,6 +89,11 @@ function slotsEqual(a: DepSlot, b: DepSlot): boolean {
       if (!slotsEqual(a.union[i] as DepSlot, b.union[i] as DepSlot)) {return false;}
     }
     return true;
+  }
+  const aIsLiteral = isLiteralRef(a);
+  const bIsLiteral = isLiteralRef(b);
+  if (aIsLiteral || bIsLiteral) {
+    return aIsLiteral && bIsLiteral && a.value === b.value;
   }
   return a === b;
 }
