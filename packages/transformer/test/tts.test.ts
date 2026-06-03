@@ -97,10 +97,13 @@ describe("Inject brand detection (§3 / §5)", () => {
     expect(depsArrayFor(out, "Svc")).toBe('[["my:opts"]]');
   });
 
-  test("Inject brand on optional param (x?: Inject<T, K>) uses branded token", () => {
+  test("Inject brand on optional param (x?: Inject<T, K>) → union(branded, { value: undefined })", () => {
     // When the param is optional the resolved type is `(T & { [TOK]?: K }) | undefined`.
     // getPropertiesOfType on that union omits the brand (undefined contributes no
-    // properties). The fix iterates union members, skips undefined, and finds the brand.
+    // properties). injectTokenFor iterates union members, skips undefined, finds the
+    // brand. The branded token must survive AND keep the optional `undefined`
+    // fallback — the whole-type brand short-circuit must NOT collapse the param to a
+    // bare required token (the regression this guards).
     const files: VirtualFiles = {
       "/proj/node_modules/@fnioc/core/package.json": JSON.stringify({
         name: "@fnioc/core",
@@ -128,12 +131,15 @@ describe("Inject brand detection (§3 / §5)", () => {
     expect(
       diagnostics.filter((d) => d.code === DiagnosticCode.UnderivableToken).length,
     ).toBe(0);
-    expect(depsArrayFor(out, "Svc")).toContain('"my:opts"');
+    expect(depsArrayFor(out, "Svc")).toBe(
+      '[[{ union: ["my:opts", { value: void 0 }] }]]',
+    );
   });
 
-  test("Inject brand on explicit-union optional param (x: Inject<T, K> | undefined) uses branded token", () => {
+  test("Inject brand on explicit-union optional param (x: Inject<T, K> | undefined) → union(branded, { value: undefined })", () => {
     // `x: Inject<T, K> | undefined` is the explicit-union form of an optional param;
-    // the resolved type is identical to `x?: Inject<T, K>` — the brand must survive.
+    // the resolved type is identical to `x?: Inject<T, K>` — branded token + the
+    // `undefined` fallback both survive.
     const files: VirtualFiles = {
       "/proj/node_modules/@fnioc/core/package.json": JSON.stringify({
         name: "@fnioc/core",
@@ -161,7 +167,47 @@ describe("Inject brand detection (§3 / §5)", () => {
     expect(
       diagnostics.filter((d) => d.code === DiagnosticCode.UnderivableToken).length,
     ).toBe(0);
-    expect(depsArrayFor(out, "Svc")).toContain('"my:opts"');
+    expect(depsArrayFor(out, "Svc")).toBe(
+      '[[{ union: ["my:opts", { value: void 0 }] }]]',
+    );
+  });
+
+  test("Inject brand on ONE member of an explicit union (Inject<T,K> | IBar) → union(branded, other-token)", () => {
+    // A genuine 2-member union where one member is branded. The whole-type brand
+    // short-circuit must NOT fire — that would collapse the union to the branded
+    // token and silently drop IBar. The brand is applied per-member.
+    const files: VirtualFiles = {
+      "/proj/node_modules/@fnioc/core/package.json": JSON.stringify({
+        name: "@fnioc/core",
+        version: "1.0.0",
+        exports: { ".": "./index.js" },
+      }),
+      "/proj/node_modules/@fnioc/core/index.d.ts": `
+        declare const TOK: unique symbol;
+        export type Inject<T, K extends string> = T & { readonly [TOK]?: K };
+      `,
+      "/proj/src/app.ts": `
+        import type { Inject } from "@fnioc/core";
+        interface IFoo {}
+        interface IBar {}
+        interface ISvc {}
+        class Svc implements ISvc {
+          constructor(dep: Inject<IFoo, "pkg:x"> | IBar) {}
+        }
+        declare const services: any;
+        services.add<ISvc>(Svc).as<"singleton">();
+      `,
+    };
+    const { outputs, diagnostics } = transform(files, {
+      entry: ["/proj/src/app.ts"],
+    });
+    const out = outputs["/proj/src/app.ts"]!;
+    expect(
+      diagnostics.filter((d) => d.code === DiagnosticCode.UnderivableToken).length,
+    ).toBe(0);
+    expect(depsArrayFor(out, "Svc")).toBe(
+      '[[{ union: ["pkg:x", "./app/IBar"] }]]',
+    );
   });
 
   test("mixed branded + normal params: branded wins for branded, normal for others", () => {
