@@ -97,6 +97,73 @@ describe("Inject brand detection (§3 / §5)", () => {
     expect(depsArrayFor(out, "Svc")).toBe('[["my:opts"]]');
   });
 
+  test("Inject brand on optional param (x?: Inject<T, K>) uses branded token", () => {
+    // When the param is optional the resolved type is `(T & { [TOK]?: K }) | undefined`.
+    // getPropertiesOfType on that union omits the brand (undefined contributes no
+    // properties). The fix iterates union members, skips undefined, and finds the brand.
+    const files: VirtualFiles = {
+      "/proj/node_modules/@fnioc/core/package.json": JSON.stringify({
+        name: "@fnioc/core",
+        version: "1.0.0",
+        exports: { ".": "./index.js" },
+      }),
+      "/proj/node_modules/@fnioc/core/index.d.ts": `
+        declare const TOK: unique symbol;
+        export type Inject<T, K extends string> = T & { readonly [TOK]?: K };
+      `,
+      "/proj/src/app.ts": `
+        import type { Inject } from "@fnioc/core";
+        interface ISvc {}
+        class Svc implements ISvc {
+          constructor(opts?: Inject<{ n: number }, "my:opts">) {}
+        }
+        declare const services: any;
+        services.add<ISvc>(Svc).as<"singleton">();
+      `,
+    };
+    const { outputs, diagnostics } = transform(files, {
+      entry: ["/proj/src/app.ts"],
+    });
+    const out = outputs["/proj/src/app.ts"]!;
+    expect(
+      diagnostics.filter((d) => d.code === DiagnosticCode.UnderivableToken).length,
+    ).toBe(0);
+    expect(depsArrayFor(out, "Svc")).toContain('"my:opts"');
+  });
+
+  test("Inject brand on explicit-union optional param (x: Inject<T, K> | undefined) uses branded token", () => {
+    // `x: Inject<T, K> | undefined` is the explicit-union form of an optional param;
+    // the resolved type is identical to `x?: Inject<T, K>` — the brand must survive.
+    const files: VirtualFiles = {
+      "/proj/node_modules/@fnioc/core/package.json": JSON.stringify({
+        name: "@fnioc/core",
+        version: "1.0.0",
+        exports: { ".": "./index.js" },
+      }),
+      "/proj/node_modules/@fnioc/core/index.d.ts": `
+        declare const TOK: unique symbol;
+        export type Inject<T, K extends string> = T & { readonly [TOK]?: K };
+      `,
+      "/proj/src/app.ts": `
+        import type { Inject } from "@fnioc/core";
+        interface ISvc {}
+        class Svc implements ISvc {
+          constructor(opts: Inject<{ n: number }, "my:opts"> | undefined) {}
+        }
+        declare const services: any;
+        services.add<ISvc>(Svc).as<"singleton">();
+      `,
+    };
+    const { outputs, diagnostics } = transform(files, {
+      entry: ["/proj/src/app.ts"],
+    });
+    const out = outputs["/proj/src/app.ts"]!;
+    expect(
+      diagnostics.filter((d) => d.code === DiagnosticCode.UnderivableToken).length,
+    ).toBe(0);
+    expect(depsArrayFor(out, "Svc")).toContain('"my:opts"');
+  });
+
   test("mixed branded + normal params: branded wins for branded, normal for others", () => {
     const files: VirtualFiles = {
       "/proj/node_modules/@fnioc/core/package.json": JSON.stringify({
