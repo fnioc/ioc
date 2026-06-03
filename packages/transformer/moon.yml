@@ -6,11 +6,13 @@ language: 'typescript'
 
 # Build-time only. The transformer's RUNTIME bundle carries no @fnioc import
 # (the @fnioc/di reference it emits lives in generated strings), so the emitted
-# JS stays @fnioc-free. But its TYPE surface now augments @fnioc/di: `augment.ts`
-# carries the `declare module "@fnioc/di"` block (the type-only authoring forms
-# `add<I>(C)`, `.as<"x">()`, `resolve<T>()`) and references di's exported types,
-# so the typecheck + d.ts rollup need di's built `dist` present. Hence the
-# `di:build` deps below. `deps: ['core:build']` keeps core's typecheck first.
+# JS stays @fnioc-free. Its TYPE surface augments @fnioc/di: `augment.ts` carries
+# the `declare module "@fnioc/di"` block (the type-only authoring forms
+# `add<I>(C)`, `.as<"x">()`, `resolve<T>()`) and references di's exported types.
+# The tsconfig `customConditions: ["source"]` routes `@fnioc/di` to di's SOURCE
+# tree via di's package.json `"source"` export, so both lint and the d.ts rollup
+# (rollup-plugin-dts uses the same tsconfig) resolve @fnioc/di from source
+# without needing di's dist present.
 dependsOn:
   - 'core'
   - 'di'
@@ -20,14 +22,13 @@ tasks:
     command: 'bun run build'
     deps:
       - 'core:build'
-      - 'di:build'
     inputs:
       - 'src/**/*'
       - 'build.ts'
       - 'rollup.dts.mjs'
       - 'tsconfig.json'
       - '/tsconfig.base.json'
-      - '/packages/di/dist/**/*'
+      - '/packages/di/src/**/*'
     outputs:
       - 'dist'
   test:
@@ -47,9 +48,8 @@ tasks:
       - 'package.json'
   lint:
     command: 'bun run lint'
-    # `augment.ts` typechecks against @fnioc/di's exported types, so di's `dist`
-    # must be built first for the lint typecheck to resolve `@fnioc/di`.
-    deps:
-      - 'di:build'
+    # `augment.ts` typechecks against @fnioc/di's exported types. The tsconfig
+    # `customConditions: ["source"]` routes `@fnioc/di` to source, so no di:build
+    # dep is needed here.
     options:
       cache: false
