@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.1](https://github.com/fnioc/ioc/compare/di-v4.0.0...di-v4.0.1) (2026-06-03)
+
+
+### Bug Fixes
+
+* **tooling:** resolve workspace packages to source for live cross-package types ([#40](https://github.com/fnioc/ioc/issues/40)) ([7c86ab1](https://github.com/fnioc/ioc/commit/7c86ab170be3c7def6a8b3bbfec709078febc3c2))
+
 ## [4.0.0](https://github.com/fnioc/ioc/compare/di-v3.0.0...di-v4.0.0) (2026-06-02)
 
 
