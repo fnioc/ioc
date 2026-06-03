@@ -62,8 +62,9 @@ The transformer is the hard 80%. The engine is small because it never sees types
 | Term | Definition |
 |---|---|
 | **Token** | A stable `string` identifying a type. The DI key. Derived by the transformer from a TypeScript type name. Every named type tokenizes: `string` → `"string"`, `IFoo` → `"pkg:IFoo"`, `boolean` → `"boolean"`, etc. Only anonymous inline structures (object literal types, nameless non-intrinsics) are non-tokenizable and produce a compile error. |
-| **LiteralRef** | A `{ value: <literal> }` slot in a signature position, emitted by the transformer when a constructor/factory parameter (or `resolve<T>()` type argument) is a singular literal type (`"dev"`, `42`, `true`, `1n`). At resolve time the literal value is injected directly — no container lookup. Literal unions (`"a"|"b"`) are not `LiteralRef`; they derive a sorted token and resolve through the container normally. |
-| **Signature** | A positional array of `DepSlot` values parallel to a constructor's parameter list. `signature[i]` describes how to satisfy constructor parameter `i`: a `string` token resolved from the container, a `LiteralRef` injected directly, a `FactoryRef`, or a `ScopeRef`. The word "signature" is used consistently in the ABI field name, the `@signature` decorator, and the `forCtor(...).signature(...)` fluent API. |
+| **LiteralRef** | A `{ value }` slot, emitted when a constructor/factory parameter (or `resolve<T>()` type argument) is a **singular** (non-union) literal type (`"dev"`, `42`, `true`, `1n`) or a nullish singleton (`void`/`undefined` → `undefined`, `null` → `null`). At resolve time the value is injected directly — no container lookup; always satisfiable. `value` may be `undefined`, so the slot is identified by the *presence* of the `value` key. Literal unions (`"a"\|"b"`) are NOT `LiteralRef`; they derive a single sorted token and resolve through the container. |
+| **Union slot** | A `{ union: [...] }` slot — member-level alternatives tried in declaration order; the first resolvable member wins, and a member that resolves but throws (e.g. a captive `MissingScopeError`) falls through to the next. Satisfiable iff at least one member is. Used for inline union parameter types (`A \| B`) and as the lowering of an **optional** parameter: `x?: X` → `union(X, { value: undefined })` with the always-satisfiable `LiteralRef` fallback last. |
+| **Signature** | A positional array of `DepSlot` values parallel to a constructor's parameter list. `signature[i]` describes how to satisfy constructor parameter `i`: a `string` token resolved from the container, a `LiteralRef` injected directly, a `FactoryRef`, a `ScopeRef`, or a `Union` of alternatives. The word "signature" is used consistently in the ABI field name, the `@signature` decorator, and the `forCtor(...).signature(...)` fluent API. |
 | **DepRecord** | `{ abi: number, signatures: ReadonlyArray<ReadonlyArray<DepSlot>> }` — the per-constructor metadata stored in the global WeakMap. Multi-signature from v1 to support constructor overloads without an ABI break. |
 | **Scope** | A node in a parent-linked chain that owns and caches instances. Scope names are a user-defined string union passed to `DiBuilder<Scopes>`. |
 | **Lifetime tag** | The scope name a registration is bound to. Determines which ancestor scope caches the instance. A registration with no tag is transient. |
@@ -114,17 +115,29 @@ forCtor()            Factory injection
 ```typescript
 export type Token = string;
 
-/** Injected directly as a literal value — no container lookup. */
-export interface LiteralRef { readonly value: string | number | boolean | bigint; }
+/**
+ * Supplies its value directly — no container lookup. Emitted for a singular
+ * (non-union) literal (`"dev"`, `42`, `true`, `1n`) and for the nullish
+ * singletons `void`/`undefined` (→ `undefined`) and `null` (→ `null`). `value`
+ * may itself be `undefined`, so a `LiteralRef` is identified by the PRESENCE of
+ * the `value` key, never by `value !== undefined`. Always satisfiable.
+ */
+export interface LiteralRef {
+  readonly value: string | number | boolean | bigint | undefined | null;
+}
+
+/** Member-level alternatives tried in declaration order; first resolvable wins. */
+export interface Union { readonly union: ReadonlyArray<DepSlot>; }
 
 /**
  * One slot in a signature:
  *   string      — token resolved from the container (may be unregistered at runtime)
- *   LiteralRef  — singular literal type; value injected directly, no lookup
+ *   LiteralRef  — singular literal / nullish singleton; value injected directly, no lookup
  *   FactoryRef  — factory-injection slot (produced by the transformer for arrow/function params)
  *   ScopeRef    — injects the owning Scope object
+ *   Union       — alternatives tried in order; satisfiable iff one member is
  */
-export type DepSlot = Token | LiteralRef | FactoryRef | ScopeRef;
+export type DepSlot = Token | LiteralRef | FactoryRef | ScopeRef | Union;
 
 export interface DepRecord {
   readonly abi: number;
@@ -134,7 +147,7 @@ export interface DepRecord {
 export const ABI_VERSION = 1;
 ```
 
-`signatures` is an array of arrays from v1. Multiple signatures support constructor overloads without an ABI break.
+`signatures` is an array of arrays from v1. Multiple signatures support **manual** constructor overloads (`@signature` stacking, `forCtor` chaining) and **declared** ctor overloads (one signature per bodyless declaration). Auto-extraction from an implementation constructor always emits exactly one signature — optionality is expressed *within* a signature via a `Union` slot, not by emitting extra shorter signatures.
 
 ### Global-symbol WeakMap hardening
 
@@ -238,7 +251,7 @@ The verb `signature` is used consistently: the ABI field is `signatures`, the de
 
 ### Token derivation for named types
 
-Every named type produces a token. No special-casing for intrinsics:
+Every named type produces a token by its name. No special-casing for intrinsics:
 
 | Parameter type | Token emitted |
 |---|---|
@@ -251,34 +264,59 @@ Every named type produces a token. No special-casing for intrinsics:
 | `bigint` | `"bigint"` |
 | `any` | `"any"` |
 | `unknown` | `"unknown"` |
-| `void` | `"void"` |
 | `never` | `"never"` |
 
-An unregistered token (including the above intrinsic tokens if nothing is registered for them) causes an `UnregisteredTokenError` at resolve time. That is the expected, intended behavior — it is not a compile error. If a parameter can never be satisfied from the container, make it optional (triggering overload expansion) or use `addFactory` and supply it at call time.
+`void`, `undefined`, and `null` are **not** in this table — each is a *singleton* type (exactly one inhabitant), so it is supplied directly as a `LiteralRef` (next section), never tokenized. `never` (zero inhabitants — nothing to supply) is tokenized to `"never"` and simply misses at runtime. Wide `boolean` (TypeScript models it as the union `false | true`) special-cases here to the bare token `"boolean"`, not a literal union.
+
+An unregistered token (including the above intrinsic tokens if nothing is registered for them) causes an `UnregisteredTokenError` at resolve time. That is the expected, intended behavior — it is not a compile error. If a parameter can never be satisfied from the container, make it optional (so it lowers to a `union(..., { value: undefined })` fallback — see below) or use `addFactory` and supply it at call time.
 
 **The only compile error is a non-tokenizable type.** Anonymous inline structures — object literal types and nameless non-intrinsics — cannot produce a stable token. The transformer emits diagnostic `990006` (`UnderivableToken`) for these. The fix is to name the type (`interface Opts { ... }`) or use `Inject<T, "explicit-token">` as the explicit escape hatch.
 
-### Singular literal types → `LiteralRef` (direct value injection)
+### Singular literal & nullish-singleton types → `LiteralRef` (direct value supply)
 
-When a constructor or factory parameter's type is a **singular** (non-union) literal — `"dev"`, `42`, `true`, `1n` — the transformer emits a `LiteralRef { value: <literal> }` slot instead of a token. At resolve time the literal value is injected directly; the container is not consulted.
+When a constructor or factory parameter's type is a **singular** (non-union) literal — `"dev"`, `42`, `true`, `1n` — the transformer emits a `LiteralRef { value }` slot instead of a token. At resolve time the value is injected directly; the container is not consulted. Always satisfiable — the value is self-supplying, so a `LiteralRef` slot never makes a signature unresolvable.
+
+The nullish singletons are also `LiteralRef`s: a whole-type `void` or `undefined` parameter supplies `undefined`; a whole-type `null` parameter supplies `null`. (`value` may itself be `undefined`, so the slot is identified by the *presence* of the `value` key — see `isLiteralRef`.) `LiteralRef.value` therefore spans `string | number | boolean | bigint | undefined | null`. Negative numbers and bigints round-trip (`-7`, `-3n`).
 
 ```typescript
 @signature("pkg:ILogger", { value: "dev" }, "pkg:IDb")
 class DevLogger {
   constructor(log: ILogger, env: "dev", db: IDb) { ... }
-  // env is injected as the literal "dev" — no registration needed
+  // env is supplied as the literal "dev" — no registration needed
 }
 ```
 
-The same applies to `resolve<"dev">()` at the call site: the transformer lowers it to inject the literal value `"dev"` directly.
+**`resolve<T>()` for a singular `T` lowers to the value expression itself**, not to a `resolve` call — there is no container round-trip:
 
-A **literal union** (`"a" | "b"`) is different: it derives a sorted ` | `-joined token (`"a" | "b"`) and resolves through the container as a normal registration. `LiteralRef` applies only to singular literals.
+```typescript
+scope.resolve<"dev">()   // lowers to:  "dev"
+scope.resolve<42>()      // lowers to:  42
+scope.resolve<1n>()      // lowers to:  1n
+scope.resolve<void>()    // lowers to:  void 0
+scope.resolve<undefined>() // lowers to: void 0
+scope.resolve<null>()    // lowers to:  null
+```
+
+A **literal union** (`"a" | "b"`) is different: it derives a single sorted token whose members are JSON-quoted and joined with ` | ` (so `"a" | "b"`, and `2 | 1` → `"1 | 2"`), and resolves through the container as a normal registration — never per-member `LiteralRef`s. `resolve<"a" | "b">()` therefore stays `scope.resolve("\"a\" | \"b\"")`. `LiteralRef` applies only to singular literals and nullish singletons.
 
 **Registration side unchanged.** `add`, `addValue`, `addFactory`, and `nameof` are not affected by `LiteralRef`. Literal-typed parameters simply never need a registration entry.
 
-### Optional/defaulted/`T|undefined` params → overload expansion
+### Optional/defaulted/`T | undefined` params → union-with-fallback (one signature)
 
-When a trailing constructor parameter is optional (`?`), has a default initializer, or accepts `undefined`, the transformer emits TWO signatures: the full one (including the optional slot) and a shorter one without it. Greedy selection at resolve time tries the longest signature first; if the token in that slot is not registered, it falls to the shorter form and the parameter receives its default / `undefined`. A required unresolvable parameter has no shorter fallback and throws `NoSatisfiableSignatureError` — the fix is to register the dep, make the parameter optional, or build the class via `addFactory`.
+Optionality is unified on the `Union` slot — there is **no overload expansion**. A parameter that is optional in *any* form, at *any* position — `x?: X`, `x: X = default`, `x: X | undefined`, `x: X | void` — lowers to a single `union(<non-nullish slots>, { value: undefined })` slot with the `LiteralRef` fallback **last**. Auto-extraction from an implementation constructor emits exactly ONE signature.
+
+At resolve time the union tries members in declaration order: the real dependency `X` wins when it is registered; otherwise the always-satisfiable `{ value: undefined }` member supplies `undefined`, and for a defaulted parameter JS treats an explicit `undefined` argument as omission, so the default initializer fires. Because the fallback is always satisfiable, an optional parameter never throws `NoSatisfiableSignatureError`.
+
+```typescript
+constructor(dep?: IFoo)                  // → [ union("pkg:IFoo", { value: undefined }) ]
+constructor(a: IFoo, p: string = "x")    // → [ "pkg:IFoo", union("string", { value: undefined }) ]
+constructor(a: IFoo | undefined, b: IBar)// → [ union("pkg:IFoo", { value: undefined }), "pkg:IBar" ]
+constructor(dep?: IFoo | IBar)           // → [ union("pkg:IFoo", "pkg:IBar", { value: undefined }) ]
+```
+
+`x: X | null` is *not* optionality — `null` is a real value, not the optionality marker — so it lowers to `union(X, { value: null })` (the `null` member is a genuine alternative). An optional pure-literal union keeps its single sorted literal token as the non-nullish part: `mode?: "a" | "b"` → `union("\"a\" | \"b\"", { value: undefined })`.
+
+This is strictly more expressive than trailing-overload expansion: it can represent `(a: X | undefined, b: Y)` where the *interior* param is optional — overload-dropping could only drop trailing params and would lose `b`, whereas the per-param union yields `new Ctor(undefined, y)`. A genuinely required, never-registered parameter still resolves to a bare token that misses at runtime (`UnregisteredTokenError`); the fix is to register the dep, make the parameter optional, or build the class via `addFactory`.
 
 ### Canonical authoring → lowered example
 
@@ -290,9 +328,9 @@ const services = new DiBuilder<"singleton" | "request">();
 services.add<ILogger>(ConsoleLogger).as<"singleton">();
 services.add<IUserRepo>(SqlUserRepo).as<"request">();
 // SqlUserRepo ctor: constructor(log: ILogger, db: IDbConnection, table?: string)
-// 'table' is optional → overload expansion; "string" token in the full overload,
-// absent in the shorter overload. Runtime: if nothing is registered for "string",
-// greedy selection falls to the shorter form and table receives its default/undefined.
+// 'table' is optional → its slot is union("string", { value: undefined }).
+// One signature, no expansion. Runtime: "string" wins if registered, else the
+// always-satisfiable fallback supplies undefined and table is its default.
 ```
 
 **Lowered output (emitted by transformer):**
@@ -306,8 +344,8 @@ services.add("pkg:ILogger", ɵreg0).as("singleton");
 
 const ɵreg1 = SqlUserRepo;
 defineDeps(ɵreg1, [
-  ["pkg:ILogger", "pkg:IDbConnection", "string"],  // full; "string" is the token for table
-  ["pkg:ILogger", "pkg:IDbConnection"],             // shorter; table uses its default/undefined
+  // one signature; the optional `table` is a union slot with an undefined fallback
+  ["pkg:ILogger", "pkg:IDbConnection", { union: ["string", { value: void 0 }] }],
 ]);
 services.add("pkg:IUserRepo", ɵreg1).as("request");
 ```
@@ -383,7 +421,9 @@ This mirrors `Microsoft.Extensions.DependencyInjection`'s scope-validation disci
 
 ### Greedy overload selection
 
-When a constructor has multiple registered signatures (via `@signature` stacking or `forCtor` chaining, or from overload expansion of optional params), the engine selects by scanning longest → shortest and picking the first **satisfiable** signature. A slot is satisfiable when it is a `LiteralRef` (always satisfiable), a `FactoryRef`, a `ScopeRef`, or a string token registered in the owning scope's chain. An unregistered token blocks the signature. Equal-arity ties break by registration order. The transformer's factory-signature diagnostic (see §8) warns on genuine equal-arity ambiguity.
+When a constructor has multiple registered signatures (declared ctor overloads, `@signature` stacking, or `forCtor` chaining), the engine selects by scanning longest → shortest and picking the first **satisfiable** signature. A slot is satisfiable when it is a `LiteralRef` (always), a `FactoryRef` (always), a `ScopeRef` (always), a `Union` with at least one resolvable member, or a string token registered in the owning scope's chain. An unregistered string token blocks the signature. Equal-arity ties break by registration order. When no signature is satisfiable, `NoSatisfiableSignatureError` carries the unsatisfiable tokens — including, for a fully-unsatisfiable `Union` slot, its string-token members — so the error names exactly what to register. The transformer's factory-signature diagnostic (see §8) warns on genuine equal-arity ambiguity.
+
+Note that auto-extraction from an implementation constructor emits a single signature (optionality lives inside it as a `Union` slot), so greedy *multi*-signature selection is exercised only by declared overloads or manual annotation; within one signature, a `Union` slot does its own first-resolvable-wins member selection.
 
 ### Cycle detection
 
@@ -460,16 +500,16 @@ constructor(thunk: IFooThunk) { ... }
 
 The named-function-interface escape hatch is deliberate. When your function-typed service would otherwise be interpreted as a factory, name its interface.
 
-**Partial / positional factories.** If the concrete behind `IFoo` has a constructor where some parameters are registered services and some are not, the factory's call signature covers only the **unregistered** parameters in their relative order.
+**Partial / positional factories.** If the concrete behind `IFoo` has a constructor mixing registered services with caller-supplied scalars, the factory's call signature covers only the **caller-supplied** parameters in their relative order. A caller-supplied parameter is a *primitive scalar* — a bare intrinsic keyword (`string`/`number`/…), a singular literal value, or an anonymous structure — never a named interface/class (a real DI service, which the container resolves).
 
 ```typescript
-// MyService ctor: (a: IA, b: B2, c: IC, d: D4, e: IE)
-// IA, IC, IE are registered; B2, D4 are not.
-// Injected factory type: (b: B2, d: D4) => IService
+// MyService ctor: (a: IA, b: string, c: IC, d: number, e: IE)
+// IA, IC, IE are registered services; b and d are caller-supplied scalars.
+// Injected factory type: (b: string, d: number) => IService
 // At call time: new MyService(resolve(IA), b, resolve(IC), d, resolve(IE))
 ```
 
-**Runtime partition (no whole-program analysis).** At instantiation the engine has the per-parameter `DepSlot` array and its live registration map. For each slot: `LiteralRef` → inject the literal value; `FactoryRef` or `ScopeRef` → resolve accordingly; string token in the map → resolve it from the container; string token not in the map → take the next caller-supplied factory argument.
+**Runtime partition (no whole-program analysis).** At instantiation the engine has the per-parameter `DepSlot` array and its live registration map. For each slot: `LiteralRef` → inject its value; `FactoryRef` or `ScopeRef` → resolve accordingly; `Union` → first-resolvable-wins among members; string token in the map → resolve it from the container; string token not in the map → take the next caller-supplied factory argument.
 
 Ramda-style placeholder arguments exposed to callers are rejected — they leak constructor arity/structure. The factory caller sees only the unregistered parameters, in order.
 
@@ -518,45 +558,47 @@ The transformer provides a `nameof<IFoo>()`-style compile-time mechanism returni
 
 ### Dep extraction and `defineDeps` emission
 
-For each class being registered, the transformer:
+**Which constructor(s) are read.** If the class has **declared overloads** (bodyless ctor declarations preceding the implementation), each declared overload becomes one emitted signature, in declaration order; the implementation signature is ignored entirely (TypeScript hides the impl from callers, so the transformer does too). Otherwise the **implementation** constructor drives extraction and yields exactly **one** signature. A class with no explicit constructor (or a zero-param one) yields a single empty signature `[[]]`.
 
-1. Reads the constructor's parameter types via the TypeChecker.
-2. For each parameter, emits a `DepSlot` according to these rules (in order):
-   a. **Singular literal type** (`"dev"`, `42`, `true`, `1n`) → `LiteralRef { value }`. Value is injected directly; no container lookup.
-   b. **Named type** (interface, class, type alias, or intrinsic: `string`, `number`, `boolean`, `symbol`, `bigint`, `any`, `unknown`, `void`, `never`) → derive a token string via the token-generation rules above. Wide `boolean` (TS models it as `false | true`) → token `"boolean"`. An unregistered token causes `UnregisteredTokenError` at runtime — not a compile error.
-   c. **Anonymous inline structure** (object literal type, nameless non-intrinsic) → emit diagnostic `990006` (`UnderivableToken`). Hard compile error. Fix: name the type or use `Inject<T, "explicit-token">`.
-   d. **Literal union** (`"a" | "b"`) → token is the sorted ` | `-joined string (`"a" | "b"`). Resolved from the container like any other token.
-3. For `Promise<X>` parameters: emits the slot for `X` (not a `Promise<X>` token).
-4. Applies **overload expansion** for trailing optional/defaulted/`T|undefined` parameters: emits the full signature PLUS one shorter "without that arg" overload per droppable trailing parameter.
-5. Hoists the class reference to a `const ɵregN = ClassName` declaration and uses that identifier in both `defineDeps(ɵregN, ...)` and the registration call — ensuring the class is evaluated once and both calls reference the same object.
-6. Emits `defineDeps(ɵregN, [[...full], [...shorter]...])` immediately before the lowered registration call.
+For each parameter, the transformer emits one `DepSlot`, applying these rules **in order** (first match wins):
 
-The `signatures` array therefore has one entry when all parameters are required (no overloads), and `1 + N` entries when N trailing parameters are optional/defaulted. The engine's greedy selection tries longest-first and falls back when the token in an optional slot is unregistered.
+1. **`ResolveScope`-typed** → `ScopeRef` (`{ scope: true }`) — the live resolution scope.
+2. **`Inject<T, "tok">` brand** → the branded token string. The brand is union-aware, so it also works through `| undefined` on an optional parameter (`x?: Inject<T, "tok">`).
+3. **Optional in any form** — `x?: X`, `x: X = default`, `x: X | undefined`, `x: X | void`, at any position → `union(<non-nullish slots>, { value: undefined })` with the `LiteralRef` fallback **last**. A whole-type `undefined`/`void` (no non-nullish core) emits the bare `{ value: undefined }`.
+4. **Inline function type** (`() => IFoo`) → `FactoryRef` (PRD §7), keyed on the return type's token.
+5. **Inline union type** (`A | B`, syntactically a union node, two+ members, not pure-literal, not wide `boolean`) → `Union` of per-member slots in declaration order. A `| null` member survives as `{ value: null }`; `| undefined` was already consumed by rule 3.
+6. **Singular literal** (`"dev"`, `42`, `true`, `1n`) or **nullish singleton** (`null` → `{ value: null }`) → `LiteralRef`.
+7. **Named type** — interface, class, type alias, intrinsic (`string`, `number`, `boolean`, `symbol`, `bigint`, `any`, `unknown`, `never`), or **pure-literal union** (`"a" | "b"` → single sorted ` | `-joined, JSON-quoted token) → a string token via the token-generation rules. Wide `boolean` lands here as `"boolean"`. An unregistered token causes `UnregisteredTokenError` at runtime — not a compile error.
+8. **Anonymous inline structure** with no `Inject` brand → diagnostic `990006` (`UnderivableToken`). Hard compile error. Fix: name the type or use `Inject<T, "explicit-token">`.
+
+`Promise<X>` parameters are unwrapped first: the slot derives from `X`, not from `Promise<X>`.
+
+Finally, the transformer hoists the class reference to `const ɵregN = ClassName` and uses that identifier in both `defineDeps(ɵregN, ...)` and the registration call (so the class is evaluated once and both calls reference the same object), emitting `defineDeps(ɵregN, [[...]])` immediately before the lowered registration call.
+
+The multi-signature `signatures` array is therefore exercised by **declared ctor overloads** and **manual** `@signature`/`forCtor` overloads; auto-extraction from an implementation constructor always emits exactly one signature, with optionality expressed *inside* it via `Union` slots rather than as extra shorter signatures. This is strictly more expressive than the previous trailing-overload expansion: an interior optional parameter (`(a: X | undefined, b: Y)`) is representable as a per-param union, whereas suffix-dropping could only drop trailing params.
 
 ### Lowered output / ABI contract
 
 The lowered form is a contract. Libraries compile with the transformer and publish the lowered JS; consumers run it without the transformer. The emitted-call format is versioned via `ABI_VERSION` and kept backward-compatible.
 
 ```typescript
-// Author code — `table?: string` is optional, so overload expansion applies
+// Author code — `table?: string` is optional → union-with-fallback, one signature
 services.add<IUserRepo>(SqlUserRepo).as<"request">();
 
-// Lowered (transformer emits) — the class is hoisted; two signatures emitted
+// Lowered (transformer emits) — the class is hoisted; ONE signature emitted
 const ɵreg0 = SqlUserRepo;
 defineDeps(ɵreg0, [
-  ["pkg:ILogger", "pkg:IDbConnection", "string"],  // full: "string" is the token for table
-  ["pkg:ILogger", "pkg:IDbConnection"],             // shorter: omits the optional param
+  ["pkg:ILogger", "pkg:IDbConnection", { union: ["string", { value: void 0 }] }],
 ]);
 services.add("pkg:IUserRepo", ɵreg0).as("request");
-// On direct resolve: greedy selection tries the 3-slot form first; if "string"
-// is not registered → falls to the 2-slot form; table is undefined (its default).
-// When used as a factory target, the 3-slot (longest) is tried and if "string"
-// is unregistered the unresolved slot is caller-supplied positionally.
+// On resolve: the union tries "string" first; if it is not registered, the
+// always-satisfiable { value: void 0 } member supplies undefined, and `table`
+// takes its default. The optional param never makes the signature unsatisfiable.
 ```
 
 ### Factory-signature diagnostic (originally §4.5)
 
-The transformer validates factory signatures (and any hand-declared factory parameters in `@signature` / `forCtor`) against the target constructor's **unregistered** parameters in order. This is the primary value-add of using the transformer — it provides compile-time feedback when a factory's call signature doesn't match what the container will actually pass.
+The transformer validates factory signatures (and any hand-declared factory parameters in `@signature` / `forCtor`) against the target constructor's **caller-supplied** parameters in order. Under Rule 1 a named interface/class always tokenizes and is container-resolved, so "caller-supplied" no longer means "underivable" — it means a *primitive scalar*: a bare intrinsic keyword token (`string`/`number`/…), a singular literal (Rule 2), or an anonymous structure with no token. This is the primary value-add of using the transformer — it provides compile-time feedback when a factory's declared call signature doesn't match the scalars the container will actually leave for the caller.
 
 Additional diagnostics the transformer can emit where statically visible:
 - A consumer declaring `IDb` as a direct dep when the service is async-registered (should be `Promise<IDb>`).
@@ -714,7 +756,7 @@ These were the open questions from the original handoff (originally §12); each 
 
 | Question | Resolution |
 |---|---|
-| Exact lowered-call ABI shape and versioning scheme | `DepRecord { abi: number, signatures: Token[][] }` in `@fnioc/core`. `ABI_VERSION` integer exported from `core`; version-suffixed `Symbol.for` key for global WeakMap. Semver per package via release-please; `ABI_VERSION` bumped only on wire-format break. |
+| Exact lowered-call ABI shape and versioning scheme | `DepRecord { abi: number, signatures: DepSlot[][] }` in `@fnioc/core`, where `DepSlot = Token \| LiteralRef \| FactoryRef \| ScopeRef \| Union`. `ABI_VERSION` integer exported from `core`; version-suffixed `Symbol.for` key for global WeakMap. Semver per package via release-please; `ABI_VERSION` bumped only on wire-format break. |
 | Support `static $inject` fallback in v1? | Dropped. Reintroduces prototype-inheritance bleed the WeakMap design prevents. `forCtor` is the plugin-less alternative for classes you don't own. |
 | Behavior when transformer encounters already-hand-annotated class | Manual annotation is authoritative. Transformer skips emission and emits an info diagnostic. Never silent; never double-writes. |
 | Behavior for fully-dynamic registration (ctor transformer can't see) | No dep array emitted. At resolve time: if ctor has params but no DepRecord → throw with actionable guidance (`forCtor` or `useFactory`). Zero-arg ctor → `new` directly. |
