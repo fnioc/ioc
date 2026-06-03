@@ -6,8 +6,9 @@
 //   - `Promise<X>`                          →  the token for `X`
 //   - an inline function type `() => IFoo` →  a factory ref { type: token-of-IFoo }
 //   - an inline union `A | B`              →  a UnionSlot { union: [slotA, slotB] }
+//   - a SINGULAR literal `"dev"` / `42`    →  a LiteralSlot { value } (Rule 2)
 //   - everything else                      →  a string token
-//   - unresolvable type with no brand      →  hard diagnostic (UnderivableToken)
+//   - anonymous structure with no brand    →  hard diagnostic (UnderivableToken)
 // The result is ONE signature (a positional array), matching the single
 // canonical ctor the transformer sees statically.
 
@@ -16,6 +17,10 @@ import {
   tokenForType,
   tokenForReturnType,
   injectTokenFor,
+  isPureLiteralUnion,
+  literalUnionTokenForOptional,
+  singletonValue,
+  type LiteralValue,
   type TokenContext,
 } from "./tokens.js";
 import {
@@ -56,13 +61,27 @@ export interface UnionSlot {
 }
 
 /**
- * One positional slot: a token string, a factory ref, a scope ref, or a union of
- * alternatives. There is no `null` / hole sentinel — an unresolvable type causes
- * a hard compile error (`UnderivableToken`).
+ * A literal slot — the transformer's in-memory mirror of the runtime
+ * `LiteralRef`. Produced for a SINGULAR (Rule-2) parameter: a literal (`"dev"`,
+ * `42`, `true`, `1n`) OR a whole-type `void`/`undefined`/`null`. The value is
+ * supplied directly, no container lookup. Emitted as `{ value: ... }` in the
+ * `defineDeps(...)` signature array. A literal/nullish UNION (`"a" | "b"`,
+ * `Foo | undefined`) is NOT a literal slot. `value` may itself be `undefined`,
+ * so the slot is identified by the PRESENCE of the `value` key.
  */
-export type Slot = string | FactorySlot | ScopeSlot | UnionSlot;
+export interface LiteralSlot {
+  readonly value: LiteralValue;
+}
 
-/** One emitted signature: positional slots (token / hole / factory / scope). */
+/**
+ * One positional slot: a token string, a factory ref, a scope ref, a union of
+ * alternatives, or a literal value. There is no `null` / hole sentinel — an
+ * unresolvable (anonymous-structure) type causes a hard compile error
+ * (`UnderivableToken`).
+ */
+export type Slot = string | FactorySlot | ScopeSlot | UnionSlot | LiteralSlot;
+
+/** One emitted signature: positional slots (token / factory / scope / union / literal). */
 export type Signature = readonly Slot[];
 
 /** True when a slot is a factory ref rather than a plain token / scope / union. */
@@ -90,11 +109,22 @@ export function isUnionSlot(slot: Slot): slot is UnionSlot {
 }
 
 /**
+ * True when a slot is a literal-value slot (`{ value: ... }`). Identified by the
+ * PRESENCE of the `value` key — `value` may legitimately be `undefined` (the
+ * `void`/`undefined` Rule-2 case), so a `typeof`/`!== undefined` check would
+ * miss it.
+ */
+export function isLiteralSlot(slot: Slot): slot is LiteralSlot {
+  return typeof slot === "object" && "value" in slot;
+}
+
+/**
  * Structural equality for slots. Two slots are equal when:
  *   - both are the same string token
  *   - both are factory refs with the same type and params
  *   - both are scope refs
  *   - both are union slots with element-wise equal members (recursive)
+ *   - both are literal slots with strictly-equal values
  */
 export function slotsEqual(a: Slot, b: Slot): boolean {
   if (a === b) {return true;}
@@ -111,6 +141,7 @@ export function slotsEqual(a: Slot, b: Slot): boolean {
     if (a.union.length !== b.union.length) {return false;}
     return a.union.every((s, i) => slotsEqual(s, b.union[i]!));
   }
+  if (isLiteralSlot(a) && isLiteralSlot(b)) {return a.value === b.value;}
   return false;
 }
 
@@ -126,9 +157,9 @@ export interface ConstructorExtraction {
   /** The class symbol the constructor belongs to. */
   readonly classSymbol: ts.Symbol;
   /**
-   * The extracted signatures. A ctor with no optional/defaulted params yields
-   * one; each trailing optional or defaulted param adds a shorter "without that
-   * arg" overload (see `withOptionalOverloads`).
+   * The extracted signatures: one per DECLARED ctor overload, or a single
+   * signature from the implementation when no overloads are declared (optional
+   * params become union-with-`undefined`-fallback slots, not extra signatures).
    */
   readonly signatures: Signature[];
 }
@@ -177,21 +208,60 @@ function classDeclarationOf(symbol: ts.Symbol): ts.ClassDeclaration | undefined 
 }
 
 /**
- * Extract the constructor signatures from a class declaration. A class with no
- * explicit constructor (or an explicit zero-parameter one) yields a single empty
- * signature `[[]]`. Each trailing optional or defaulted parameter adds a shorter
- * "without that arg" overload (see `withOptionalOverloads`). Parameter properties
- * and modifiers are irrelevant — only the parameter TYPES drive token derivation.
+ * Extract the constructor signatures from a class declaration.
+ *
+ *   - DECLARED overloads (bodyless ctor declarations preceding the
+ *     implementation) are honored AS-IS: one emitted signature per declared
+ *     overload, in declaration order, with the implementation signature ignored
+ *     entirely (TS hides the impl from callers — so do we). Each overload's
+ *     params run the normal per-param rules (incl. the optional-union fallback).
+ *   - No declared overloads → the implementation signature drives extraction,
+ *     yielding exactly ONE signature (union-unification, no overload expansion).
+ *   - No explicit constructor (or a zero-param one) → a single empty signature.
+ *
+ * Parameter properties / modifiers are irrelevant — only param TYPES drive
+ * token derivation.
  */
 export function extractSignatureFromClass(
   classDecl: ts.ClassDeclaration,
   ctx: DepContext,
 ): Signature[] {
-  const ctor = findConstructor(classDecl);
-  if (!ctor) {return [[]];}
+  const ctors = classDecl.members.filter(ts.isConstructorDeclaration);
+  if (!ctors.length) {return [[]];}
 
-  const slots = ctor.parameters.map((param) => extractParamSlot(param, ctx));
-  return withOptionalOverloads(slots, trailingOptionalCount(ctor.parameters, ctx));
+  // Bodyless overload declarations, if any, are the caller-visible signatures.
+  const declaredOverloads = ctors.filter((c) => c.body === undefined);
+  if (declaredOverloads.length) {
+    return declaredOverloads.map((ctor) =>
+      ctor.parameters.map((param) => extractParamSlot(param, ctx)),
+    );
+  }
+
+  // No declared overloads → the implementation signature drives (one signature).
+  return paramsToSignatures(ctors[0]!.parameters, ctx);
+}
+
+/**
+ * Map a parameter list to its emitted signatures. Auto-extraction always yields
+ * exactly ONE signature — one slot per param, no overload expansion.
+ *
+ * Optionality is handled PER-PARAM, not by suffix-dropping: any optional param
+ * (`x?: X`, `x: X = default`, `x: X | undefined`/`| void`) lowers to a
+ * `union(<non-nullish slots>, { value: undefined })` whose LiteralRef fallback is
+ * LAST, so the real dependency wins when registered and `undefined` is supplied
+ * otherwise (see `extractParamSlot`). This is strictly more expressive than
+ * trailing-overload expansion, which can't represent `(a?: X unresolvable, b?: Y
+ * registered)` — expansion degrades to `[]` and loses `b`, whereas the per-param
+ * union yields `new Ctor(undefined, y)`. JS makes an explicit `undefined`
+ * argument equivalent to omission for a default initializer, so `= default`
+ * still fires. The multi-signature `Token[][]` ABI is retained for MANUAL
+ * `@signature` / `forCtor` overloads.
+ */
+function paramsToSignatures(
+  params: readonly ts.ParameterDeclaration[],
+  ctx: DepContext,
+): Signature[] {
+  return [params.map((param) => extractParamSlot(param, ctx))];
 }
 
 /**
@@ -201,9 +271,20 @@ export function extractSignatureFromClass(
  *   1. `ResolveScope`-typed → ScopeSlot (live scope injection).
  *   2. `Inject<T, "tok">` brand on the type → the branded token string.
  *   3. Inline function-type annotation (`() => IFoo`) → FactorySlot (PRD §7).
- *   4. Inline union type annotation (`A | B`, NOT `T | undefined`) → UnionSlot.
- *   5. Normal type → string token via `tokenForType`.
- *   6. No derivable token + no brand → hard diagnostic (UnderivableToken).
+ *   4. Inline union type annotation (`A | B`) → UnionSlot (`| undefined` becomes
+ *      the optional fallback below; `| null` survives as a real member).
+ *   5a. Singular literal (`"dev"` / `42` / `true` / `1n`) → LiteralSlot (Rule 2).
+ *   5b. Normal type → string token via `tokenForType`.
+ *   6. Anonymous structure + no brand → hard diagnostic (UnderivableToken).
+ *
+ * OPTIONALITY (unified on union): a param that is optional in ANY form — `x?: X`,
+ * `x: X = default`, `x: X | undefined`, `x: X | void` — at ANY position lowers to
+ * `union(<non-nullish slots>, { value: undefined })` with the LiteralRef fallback
+ * LAST. Union is first-resolvable-wins in declaration order, so `X` still wins
+ * when registered; otherwise `undefined` is supplied (a LiteralRef is always
+ * satisfiable). `x: X | null` likewise yields `union(X, { value: null })` (the
+ * null member is a real union member, not the optionality marker). There is no
+ * overload expansion — auto-extraction emits exactly one signature.
  *
  * Detection is purely syntactic (the annotation node shape), never on the
  * resolved type — the resolved `ts.Type` of an inline arrow and of a named
@@ -223,37 +304,55 @@ function extractParamSlot(
   const brandedToken = injectTokenFor(rawType, ctx.checker);
   if (brandedToken !== undefined) {return brandedToken;}
 
+  // Optional in any form (`x?`, `= default`, `x: X | undefined`/`| void`): the
+  // non-nullish slot(s) come first, with a `{ value: undefined }` LiteralRef
+  // fallback appended LAST. The fallback is always satisfiable, so the param can
+  // never make a signature unresolvable; the real dep still wins when registered.
+  if (isOptionalParam(param, ctx)) {
+    const members = nonNullishMemberSlots(param, ctx);
+    // A whole-type `undefined` / `void` param has no non-nullish core — it IS the
+    // undefined value, so emit the bare LiteralRef (the union would be redundant).
+    if (!members.length) {return { value: undefined };}
+    return { union: [...members, { value: undefined }] };
+  }
+
   // 3. Inline factory (syntactic: annotation is a FunctionTypeNode).
   const factory = factorySlotFor(param, ctx);
   if (factory) {return factory;}
 
-  // 4. Inline union (syntactic: annotation is a UnionTypeNode, but NOT T|undefined).
-  //    Named type aliases that expand to a union are TypeReferenceNodes at the
-  //    annotation site — they naturally fall through to step 5.
+  // 4. Inline union (syntactic: annotation is a UnionTypeNode). A `| null` member
+  //    survives (lowered to `{ value: null }` by extractParamSlotFromTypeNode);
+  //    `| undefined` was already consumed by the optional branch above. Named type
+  //    aliases that expand to a union are TypeReferenceNodes — they fall to step 5.
+  //    A PURE-LITERAL union (`"a" | "b"`) is NOT lowered to a union slot — it is a
+  //    discriminated choice that `literalToken` mints one sorted token for, so it
+  //    falls through to step 5 (tokenForType).
   const typeNode = param.type;
-  if (typeNode && ts.isUnionTypeNode(typeNode)) {
-    // Filter out the `| undefined` optionality marker.
-    // In the AST, `| undefined` appears as a keyword TypeNode with kind
-    // `UndefinedKeyword`. If after filtering there is only one member, this is
-    // the `T | undefined` optional-param path — fall through to step 5
-    // (nonNullish strips undefined from the resolved type).
-    const nonUndefinedMembers = typeNode.types.filter(
-      (t) => t.kind !== ts.SyntaxKind.UndefinedKeyword,
+  if (
+    typeNode &&
+    ts.isUnionTypeNode(typeNode) &&
+    typeNode.types.length >= 2 &&
+    !isPureLiteralUnion(rawType) &&
+    // `true | false` is syntactically a union but resolves to the wide `boolean`
+    // type — let step 5 tokenize it as `"boolean"` rather than a LiteralRef union.
+    !(rawType.flags & ts.TypeFlags.Boolean)
+  ) {
+    const memberSlots = typeNode.types.map((memberTypeNode) =>
+      extractParamSlotFromTypeNode(memberTypeNode, param, ctx),
     );
-
-    // Only treat as a union slot when two or more non-undefined members remain.
-    if (nonUndefinedMembers.length >= 2) {
-      // Recursively lower each member through a synthetic param-like context.
-      const memberSlots = nonUndefinedMembers.map((memberTypeNode) =>
-        extractParamSlotFromTypeNode(memberTypeNode, param, ctx),
-      );
-      return { union: memberSlots };
-    }
+    return { union: memberSlots };
   }
 
-  // 5. Normal derivation. Strip a `| undefined` (the optionality marker) so
-  //    `dep?: IFoo` derives `IFoo`'s token.
-  const type = nonNullish(rawType);
+  // 5. Normal derivation.
+  const type = rawType;
+
+  // Rule 2: a SINGULAR type supplies its value directly — emit a LiteralRef slot,
+  // no container lookup. Covers literals (`"dev"`, `42`, `true`, `1n`) and the
+  // whole-type singletons `null` (→ null). `void` / `undefined` as a whole type
+  // are optional (handled above). A UNION returns undefined here.
+  const singleton = singletonValue(type);
+  if (singleton) {return { value: singleton.value };}
+
   const result = tokenForType(type, ctx);
   if (result !== undefined) {return result.token;}
 
@@ -269,6 +368,55 @@ function extractParamSlot(
   // Return a sentinel string so the signature array is still well-shaped for
   // downstream processing; the hard error will stop compilation.
   return "??unresolvable??";
+}
+
+/**
+ * The slot(s) for the NON-undefined/void part of an optional param — the members
+ * that precede the `{ value: undefined }` fallback in the optional union.
+ *
+ *   - inline union node (`X | Y | undefined`) → one slot per non-`undefined`/
+ *     non-`void` member, in declaration order (a `| null` member survives and
+ *     lowers to `{ value: null }`);
+ *   - any other annotation (`x?: X`, `x: X = d`) → the single slot for `X`
+ *     (the param's resolved type with `| undefined` already stripped by the
+ *     checker for a `?`/defaulted param; an explicit `X | void` whole type is
+ *     not a union node, so its non-void core is derived from the resolved type).
+ *
+ * Returns at least one slot; the caller appends the `undefined` fallback.
+ */
+function nonNullishMemberSlots(
+  param: ts.ParameterDeclaration,
+  ctx: DepContext,
+): Slot[] {
+  const rawType = ctx.checker.getTypeAtLocation(param);
+
+  // A pure-literal non-nullish core (`"a" | "b" | undefined`) stays ONE sorted
+  // literal-union token, not per-member LiteralRefs — same as a non-optional
+  // pure-literal union (step 4). Render it from just the non-nullish members
+  // (`nonNullish` keeps `| undefined` in place when >1 member survives, and
+  // `literalToken` rejects the union outright once a nullish member is present).
+  const literalUnion = literalUnionTokenForOptional(rawType);
+  if (literalUnion !== undefined) {return [literalUnion];}
+
+  const core = nonNullish(rawType);
+  const typeNode = param.type;
+  if (typeNode && ts.isUnionTypeNode(typeNode)) {
+    const kept = typeNode.types.filter(
+      (t) =>
+        t.kind !== ts.SyntaxKind.UndefinedKeyword &&
+        t.kind !== ts.SyntaxKind.VoidKeyword,
+    );
+    if (kept.length) {
+      return kept.map((t) => extractParamSlotFromTypeNode(t, param, ctx));
+    }
+  }
+  // No inline union: derive the single non-nullish slot from the resolved type.
+  // A whole-type `undefined` / `void` has no non-nullish core at all.
+  if (core.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Void)) {return [];}
+  const singleton = singletonValue(core);
+  if (singleton) {return [{ value: singleton.value }];}
+  const result = tokenForType(core, ctx);
+  return result !== undefined ? [result.token] : [];
 }
 
 /**
@@ -310,6 +458,10 @@ function extractParamSlotFromTypeNode(
       return extractParamSlotFromTypeNode(nonUndefinedMembers[0]!, parentParam, ctx);
     }
   }
+
+  // Rule 2: a SINGULAR member supplies its value directly (LiteralRef).
+  const singleton = singletonValue(memberType);
+  if (singleton) {return { value: singleton.value };}
 
   // Normal derivation.
   const token = deriveTokenForTypeNode(typeNode, ctx);
@@ -357,8 +509,7 @@ export function extractSignatureFromFunction(
   fn: ts.ArrowFunction | ts.FunctionExpression,
   ctx: DepContext,
 ): Signature[] {
-  const slots = fn.parameters.map((param) => extractParamSlot(param, ctx));
-  return withOptionalOverloads(slots, trailingOptionalCount(fn.parameters, ctx));
+  return paramsToSignatures(fn.parameters, ctx);
 }
 
 /**
@@ -373,15 +524,13 @@ function signatureToSlots(
   signature: ts.Signature,
   ctx: DepContext,
 ): Signature[] | undefined {
-  const slots: Slot[] = [];
   const params: ts.ParameterDeclaration[] = [];
   for (const paramSymbol of signature.parameters) {
     const decl = paramSymbol.valueDeclaration;
     if (!decl || !ts.isParameter(decl) || decl.dotDotDotToken) {return undefined;}
-    slots.push(extractParamSlot(decl, ctx));
     params.push(decl);
   }
-  return withOptionalOverloads(slots, trailingOptionalCount(params, ctx));
+  return paramsToSignatures(params, ctx);
 }
 
 /**
@@ -447,7 +596,13 @@ function factorySlotFor(
   return { type: token };
 }
 
-/** The first constructor declaration WITH a body (the implementation). */
+/**
+ * The implementation constructor (the declaration WITH a body) — the real
+ * construction shape. Used by the §4.5 produced-ctor analysis, which needs the
+ * actual parameter list, not the caller-visible overloads. Signature extraction
+ * (`extractSignatureFromClass`) selects ctors itself: declared overloads when
+ * present, the implementation otherwise.
+ */
 export function findConstructor(
   classDecl: ts.ClassDeclaration,
 ): ts.ConstructorDeclaration | undefined {
@@ -479,47 +634,13 @@ export function slotForParam(
   return result === undefined ? null : result.token;
 }
 
-// ── optionality + overload expansion ─────────────────────────────────────────
-
-/**
- * Expand a base slot list into one or more signatures: the full list, plus one
- * shorter signature for each trailing optional/defaulted param dropped from the
- * right. Longest first, so greedy resolve-time selection prefers injecting the
- * optional dep and falls back to the shorter constructor (default param / an
- * `undefined` argument) only when the dep is not registered.
- *
- *   (a: IA, dep?: IFoo)            → [[IA, IFoo], [IA]]
- *   (a: IA, prefix: string = "x") → [[IA, null], [IA]]
- *   (name: string)                → [[null]]            (required hole, no drop)
- */
-function withOptionalOverloads(
-  slots: Slot[],
-  trailingOptional: number,
-): Signature[] {
-  const signatures: Signature[] = [];
-  for (let drop = 0; drop <= trailingOptional; drop++) {
-    signatures.push(slots.slice(0, slots.length - drop));
-  }
-  return signatures;
-}
-
-/** The length of the trailing run of optional/defaulted params (droppable). */
-function trailingOptionalCount(
-  params: readonly ts.ParameterDeclaration[],
-  ctx: TokenContext,
-): number {
-  let count = 0;
-  for (let i = params.length - 1; i >= 0; i--) {
-    if (!isOptionalParam(params[i]!, ctx)) {break;}
-    count++;
-  }
-  return count;
-}
+// ── optionality (unified on union — no overload expansion) ───────────────────
 
 /**
  * True when a parameter is optional — a `?` token, a default initializer, or a
- * type that admits `undefined` (`dep: IFoo | undefined`). Such a param can be
- * omitted at the call site, so it earns a "without that arg" overload.
+ * type that admits `undefined` / `void` (`dep: IFoo | undefined`, `x: T | void`).
+ * An optional param lowers to a `union(<non-nullish>, { value: undefined })`
+ * fallback (see `extractParamSlot`); there is no overload expansion.
  */
 function isOptionalParam(
   param: ts.ParameterDeclaration,
@@ -528,16 +649,14 @@ function isOptionalParam(
   if (param.questionToken !== undefined || param.initializer !== undefined) {
     return true;
   }
-  return typeIncludesUndefined(ctx.checker.getTypeAtLocation(param));
+  return typeIncludesUndefinedOrVoid(ctx.checker.getTypeAtLocation(param));
 }
 
-/** True when a type is `undefined` or a union with an `undefined` member. */
-function typeIncludesUndefined(type: ts.Type): boolean {
-  if (type.flags & ts.TypeFlags.Undefined) {return true;}
-  return (
-    type.isUnion() &&
-    type.types.some((t) => t.flags & ts.TypeFlags.Undefined)
-  );
+/** True when a type is `undefined`/`void`, or a union with such a member. */
+function typeIncludesUndefinedOrVoid(type: ts.Type): boolean {
+  const nullish = ts.TypeFlags.Undefined | ts.TypeFlags.Void;
+  if (type.flags & nullish) {return true;}
+  return type.isUnion() && type.types.some((t) => t.flags & nullish);
 }
 
 /**

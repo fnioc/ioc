@@ -251,6 +251,172 @@ describe("Union satisfiability in selectSignature", () => {
   });
 });
 
+// ── Single-member unions (ported from #34 anyof gaps) ────────────────────────
+
+describe("single-member union", () => {
+  test("GAP1: single-member union, member unregistered → NoSatisfiableSignatureError (never null)", () => {
+    // A one-member union with no registered member makes the signature
+    // unsatisfiable — resolution throws, it never injects null/undefined.
+    class Svc {
+      public constructor(public readonly dep: unknown) {}
+    }
+    defineDeps(Svc, [[union(T.A)]]);
+
+    const services = new DiBuilder<"singleton">();
+    services.add(T.Service, Svc).as("singleton");
+
+    expect(() => services.build().resolve(T.Service)).toThrow(
+      NoSatisfiableSignatureError,
+    );
+  });
+
+  test("GAP8: single-member union happy path — member registered, resolves", () => {
+    class ImplA {
+      public readonly kind = "impl-a";
+    }
+    class Svc {
+      public constructor(public readonly dep: unknown) {}
+    }
+    defineDeps(Svc, [[union(T.A)]]);
+
+    const services = new DiBuilder<"singleton">();
+    services.add(T.A, ImplA).as("singleton");
+    services.add(T.Service, Svc).as("singleton");
+
+    expect((services.build().resolve<Svc>(T.Service).dep as ImplA).kind).toBe(
+      "impl-a",
+    );
+  });
+});
+
+// ── Union member composability (ported from #34 anyof gaps) ──────────────────
+
+describe("union member composability", () => {
+  test("GAP2: captive MissingScopeError on one member falls through to the next", () => {
+    // T.A registered as "request" (a scope absent from the resolving chain), T.B
+    // as transient. union(A, B) resolved from the root: A throws MissingScopeError
+    // → the union catches it and falls through to B.
+    class ScopedA {
+      public readonly kind = "scoped-a";
+    }
+    class TransientB {
+      public readonly kind = "transient-b";
+    }
+    class Svc {
+      public constructor(public readonly dep: unknown) {}
+    }
+    defineDeps(Svc, [[union(T.A, T.B)]]);
+
+    const services = new DiBuilder<"singleton", "request">();
+    services.add(T.A, ScopedA).as("request"); // needs a "request" ancestor
+    services.add(T.B, TransientB); // transient — always resolvable
+    services.add(T.Service, Svc);
+
+    // root is the "singleton" scope — no "request" ancestor for A.
+    const svc = services.build().resolve<Svc>(T.Service);
+    expect((svc.dep as TransientB).kind).toBe("transient-b");
+  });
+
+  test("GAP3: FactoryRef member resolves when its target is registered", () => {
+    class TargetClass {
+      public readonly kind = "factory-target";
+    }
+    class Svc {
+      public constructor(public readonly dep: unknown) {}
+    }
+    // union({ type: T.A }, T.B): factory-target registered → factory callable wins.
+    defineDeps(Svc, [[union({ type: T.A }, T.B)]]);
+
+    const services = new DiBuilder<"singleton">();
+    services.add(T.A, TargetClass).as("singleton");
+    // T.B NOT registered — the FactoryRef member is always satisfiable, wins.
+    services.add(T.Service, Svc).as("singleton");
+
+    const svc = services.build().resolve<Svc>(T.Service);
+    expect(typeof svc.dep).toBe("function");
+    expect((svc.dep as () => TargetClass)()).toBeInstanceOf(TargetClass);
+  });
+
+  test("GAP4: FactoryRef member target-unregistered — falls to next member", () => {
+    // A FactoryRef whose TARGET is unregistered is NOT resolvable (isResolvableSlot
+    // walks to the target token), so the union falls through to T.B.
+    class FallbackB {
+      public readonly kind = "fallback-b";
+    }
+    class Svc {
+      public constructor(public readonly dep: unknown) {}
+    }
+    defineDeps(Svc, [[union({ type: T.A }, T.B)]]);
+
+    const services = new DiBuilder<"singleton">();
+    // T.A NOT registered → FactoryRef member not resolvable.
+    services.add(T.B, FallbackB).as("singleton");
+    services.add(T.Service, Svc).as("singleton");
+
+    const svc = services.build().resolve<Svc>(T.Service);
+    expect((svc.dep as FallbackB).kind).toBe("fallback-b");
+  });
+
+  test("GAP5: ScopeRef member is always resolvable and wins over later members", () => {
+    class FallbackB {
+      public readonly kind = "fallback-b";
+    }
+    class Svc {
+      public constructor(public readonly dep: unknown) {}
+    }
+    // union({ scope: true }, T.B): ScopeRef is always resolvable → wins.
+    defineDeps(Svc, [[union({ scope: true }, T.B)]]);
+
+    const services = new DiBuilder<"singleton">();
+    services.add(T.B, FallbackB).as("singleton");
+    services.add(T.Service, Svc).as("singleton");
+
+    const svc = services.build().resolve<Svc>(T.Service);
+    // The dep is the live provider view (has resolve + createScope methods).
+    expect(typeof (svc.dep as { resolve?: unknown }).resolve).toBe("function");
+  });
+
+  test("GAP6: nested union resolves when it is itself a member of an outer union", () => {
+    class ImplA {
+      public readonly kind = "impl-a";
+    }
+    class Svc {
+      public constructor(public readonly dep: unknown) {}
+    }
+    // union(union(T.A), T.B): inner union has T.A registered → resolves.
+    defineDeps(Svc, [[union(union(T.A), T.B)]]);
+
+    const services = new DiBuilder<"singleton">();
+    services.add(T.A, ImplA).as("singleton");
+    services.add(T.Service, Svc).as("singleton");
+
+    const svc = services.build().resolve<Svc>(T.Service);
+    expect((svc.dep as ImplA).kind).toBe("impl-a");
+  });
+
+  test("GAP7: a fully-unsatisfiable union surfaces its member tokens in the error", () => {
+    // selectSignature marks a union-only signature unsatisfiable when no member
+    // is registered, and NoSatisfiableSignatureError carries the union's tokens.
+    class Svc {
+      public constructor(_dep: unknown) {}
+    }
+    defineDeps(Svc, [[union(T.A, T.B)]]);
+
+    const services = new DiBuilder<"singleton">();
+    services.add(T.Service, Svc).as("singleton");
+
+    let caught: NoSatisfiableSignatureError | undefined;
+    try {
+      services.build().resolve(T.Service);
+    } catch (e) {
+      if (e instanceof NoSatisfiableSignatureError) {caught = e;}
+    }
+    expect(caught).toBeDefined();
+    expect(caught!.unsatisfiable).toContain(T.A);
+    expect(caught!.unsatisfiable).toContain(T.B);
+  });
+});
+
 // ── resolveFactory(type, params) ─────────────────────────────────────────────
 
 describe("ServiceProvider.resolveFactory(type, params)", () => {

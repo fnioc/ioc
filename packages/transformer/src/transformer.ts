@@ -18,12 +18,13 @@
 
 import ts from "typescript";
 import type { Func } from "@rhombus-toolkit/func";
-import { lowerStatement, type LowerContext } from "./lower.js";
+import { literalExpression, lowerStatement, type LowerContext } from "./lower.js";
 import {
   deriveToken,
   tokenForReturnType,
   tokenForType,
   injectTokenFor,
+  singletonValue,
   type TokenContext,
 } from "./tokens.js";
 import {
@@ -162,13 +163,29 @@ function isTokenlessResolveCall(call: ts.CallExpression): boolean {
   return !call.arguments.length;
 }
 
-/** `*.resolve<I>()` → `*.resolve("tok")` / `*.resolveFactory("tok:return", [...])`. */
+/**
+ * `*.resolve<I>()` → `*.resolve("tok")` / `*.resolveFactory("tok:return", [...])`.
+ *
+ * Rule 2: a SINGULAR type arg (`resolve<"dev">()`, `resolve<42>()`,
+ * `resolve<void>()`, `resolve<null>()`) supplies its value directly — the whole
+ * call lowers to the value EXPRESSION itself (`"dev"`, `42`, `void 0`, `null`),
+ * no container round-trip. A literal/nullish UNION (`"a" | "b"`, `Foo | undefined`)
+ * stays a normal `resolve("<token>")` (singletonValue returns undefined for a union).
+ */
 function lowerResolveCall(
   call: ts.CallExpression,
   ctx: LowerContext,
-): ts.CallExpression {
+): ts.Expression {
   const callee = call.expression as ts.PropertyAccessExpression;
   const typeArg = call.typeArguments![0]!;
+
+  // Rule 2: singular T → emit the value, not a resolve call.
+  if (!ts.isFunctionTypeNode(typeArg)) {
+    const singleton = singletonValue(ctx.checker.getTypeFromTypeNode(typeArg));
+    if (singleton) {
+      return literalExpression(singleton.value, ctx.factory);
+    }
+  }
 
   let method = "resolve";
   let token: string | undefined;

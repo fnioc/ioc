@@ -53,21 +53,42 @@ export interface Union {
 }
 
 /**
+ * A SINGULAR (non-union) type that supplies its value directly — no container
+ * lookup. Emitted for:
+ *   - a non-union literal param (`"dev"`, `42`, `true`, `1n`) → its value, and
+ *   - a whole-type `void` / `undefined` → `undefined`; a whole-type `null` →
+ *     `null` (a singleton type has exactly one inhabitant, so it is supplied
+ *     directly, NOT tokenized — Rule 2).
+ * The engine injects `value` verbatim. A LITERAL/typed UNION (`"a" | "b"`,
+ * `Foo | undefined`) is NOT a `LiteralRef`: a literal union stays a resolved
+ * token, and a nullish union is stripped by the optional/overload path. Always
+ * satisfiable — the value is self-supplying.
+ *
+ * NOTE: `value` may legitimately be `undefined` (the `void`/`undefined` case),
+ * so a `LiteralRef` is identified by the PRESENCE of the `value` key, never by
+ * `value !== undefined`. See `isLiteralRef`.
+ */
+export interface LiteralRef {
+  readonly value: string | number | boolean | bigint | undefined | null;
+}
+
+/**
  * One positional slot in a constructor / factory signature:
  *   - a `Token` string  — a container-resolved dependency,
  *   - a `FactoryRef`    — a factory-injected parameter (see `FactoryRef`),
- *   - a `ScopeRef`      — the live resolution scope (see `ScopeRef`), or
- *   - a `Union`         — member-level alternatives tried in order.
+ *   - a `ScopeRef`      — the live resolution scope (see `ScopeRef`),
+ *   - a `Union`         — member-level alternatives tried in order, or
+ *   - a `LiteralRef`    — a singular literal supplying its value directly.
  */
-export type DepSlot = Token | FactoryRef | ScopeRef | Union;
+export type DepSlot = Token | FactoryRef | ScopeRef | Union | LiteralRef;
 
 /**
  * Per-constructor dependency metadata stored in the global WeakMap.
  *
  * `signatures` is an array of arrays: each element is one constructor signature
  * (for overload support). `signatures[i][j]` is the `DepSlot` — a token, a
- * `FactoryRef`, a `ScopeRef`, or a `Union` — for constructor parameter `j` of
- * overload `i`.
+ * `FactoryRef`, a `ScopeRef`, a `Union`, or a `LiteralRef` — for constructor
+ * parameter `j` of overload `i`.
  */
 export interface DepRecord {
   readonly signatures: readonly (readonly DepSlot[])[];

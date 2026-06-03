@@ -107,9 +107,10 @@ describe("factory detection", () => {
     );
   });
 
-  test("a factory whose return type is a primitive produces a hard error", () => {
-    // Per design §5: no silent fallback. `() => string` cannot derive a factory token.
-    // The param itself has no derivable token → UnderivableToken diagnostic.
+  test("a factory whose return type is a primitive keys on the keyword token (Rule 1)", () => {
+    // Rule 1: `() => string` derives the factory's produced token "string" — the
+    // return type now tokenizes by its keyword, no hard error. The factory is a
+    // `{ type: "string" }` slot (a factory producing the registered `string`).
     const src = `
       interface ISvc {}
       class Svc implements ISvc {
@@ -118,12 +119,11 @@ describe("factory detection", () => {
       declare const services: any;
       services.add<ISvc>(Svc).as<"singleton">();
     `;
-    const { diagnostics } = transform(fixture(src));
-    // The makeName param falls through — its resolved type is a function type
-    // with no derivable token → hard error.
+    const { output, diagnostics } = transform(fixture(src));
     expect(
       diagnostics.filter((d) => d.code === DiagnosticCode.UnderivableToken).length,
-    ).toBeGreaterThanOrEqual(1);
+    ).toBe(0);
+    expect(depsArrayFor(output, "Svc")).toBe('[[{ type: "string" }]]');
   });
 
   test("package-public factory return type keys on the package token", () => {

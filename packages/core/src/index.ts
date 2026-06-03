@@ -6,7 +6,8 @@
  *   - `FactoryRef`     — marks a signature slot as a factory-injected parameter
  *   - `ScopeRef`       — marks a signature slot as the live resolution scope
  *   - `Union`          — member-level alternative slots tried in declaration order
- *   - `DepSlot`        — one positional slot: Token | FactoryRef | ScopeRef | Union
+ *   - `LiteralRef`     — a singular literal slot supplying its value directly
+ *   - `DepSlot`        — one positional slot: Token | FactoryRef | ScopeRef | Union | LiteralRef
  *   - `Inject`         — compile-time brand that pins a token for one arg
  *   - `DepTarget`      — a ctor or factory function metadata attaches to
  *   - `DepRecord`      — shape of per-constructor metadata in the WeakMap
@@ -16,6 +17,7 @@
  *   - `isFactoryRef`   — type guard for FactoryRef slots
  *   - `isScopeRef`     — type guard for ScopeRef slots
  *   - `isUnionSlot`    — type guard for Union slots
+ *   - `isLiteralRef`   — type guard for LiteralRef slots
  *   - `signature`      — TC39 class decorator factory
  *   - `ForCtorBuilder` — return type of `forCtor`
  *   - `forCtor`        — fluent free-function for third-party classes
@@ -28,12 +30,20 @@ export type {
   FactoryRef,
   ScopeRef,
   Union,
+  LiteralRef,
   DepSlot,
   DepTarget,
   DepRecord,
   Inject,
 } from "./types.js";
-export { defineDeps, getDeps, isFactoryRef, isScopeRef, isUnionSlot } from "./defineDeps.js";
+export {
+  defineDeps,
+  getDeps,
+  isFactoryRef,
+  isScopeRef,
+  isUnionSlot,
+  isLiteralRef,
+} from "./defineDeps.js";
 export { signature } from "./signature.js";
 export type { ForCtorBuilder } from "./forCtor.js";
 export { forCtor } from "./forCtor.js";
