@@ -456,14 +456,14 @@ function collectExportEntries(pkg: PackageInfo): ExportEntry[] {
 /** Resolve an exports condition value to its concrete string target(s). */
 function resolveConditionTargets(target: unknown): string[] {
   if (typeof target === "string") {return [target];}
-  if (target && typeof target === "object") {
+  if (typeof target === "object" && target !== null) {
     const obj = target as Record<string, unknown>;
     const out: string[] = [];
     // Prefer the import/types/default channels; collect all string leaves.
     for (const key of ["types", "import", "module", "default", "require", "node", "bun"]) {
       const v = obj[key];
       if (typeof v === "string") {out.push(v);}
-      else if (v && typeof v === "object") {out.push(...resolveConditionTargets(v));}
+      else if (typeof v === "object" && v !== null) {out.push(...resolveConditionTargets(v));}
     }
     return out;
   }
