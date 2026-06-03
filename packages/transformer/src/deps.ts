@@ -97,18 +97,18 @@ export function isUnionSlot(slot: Slot): slot is UnionSlot {
  *   - both are union slots with element-wise equal members (recursive)
  */
 export function slotsEqual(a: Slot, b: Slot): boolean {
-  if (a === b) return true;
-  if (typeof a === "string" || typeof b === "string") return false;
-  if (isScopeSlot(a) && isScopeSlot(b)) return true;
+  if (a === b) {return true;}
+  if (typeof a === "string" || typeof b === "string") {return false;}
+  if (isScopeSlot(a) && isScopeSlot(b)) {return true;}
   if (isFactorySlot(a) && isFactorySlot(b)) {
-    if (a.type !== b.type) return false;
+    if (a.type !== b.type) {return false;}
     const ap = a.params ?? [];
     const bp = b.params ?? [];
-    if (ap.length !== bp.length) return false;
+    if (ap.length !== bp.length) {return false;}
     return ap.every((p, i) => p === bp[i]);
   }
   if (isUnionSlot(a) && isUnionSlot(b)) {
-    if (a.union.length !== b.union.length) return false;
+    if (a.union.length !== b.union.length) {return false;}
     return a.union.every((s, i) => slotsEqual(s, b.union[i]!));
   }
   return false;
@@ -154,10 +154,10 @@ export function extractFromExpression(
 ): ConstructorExtraction | undefined {
   const symbol = ctx.checker.getSymbolAtLocation(expr);
   const resolved = symbol && aliasTarget(symbol, ctx.checker);
-  if (!resolved) return undefined;
+  if (!resolved) {return undefined;}
 
   const classDecl = classDeclarationOf(resolved);
-  if (!classDecl) return undefined;
+  if (!classDecl) {return undefined;}
 
   const signatures = extractSignatureFromClass(classDecl, ctx);
   return { classSymbol: resolved, signatures };
@@ -188,7 +188,7 @@ export function extractSignatureFromClass(
   ctx: DepContext,
 ): Signature[] {
   const ctor = findConstructor(classDecl);
-  if (!ctor) return [[]];
+  if (!ctor) {return [[]];}
 
   const slots = ctor.parameters.map((param) => extractParamSlot(param, ctx));
   return withOptionalOverloads(slots, trailingOptionalCount(ctor.parameters, ctx));
@@ -215,17 +215,17 @@ function extractParamSlot(
   ctx: DepContext,
 ): Slot {
   // 1. A `ResolveScope`-typed parameter is the live scope, not a token.
-  if (isResolveScopeParam(param, ctx)) return { scope: true };
+  if (isResolveScopeParam(param, ctx)) {return { scope: true };}
 
   // 2. Check for the Inject<T, "tok"> brand FIRST, before factory / union /
   //    normal derivation. If branded, the branded token wins unconditionally.
   const rawType = ctx.checker.getTypeAtLocation(param);
   const brandedToken = injectTokenFor(rawType, ctx.checker);
-  if (brandedToken !== undefined) return brandedToken;
+  if (brandedToken !== undefined) {return brandedToken;}
 
   // 3. Inline factory (syntactic: annotation is a FunctionTypeNode).
   const factory = factorySlotFor(param, ctx);
-  if (factory) return factory;
+  if (factory) {return factory;}
 
   // 4. Inline union (syntactic: annotation is a UnionTypeNode, but NOT T|undefined).
   //    Named type aliases that expand to a union are TypeReferenceNodes at the
@@ -255,7 +255,7 @@ function extractParamSlot(
   //    `dep?: IFoo` derives `IFoo`'s token.
   const type = nonNullish(rawType);
   const result = tokenForType(type, ctx);
-  if (result !== undefined) return result.token;
+  if (result !== undefined) {return result.token;}
 
   // 6. Hard error: no derivable token and no Inject brand.
   ctx.sink.addDiagnostic(
@@ -284,14 +284,14 @@ function extractParamSlotFromTypeNode(
   // Check for Inject brand on the resolved type of this member.
   const memberType = ctx.checker.getTypeFromTypeNode(typeNode);
   const brandedToken = injectTokenFor(memberType, ctx.checker);
-  if (brandedToken !== undefined) return brandedToken;
+  if (brandedToken !== undefined) {return brandedToken;}
 
   // Nested factory: an inline function type node within a union member.
   if (ts.isFunctionTypeNode(typeNode)) {
     const signature = ctx.checker.getSignatureFromDeclaration(typeNode);
     if (signature) {
       const token = tokenForReturnType(signature, ctx);
-      if (token !== undefined) return { type: token };
+      if (token !== undefined) {return { type: token };}
     }
   }
 
@@ -313,7 +313,7 @@ function extractParamSlotFromTypeNode(
 
   // Normal derivation.
   const token = deriveTokenForTypeNode(typeNode, ctx);
-  if (token !== undefined) return token;
+  if (token !== undefined) {return token;}
 
   // Hard error for this union member.
   ctx.sink.addDiagnostic(
@@ -377,7 +377,7 @@ function signatureToSlots(
   const params: ts.ParameterDeclaration[] = [];
   for (const paramSymbol of signature.parameters) {
     const decl = paramSymbol.valueDeclaration;
-    if (!decl || !ts.isParameter(decl) || decl.dotDotDotToken) return undefined;
+    if (!decl || !ts.isParameter(decl) || decl.dotDotDotToken) {return undefined;}
     slots.push(extractParamSlot(decl, ctx));
     params.push(decl);
   }
@@ -399,9 +399,9 @@ export function extractFactoryReferenceSignature(
 ): Signature[] | undefined {
   const type = ctx.checker.getTypeAtLocation(expr);
   // A class/constructable resolves down the class path, never here.
-  if (type.getConstructSignatures().length > 0) return undefined;
+  if (type.getConstructSignatures().length) {return undefined;}
   const callSignatures = type.getCallSignatures();
-  if (callSignatures.length === 0) return undefined;
+  if (!callSignatures.length) {return undefined;}
   return signatureToSlots(callSignatures[0]!, ctx);
 }
 
@@ -420,7 +420,7 @@ export function extractCtorReferenceSignature(
   const constructSignatures = ctx.checker
     .getTypeAtLocation(expr)
     .getConstructSignatures();
-  if (constructSignatures.length === 0) return undefined;
+  if (!constructSignatures.length) {return undefined;}
   return signatureToSlots(constructSignatures[0]!, ctx);
 }
 
@@ -437,13 +437,13 @@ function factorySlotFor(
   ctx: TokenContext,
 ): FactorySlot | undefined {
   const typeNode = param.type;
-  if (!typeNode || !ts.isFunctionTypeNode(typeNode)) return undefined;
+  if (!typeNode || !ts.isFunctionTypeNode(typeNode)) {return undefined;}
 
   const signature = ctx.checker.getSignatureFromDeclaration(typeNode);
-  if (!signature) return undefined;
+  if (!signature) {return undefined;}
 
   const token = tokenForReturnType(signature, ctx);
-  if (token === undefined) return undefined;
+  if (token === undefined) {return undefined;}
   return { type: token };
 }
 
@@ -510,7 +510,7 @@ function trailingOptionalCount(
 ): number {
   let count = 0;
   for (let i = params.length - 1; i >= 0; i--) {
-    if (!isOptionalParam(params[i]!, ctx)) break;
+    if (!isOptionalParam(params[i]!, ctx)) {break;}
     count++;
   }
   return count;
@@ -533,7 +533,7 @@ function isOptionalParam(
 
 /** True when a type is `undefined` or a union with an `undefined` member. */
 function typeIncludesUndefined(type: ts.Type): boolean {
-  if (type.flags & ts.TypeFlags.Undefined) return true;
+  if (type.flags & ts.TypeFlags.Undefined) {return true;}
   return (
     type.isUnion() &&
     type.types.some((t) => t.flags & ts.TypeFlags.Undefined)
@@ -547,7 +547,7 @@ function typeIncludesUndefined(type: ts.Type): boolean {
  * (a literal union renders its token; a typed union resolves by alias or holes).
  */
 function nonNullish(type: ts.Type): ts.Type {
-  if (!type.isUnion()) return type;
+  if (!type.isUnion()) {return type;}
   const kept = type.types.filter(
     (t) =>
       !(t.flags &
@@ -559,7 +559,7 @@ function nonNullish(type: ts.Type): ts.Type {
 /** True when the class carries a `@signature` decorator (manual annotation). */
 export function hasSignatureDecorator(classDecl: ts.ClassDeclaration): boolean {
   const decorators = ts.getDecorators(classDecl);
-  if (!decorators) return false;
+  if (!decorators) {return false;}
   return decorators.some((d) => decoratorName(d) === "signature");
 }
 
@@ -567,10 +567,10 @@ function decoratorName(decorator: ts.Decorator): string | undefined {
   const expr = decorator.expression;
   if (ts.isCallExpression(expr)) {
     const callee = expr.expression;
-    if (ts.isIdentifier(callee)) return callee.text;
-    if (ts.isPropertyAccessExpression(callee)) return callee.name.text;
+    if (ts.isIdentifier(callee)) {return callee.text;}
+    if (ts.isPropertyAccessExpression(callee)) {return callee.name.text;}
   }
-  if (ts.isIdentifier(expr)) return expr.text;
-  if (ts.isPropertyAccessExpression(expr)) return expr.name.text;
+  if (ts.isIdentifier(expr)) {return expr.text;}
+  if (ts.isPropertyAccessExpression(expr)) {return expr.name.text;}
   return undefined;
 }

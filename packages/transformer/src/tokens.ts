@@ -68,7 +68,7 @@ function unwrapPromise(type: ts.Type, checker: ts.TypeChecker): ts.Type {
   if (symbol?.getName() === "Promise") {
     const ref = type as ts.TypeReference;
     const args = checker.getTypeArguments(ref);
-    if (args.length === 1) return args[0]!;
+    if (args.length === 1) {return args[0]!;}
   }
   return type;
 }
@@ -124,9 +124,9 @@ export function injectTokenFor(
     for (const member of type.types) {
       const isNullish =
         member.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null);
-      if (isNullish) continue;
+      if (isNullish) {continue;}
       const result = injectTokenFor(member, checker);
-      if (result !== undefined) return result;
+      if (result !== undefined) {return result;}
     }
     return undefined;
   }
@@ -139,21 +139,21 @@ export function injectTokenFor(
     // We need the property to be declared as a computed-symbol property or with
     // internal name matching the TOK symbol. The unique symbol shows up as a
     // symbol-keyed property.
-    if (!decls || decls.length === 0) continue;
+    if (!decls || !decls.length) {continue;}
 
     // Check if the property name is our unique symbol by looking for a property
     // whose valueDeclaration is a PropertySignature with a computed name referencing
     // a const declaration named "TOK".
     const isInjectProp = decls.some((decl) => {
-      if (!ts.isPropertySignature(decl)) return false;
+      if (!ts.isPropertySignature(decl)) {return false;}
       const name = decl.name;
-      if (!ts.isComputedPropertyName(name)) return false;
+      if (!ts.isComputedPropertyName(name)) {return false;}
       const expr = name.expression;
-      if (!ts.isIdentifier(expr)) return false;
+      if (!ts.isIdentifier(expr)) {return false;}
       return expr.text === INJECT_TOK_PROPERTY;
     });
 
-    if (!isInjectProp) continue;
+    if (!isInjectProp) {continue;}
 
     // The property type must be a string literal — that is the token K.
     const propType = checker.getTypeOfSymbol(prop);
@@ -163,7 +163,7 @@ export function injectTokenFor(
     // Handle optional: the property type may be `K | undefined`; extract K.
     if (propType.isUnion()) {
       for (const member of propType.types) {
-        if (member.isStringLiteral()) return member.value;
+        if (member.isStringLiteral()) {return member.value;}
       }
     }
   }
@@ -201,16 +201,16 @@ export function deriveToken(
   // literal-level discrimination (`nameof<"a">()`, `add<1 | 2>(...)`,
   // `resolve<"a" | "b">()`).
   const literal = literalToken(type);
-  if (literal !== undefined) return literal;
+  if (literal !== undefined) {return literal;}
 
   const symbol = type.aliasSymbol ?? type.getSymbol();
-  if (!symbol) return undefined;
+  if (!symbol) {return undefined;}
 
   const name = symbol.getName();
-  if (!name || name === "__type") return undefined;
+  if (!name || name === "__type") {return undefined;}
 
   const declaration = primaryDeclaration(symbol);
-  if (!declaration) return undefined;
+  if (!declaration) {return undefined;}
 
   const sourceFile = declaration.getSourceFile();
   const declPath = sourceFile.fileName;
@@ -220,7 +220,7 @@ export function deriveToken(
     const subpath = publicExportSubpath(pkg, declPath);
     if (subpath !== undefined) {
       // Package-public: `name:subpath/Symbol` (subpath "" → `name:Symbol`).
-      return subpath === ""
+      return !subpath
         ? `${pkg.name}:${name}`
         : `${pkg.name}:${subpath}/${name}`;
     }
@@ -242,8 +242,8 @@ export function deriveToken(
  * value and return `undefined` (they fall through to symbol-based derivation).
  */
 function literalText(type: ts.Type): string | undefined {
-  if (type.isStringLiteral()) return JSON.stringify(type.value);
-  if (type.isNumberLiteral()) return String(type.value);
+  if (type.isStringLiteral()) {return JSON.stringify(type.value);}
+  if (type.isNumberLiteral()) {return String(type.value);}
   if (type.flags & ts.TypeFlags.BigIntLiteral) {
     const value = (type as ts.BigIntLiteralType).value;
     return `${value.negative ? "-" : ""}${value.base10Value}n`;
@@ -270,17 +270,17 @@ function literalText(type: ts.Type): string | undefined {
  * `BooleanLiteral`, not the wide `Boolean` flag).
  */
 function literalToken(type: ts.Type): string | undefined {
-  if (type.flags & ts.TypeFlags.Boolean) return undefined;
+  if (type.flags & ts.TypeFlags.Boolean) {return undefined;}
   const single = literalText(type);
-  if (single !== undefined) return single;
+  if (single !== undefined) {return single;}
   if (type.isUnion()) {
     const parts: string[] = [];
     for (const member of type.types) {
       const text = literalText(member);
-      if (text === undefined) return undefined;
+      if (text === undefined) {return undefined;}
       parts.push(text);
     }
-    return parts.length > 0 ? parts.sort().join(" | ") : undefined;
+    return parts.length ? parts.sort().join(" | ") : undefined;
   }
   return undefined;
 }
@@ -288,7 +288,7 @@ function literalToken(type: ts.Type): string | undefined {
 /** The declaration we anchor a token on — prefer interface/class/type-alias. */
 function primaryDeclaration(symbol: ts.Symbol): ts.Declaration | undefined {
   const decls = symbol.getDeclarations();
-  if (!decls || decls.length === 0) return undefined;
+  if (!decls || !decls.length) {return undefined;}
   const preferred = decls.find(
     (d) =>
       ts.isInterfaceDeclaration(d) ||
@@ -343,7 +343,7 @@ function nearestPackage(
   for (;;) {
     const cached = cache.get(dir);
     if (cached !== undefined) {
-      if (cached) return cached;
+      if (cached) {return cached;}
     } else {
       const pkgPath = `${dir}/package.json`;
       const text = read(pkgPath);
@@ -351,7 +351,7 @@ function nearestPackage(
       if (text !== undefined) {
         try {
           const json = JSON.parse(text) as PackageJson;
-          if (typeof json.name === "string" && json.name.length > 0) {
+          if (typeof json.name === "string" && json.name.length) {
             resolved = { name: json.name, dir, json };
           }
         } catch {
@@ -359,10 +359,10 @@ function nearestPackage(
         }
       }
       cache.set(dir, resolved);
-      if (resolved) return resolved;
+      if (resolved) {return resolved;}
     }
     const parent = dirname(dir);
-    if (parent === dir) return undefined;
+    if (parent === dir) {return undefined;}
     dir = parent;
   }
 }
@@ -378,7 +378,7 @@ function publicExportSubpath(
   declPath: string,
 ): string | undefined {
   const rel = posixRelative(pkg.dir, declPath);
-  if (rel === undefined) return undefined;
+  if (rel === undefined) {return undefined;}
   const relNoExt = stripExt(rel);
 
   const entries = collectExportEntries(pkg);
@@ -431,7 +431,7 @@ function collectExportEntries(pkg: PackageInfo): ExportEntry[] {
       const keys = Object.keys(obj);
       const looksLikeSubpathMap = keys.some((k) => k === "." || k.startsWith("./"));
       if (looksLikeSubpathMap) {
-        for (const key of keys) pushTarget(key, obj[key]);
+        for (const key of keys) {pushTarget(key, obj[key]);}
       } else {
         // A bare conditions object at the top level == the root entry.
         pushTarget(".", obj);
@@ -442,11 +442,11 @@ function collectExportEntries(pkg: PackageInfo): ExportEntry[] {
   // Fallbacks broaden the public surface (a package may ship `main`/`types`
   // without an `exports` map, or alongside a root-only `exports`).
   for (const field of [json.main, json.module, json.types, json.typings]) {
-    if (typeof field === "string" && field.length > 0) {
+    if (typeof field === "string" && field.length) {
       out.push({ subpath: "", targetRel: field.replace(/^\.\/?/, "") });
     }
   }
-  if (out.length === 0) {
+  if (!out.length) {
     // No declared surface at all → treat the conventional `index` as public.
     out.push({ subpath: "", targetRel: "index" });
   }
@@ -455,15 +455,15 @@ function collectExportEntries(pkg: PackageInfo): ExportEntry[] {
 
 /** Resolve an exports condition value to its concrete string target(s). */
 function resolveConditionTargets(target: unknown): string[] {
-  if (typeof target === "string") return [target];
+  if (typeof target === "string") {return [target];}
   if (target && typeof target === "object") {
     const obj = target as Record<string, unknown>;
     const out: string[] = [];
     // Prefer the import/types/default channels; collect all string leaves.
     for (const key of ["types", "import", "module", "default", "require", "node", "bun"]) {
       const v = obj[key];
-      if (typeof v === "string") out.push(v);
-      else if (v && typeof v === "object") out.push(...resolveConditionTargets(v));
+      if (typeof v === "string") {out.push(v);}
+      else if (v && typeof v === "object") {out.push(...resolveConditionTargets(v));}
     }
     return out;
   }
@@ -475,8 +475,8 @@ function resolveConditionTargets(target: unknown): string[] {
 function posixRelative(from: string, to: string): string | undefined {
   const a = normalize(from).replace(/\/$/, "");
   const b = normalize(to);
-  if (b === a) return "";
-  if (b.startsWith(a + "/")) return b.slice(a.length + 1);
+  if (b === a) {return "";}
+  if (b.startsWith(a + "/")) {return b.slice(a.length + 1);}
   return undefined;
 }
 
@@ -488,7 +488,7 @@ function normalize(p: string): string {
 function dirname(p: string): string {
   const n = normalize(p).replace(/\/+$/, "");
   const idx = n.lastIndexOf("/");
-  if (idx <= 0) return idx === 0 ? "/" : n;
+  if (idx <= 0) {return idx === 0 ? "/" : n;}
   return n.slice(0, idx);
 }
 

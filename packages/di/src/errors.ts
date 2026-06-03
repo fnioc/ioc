@@ -44,7 +44,7 @@ export class MissingScopeError extends DiError {
       `Cannot resolve "${token}": its lifetime is tagged "${scope}", but no ` +
         `ancestor scope with that name exists in the resolving chain ` +
         `(available: ${
-          availableScopes.length > 0
+          availableScopes.length
             ? availableScopes.map((s) => `"${s}"`).join(" → ")
             : "none"
         }). ` +
@@ -89,7 +89,7 @@ export class NoSatisfiableSignatureError extends DiError {
       `No satisfiable constructor signature for ${ctorName} (resolving ` +
         `"${token}"). Every candidate signature names a dependency that is ` +
         `not registered in the owning scope` +
-        (unsatisfiable.length > 0
+        (unsatisfiable.length
           ? `; unsatisfiable tokens: ${unsatisfiable
               .map((t) => `"${t}"`)
               .join(", ")}`

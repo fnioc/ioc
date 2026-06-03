@@ -55,10 +55,10 @@ export function checkExtractedRegistration(
   const classDecl = extraction.classSymbol
     .getDeclarations()
     ?.find(ts.isClassDeclaration);
-  if (!classDecl) return;
+  if (!classDecl) {return;}
 
   const ctor = findConstructor(classDecl);
-  if (!ctor) return;
+  if (!ctor) {return;}
 
   for (const param of ctor.parameters) {
     checkFactoryParam(param, ctx);
@@ -83,10 +83,10 @@ export function checkAnnotatedFactoryParams(
   const classDecl = classSymbol
     .getDeclarations()
     ?.find(ts.isClassDeclaration);
-  if (!classDecl) return;
+  if (!classDecl) {return;}
 
   const ctor = findConstructor(classDecl);
-  if (!ctor) return;
+  if (!ctor) {return;}
 
   for (const param of ctor.parameters) {
     checkFactoryParam(param, ctx);
@@ -107,7 +107,7 @@ export function checkOverloads(
   const classDecl = classSymbol
     .getDeclarations()
     ?.find(ts.isClassDeclaration);
-  if (!classDecl) return;
+  if (!classDecl) {return;}
   checkOverloadAmbiguity(classDecl, site, ctx);
 }
 
@@ -121,19 +121,19 @@ function checkFactoryParam(
   ctx: CheckContext,
 ): void {
   const typeNode = param.type;
-  if (!typeNode || !ts.isFunctionTypeNode(typeNode)) return;
+  if (!typeNode || !ts.isFunctionTypeNode(typeNode)) {return;}
 
   const signature = ctx.checker.getSignatureFromDeclaration(typeNode);
-  if (!signature) return;
+  if (!signature) {return;}
 
   // The produced concrete class (the factory's product). The return type is
   // usually an interface; we can only check when a concrete class is reachable.
   const returnType = ctx.checker.getReturnTypeOfSignature(signature);
   const producedClass = concreteClassFor(returnType, ctx);
-  if (!producedClass) return;
+  if (!producedClass) {return;}
 
   const producedCtor = findConstructor(producedClass);
-  if (!producedCtor) return;
+  if (!producedCtor) {return;}
 
   // The produced ctor's holes (unregistered-shaped params), in order — these
   // are exactly the params the factory caller must supply.
@@ -172,15 +172,15 @@ function checkAsyncParam(
 ): void {
   const typeNode = param.type;
   // Already `Promise<...>` → correct, nothing to flag.
-  if (typeNode && isPromiseTypeNode(typeNode)) return;
+  if (typeNode && isPromiseTypeNode(typeNode)) {return;}
   // Inline factory params are not direct deps — skip.
-  if (typeNode && ts.isFunctionTypeNode(typeNode)) return;
+  if (typeNode && ts.isFunctionTypeNode(typeNode)) {return;}
 
   const type = ctx.checker.getTypeAtLocation(param);
   const result = tokenForType(type, ctx);
-  if (result === undefined) return;
+  if (result === undefined) {return;}
 
-  if (!ctx.asyncTokens.has(result.token)) return;
+  if (!ctx.asyncTokens.has(result.token)) {return;}
 
   const name = param.name.getText();
   ctx.sink.addDiagnostic(
@@ -208,12 +208,12 @@ function checkOverloadAmbiguity(
   const decorators = ts.getDecorators(classDecl) ?? [];
   const lengths: number[] = [];
   for (const dec of decorators) {
-    if (!ts.isCallExpression(dec.expression)) continue;
-    if (!isSignatureCallee(dec.expression.expression)) continue;
+    if (!ts.isCallExpression(dec.expression)) {continue;}
+    if (!isSignatureCallee(dec.expression.expression)) {continue;}
     lengths.push(dec.expression.arguments.length);
   }
   // forCtor(C).signature(a, b).signature(c, d) — chained signature() arities.
-  for (const len of forCtorSignatureArities(classDecl, ctx)) lengths.push(len);
+  for (const len of forCtorSignatureArities(classDecl, ctx)) {lengths.push(len);}
 
   const seen = new Set<number>();
   for (const len of lengths) {
@@ -243,12 +243,12 @@ function concreteClassFor(
   ctx: CheckContext,
 ): ts.ClassDeclaration | undefined {
   const direct = classDeclarationOfType(type);
-  if (direct) return direct;
+  if (direct) {return direct;}
   // A `Promise<X>` factory product: unwrap and retry on X.
   const symbol = type.getSymbol();
   if (symbol?.getName() === "Promise") {
     const args = ctx.checker.getTypeArguments(type as ts.TypeReference);
-    if (args.length === 1) return classDeclarationOfType(args[0]!);
+    if (args.length === 1) {return classDeclarationOfType(args[0]!);}
   }
   return undefined;
 }
@@ -263,7 +263,7 @@ function unwrapPromiseType(type: ts.Type, ctx: CheckContext): ts.Type {
   const symbol = type.getSymbol();
   if (symbol?.getName() === "Promise") {
     const args = ctx.checker.getTypeArguments(type as ts.TypeReference);
-    if (args.length === 1) return args[0]!;
+    if (args.length === 1) {return args[0]!;}
   }
   return type;
 }
@@ -279,7 +279,7 @@ function isPromiseTypeNode(node: ts.TypeNode): boolean {
 
 /** True when a decorator callee is `signature` (bare or `ns.signature`). */
 function isSignatureCallee(callee: ts.Expression): boolean {
-  if (ts.isIdentifier(callee)) return callee.text === "signature";
+  if (ts.isIdentifier(callee)) {return callee.text === "signature";}
   if (ts.isPropertyAccessExpression(callee)) {
     return callee.name.text === "signature";
   }
@@ -296,7 +296,7 @@ function forCtorSignatureArities(
   ctx: CheckContext,
 ): number[] {
   const target = classDecl.name && ctx.checker.getSymbolAtLocation(classDecl.name);
-  if (!target) return [];
+  if (!target) {return [];}
 
   const arities: number[] = [];
   const visit = (node: ts.Node): void => {
@@ -313,7 +313,7 @@ function forCtorSignatureArities(
           sym && sym.flags & ts.SymbolFlags.Alias
             ? ctx.checker.getAliasedSymbol(sym)
             : sym;
-        if (resolved === target) arities.push(node.arguments.length);
+        if (resolved === target) {arities.push(node.arguments.length);}
       }
     }
     ts.forEachChild(node, visit);
@@ -431,7 +431,7 @@ function returnsPromise(
   checker: ts.TypeChecker,
 ): boolean {
   const signature = checker.getSignatureFromDeclaration(node);
-  if (!signature) return false;
+  if (!signature) {return false;}
   const ret = checker.getReturnTypeOfSignature(signature);
   return ret.getSymbol()?.getName() === "Promise";
 }

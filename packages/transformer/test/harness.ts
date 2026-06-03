@@ -61,7 +61,7 @@ export function transform(
   const host: ts.CompilerHost = {
     getSourceFile(fileName, languageVersion) {
       const text = readVirtualOrReal(files, fileName, libFileName, libSourcePath);
-      if (text === undefined) return undefined;
+      if (text === undefined) {return undefined;}
       return ts.createSourceFile(fileName, text, languageVersion, true);
     },
     getDefaultLibFileName: () => libFileName,
@@ -83,7 +83,7 @@ export function transform(
       return readVirtualOrReal(files, fileName, libFileName, libSourcePath);
     },
     directoryExists(dirName) {
-      if (anyFileUnder(files, dirName)) return true;
+      if (anyFileUnder(files, dirName)) {return true;}
       return ts.sys.directoryExists?.(dirName) ?? false;
     },
     getDirectories(dirName) {
@@ -122,7 +122,7 @@ export function transform(
 
   for (const fileName of entry) {
     const sourceFile = program.getSourceFile(fileName);
-    if (!sourceFile) throw new Error(`entry file not in program: ${fileName}`);
+    if (!sourceFile) {throw new Error(`entry file not in program: ${fileName}`);}
     const result = ts.transform(sourceFile, [factory], compilerOptions);
     const transformed = result.transformed[0]!;
     outputs[fileName] = printer.printFile(transformed as ts.SourceFile);
