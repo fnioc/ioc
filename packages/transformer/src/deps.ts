@@ -298,16 +298,25 @@ function extractParamSlot(
   // 1. A `ResolveScope`-typed parameter is the live scope, not a token.
   if (isResolveScopeParam(param, ctx)) {return { scope: true };}
 
-  // 2. Check for the Inject<T, "tok"> brand FIRST, before factory / union /
-  //    normal derivation. If branded, the branded token wins unconditionally.
+  // 2. Check for the Inject<T, "tok"> brand. A brand on the WHOLE (single,
+  //    non-nullish, non-union) param type wins unconditionally and short-circuits
+  //    here. A brand on a MEMBER of an optional / explicit union (`x?:
+  //    Inject<T,K>`, `Inject<T,K> | IBar`) must NOT collapse the whole param to one
+  //    token — it would drop the `undefined` fallback or the other members — so it
+  //    is handled per-member in the union/optional paths below (via
+  //    `extractParamSlotFromTypeNode` / `nonNullishMemberSlots`, which check the
+  //    brand on each member first).
   const rawType = ctx.checker.getTypeAtLocation(param);
-  const brandedToken = injectTokenFor(rawType, ctx.checker);
-  if (brandedToken !== undefined) {return brandedToken;}
+  if (!isOptionalParam(param, ctx) && !isMultiMemberUnion(rawType)) {
+    const brandedToken = injectTokenFor(rawType, ctx.checker);
+    if (brandedToken !== undefined) {return brandedToken;}
+  }
 
   // Optional in any form (`x?`, `= default`, `x: X | undefined`/`| void`): the
   // non-nullish slot(s) come first, with a `{ value: undefined }` LiteralRef
   // fallback appended LAST. The fallback is always satisfiable, so the param can
   // never make a signature unresolvable; the real dep still wins when registered.
+  // A branded non-nullish member keeps its brand (see `nonNullishMemberSlots`).
   if (isOptionalParam(param, ctx)) {
     const members = nonNullishMemberSlots(param, ctx);
     // A whole-type `undefined` / `void` param has no non-nullish core — it IS the
@@ -413,6 +422,10 @@ function nonNullishMemberSlots(
   // No inline union: derive the single non-nullish slot from the resolved type.
   // A whole-type `undefined` / `void` has no non-nullish core at all.
   if (core.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Void)) {return [];}
+  // The Inject brand on the (nullish-stripped) core survives — `x?:
+  // Inject<T,K>` must keep its branded token, not derive structurally.
+  const brandedCore = injectTokenFor(core, ctx.checker);
+  if (brandedCore !== undefined) {return [brandedCore];}
   const singleton = singletonValue(core);
   if (singleton) {return [{ value: singleton.value }];}
   const result = tokenForType(core, ctx);
@@ -657,6 +670,20 @@ function typeIncludesUndefinedOrVoid(type: ts.Type): boolean {
   const nullish = ts.TypeFlags.Undefined | ts.TypeFlags.Void;
   if (type.flags & nullish) {return true;}
   return type.isUnion() && type.types.some((t) => t.flags & nullish);
+}
+
+/**
+ * True when a type is a union with two or more NON-nullish members (a real
+ * union of alternatives, `IFoo | IBar`), as opposed to a single type or a
+ * one-member-plus-`undefined` optional. A whole-type Inject-brand short-circuit
+ * must NOT fire for such a union — its brand belongs to one member, and
+ * collapsing the union to that token would silently drop the other members.
+ */
+function isMultiMemberUnion(type: ts.Type): boolean {
+  if (!type.isUnion()) {return false;}
+  const nullish =
+    ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void;
+  return type.types.filter((t) => !(t.flags & nullish)).length >= 2;
 }
 
 /**
