@@ -10,7 +10,10 @@ coverage/
 
 # IDE / editor
 .idea/
-.vscode/
+# Track .vscode/settings.json and .vscode/extensions.json; ignore per-user overrides
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
 *.swp
 *.swo
 
