@@ -73,7 +73,7 @@ export class DiBuilder<
    * most-recent (last) registration. Earlier registrations are retained, which
    * is what lets a later `.add()` override an earlier one without deletion.
    */
-  private readonly registrations = new Map<Token, Registration[]>();
+  readonly #registrations = new Map<Token, Registration[]>();
 
   /**
    * The root scope's runtime name. `Root` is erased at runtime, so the name is
@@ -81,17 +81,17 @@ export class DiBuilder<
    * default). Most callers never set it — the default covers the common
    * `DiBuilder<"singleton", …>` case; pass it only when `Root` is non-default.
    */
-  private readonly rootName: Root | "singleton";
+  readonly #rootName: Root | "singleton";
 
   public constructor(rootName?: Root) {
-    this.rootName = rootName ?? "singleton";
+    this.#rootName = rootName ?? "singleton";
   }
 
   /** Appends a registration to `token`'s list, creating the list on first use. */
-  private append(token: Token, registration: Registration): void {
-    const existing = this.registrations.get(token);
+  #append(token: Token, registration: Registration): void {
+    const existing = this.#registrations.get(token);
     if (existing === undefined) {
-      this.registrations.set(token, [registration]);
+      this.#registrations.set(token, [registration]);
     } else {
       existing.push(registration);
     }
@@ -103,12 +103,12 @@ export class DiBuilder<
    * array's last entry wins; a bare `.add(...)`/`.addFactory(...)` with no
    * trailing `.as()` leaves the base (transient) registration in place.
    */
-  private appendScoped(
+  #appendScoped(
     token: Token,
     base: ClassRegistration | FactoryRegistration,
   ): AddBuilder<Root | Children> {
-    this.append(token, base);
-    const append = (next: Registration): void => this.append(token, next);
+    this.#append(token, base);
+    const append = (next: Registration): void => this.#append(token, next);
     return {
       as<S extends Root | Children>(scope?: S): void {
         // The lowered form always passes a value arg; the authored type-arg-only
@@ -144,7 +144,7 @@ export class DiBuilder<
       );
     }
     const [token, ctor] = args;
-    return this.appendScoped(token, {
+    return this.#appendScoped(token, {
       kind: "class",
       ctor: ctor as Ctor,
       scope: undefined,
@@ -171,7 +171,7 @@ export class DiBuilder<
     token: Token,
     factory: Factory,
   ): AddBuilder<Root | Children> {
-    return this.appendScoped(token, {
+    return this.#appendScoped(token, {
       kind: "factory",
       factory,
       scope: undefined,
@@ -197,7 +197,7 @@ export class DiBuilder<
       );
     }
     const [token, value] = args;
-    this.append(token, { kind: "value", useValue: value });
+    this.#append(token, { kind: "value", useValue: value });
   }
 
   /**
@@ -210,12 +210,12 @@ export class DiBuilder<
     // Deep-copy the registrations so post-build builder mutations can't affect
     // the sealed map. Each per-token list is frozen independently.
     const sealed = new Map<Token, Registration[]>();
-    for (const [token, list] of this.registrations) {
+    for (const [token, list] of this.#registrations) {
       sealed.set(token, Object.freeze([...list]) as Registration[]);
     }
     Object.freeze(sealed);
 
-    const rootFrame = new Scope(this.rootName as string);
+    const rootFrame = new Scope(this.#rootName as string);
     return new ServiceProvider<Root | Children>(
       sealed as ReadonlyMap<Token, Registration[]>,
       rootFrame,

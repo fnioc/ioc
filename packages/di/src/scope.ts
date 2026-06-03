@@ -129,22 +129,25 @@ export class Scope {
 export class ServiceProvider<S extends string = string>
   implements Resolver, ScopeFactory<S>, Disposable, AsyncDisposable
 {
-  private disposed = false;
+  #disposed = false;
 
   /**
    * The scope frame for this provider. `undefined` means this is the "unscoped"
    * root — a sentinel that exists only for transient-only trees (no build()
    * call sets this to undefined in normal usage; build() always sets a root name).
    */
-  private readonly frame: Scope | undefined;
+  readonly #frame: Scope | undefined;
+
+  /** The sealed registration map (shared across all providers in the tree). */
+  readonly #registrations: ReadonlyMap<Token, Registration[]>;
 
   public constructor(
-    /** The sealed registration map (shared across all providers in the tree). */
-    private readonly registrations: ReadonlyMap<Token, Registration[]>,
+    registrations: ReadonlyMap<Token, Registration[]>,
     /** This provider's scope frame, if any. */
     frame?: Scope,
   ) {
-    this.frame = frame;
+    this.#registrations = registrations;
+    this.#frame = frame;
   }
 
   /**
@@ -153,10 +156,10 @@ export class ServiceProvider<S extends string = string>
    * inspect `root.name`.
    */
   public get name(): S {
-    if (this.frame === undefined) {
+    if (this.#frame === undefined) {
       throw new TypeError("This ServiceProvider has no scope frame (unscoped root).");
     }
-    return this.frame.name as S;
+    return this.#frame.name as S;
   }
 
   // ── ScopeFactory ─────────────────────────────────────────────────────────────
@@ -173,8 +176,8 @@ export class ServiceProvider<S extends string = string>
     ...args: "scoped" extends S ? [name?: S] : [name: S]
   ): ServiceProvider<S> {
     const name = (args[0] ?? "scoped") as string;
-    const childFrame = new Scope(name, this.frame);
-    return new ServiceProvider<S>(this.registrations, childFrame);
+    const childFrame = new Scope(name, this.#frame);
+    return new ServiceProvider<S>(this.#registrations, childFrame);
   }
 
   // ── Resolver ─────────────────────────────────────────────────────────────────
@@ -193,7 +196,7 @@ export class ServiceProvider<S extends string = string>
           'resolve<T>("my:token").',
       );
     }
-    return this.resolveWith<T>(token, this.frame, []);
+    return this.#resolveWith<T>(token, this.#frame, []);
   }
 
   /**
@@ -205,7 +208,7 @@ export class ServiceProvider<S extends string = string>
    * `resolve<(a: A) => T>()` lowers to `resolveFactory("pkg:T", ["pkg:A"])`.
    */
   public resolveFactory(type: Token, params?: readonly Token[]): unknown {
-    return this.makeFactory({ type, params }, this.frame);
+    return this.#makeFactory({ type, params }, this.#frame);
   }
 
   // ── Registration lookup ─────────────────────────────────────────────────────
@@ -215,8 +218,8 @@ export class ServiceProvider<S extends string = string>
    * The sealed map is shared across all providers in the tree; local overrides
    * are not supported in the new model (scope-local registration is deleted).
    */
-  private lookup(token: Token): Registration | undefined {
-    const list = this.registrations.get(token);
+  #lookup(token: Token): Registration | undefined {
+    const list = this.#registrations.get(token);
     return list !== undefined && list.length ? list[list.length - 1] : undefined;
   }
 
@@ -224,7 +227,7 @@ export class ServiceProvider<S extends string = string>
    * Finds the nearest ancestor scope frame (inclusive) whose name matches
    * `scopeName`, walking UP the chain. Returns `undefined` when none matches.
    */
-  private static findOwner(
+  static #findOwner(
     vantage: Scope | undefined,
     scopeName: string,
   ): Scope | undefined {
@@ -237,7 +240,7 @@ export class ServiceProvider<S extends string = string>
   }
 
   /** The chain of scope names from `vantage` up to the root, for diagnostics. */
-  private static chainNames(vantage: Scope | undefined): string[] {
+  static #chainNames(vantage: Scope | undefined): string[] {
     const names: string[] = [];
     let node = vantage;
     while (node !== undefined) {
@@ -254,7 +257,7 @@ export class ServiceProvider<S extends string = string>
    * `stack` is the active resolution path (for cycle detection); it is shared
    * across the whole `resolve()` call but never across separate calls.
    */
-  private resolveWith<T>(
+  #resolveWith<T>(
     token: Token,
     vantage: Scope | undefined,
     stack: Token[],
@@ -263,7 +266,7 @@ export class ServiceProvider<S extends string = string>
       throw new CircularDependencyError([...stack, token]);
     }
 
-    const registration = this.lookup(token);
+    const registration = this.#lookup(token);
     if (registration === undefined) {
       throw new UnregisteredTokenError(token);
     }
@@ -278,7 +281,7 @@ export class ServiceProvider<S extends string = string>
     if (registration.scope === undefined) {
       stack.push(token);
       try {
-        return this.instantiate<T>(token, registration, vantage, stack);
+        return this.#instantiate<T>(token, registration, vantage, stack);
       } finally {
         stack.pop();
       }
@@ -286,12 +289,12 @@ export class ServiceProvider<S extends string = string>
 
     // Scoped: find the owning ancestor scope. No match ⇒ throw (never
     // auto-create — that is the captive-dependency detector).
-    const owner = ServiceProvider.findOwner(vantage, registration.scope);
+    const owner = ServiceProvider.#findOwner(vantage, registration.scope);
     if (owner === undefined) {
       throw new MissingScopeError(
         token,
         registration.scope,
-        ServiceProvider.chainNames(vantage),
+        ServiceProvider.#chainNames(vantage),
       );
     }
 
@@ -303,7 +306,7 @@ export class ServiceProvider<S extends string = string>
     // Cache miss ⇒ construct relative to the OWNER, cache on the owner.
     stack.push(token);
     try {
-      const instance = this.instantiate<T>(token, registration, owner, stack);
+      const instance = this.#instantiate<T>(token, registration, owner, stack);
       owner.cache.set(token, instance);
       owner.owned.push(instance);
       return instance;
@@ -316,17 +319,17 @@ export class ServiceProvider<S extends string = string>
    * Builds an instance for `registration`. `owningFrame` is the scope frame
    * whose chain the dependencies are resolved against — THE critical rule.
    */
-  private instantiate<T>(
+  #instantiate<T>(
     token: Token,
     registration: ClassRegistration | FactoryRegistration,
     owningFrame: Scope | undefined,
     stack: Token[],
   ): T {
     if (registration.kind === "factory") {
-      return this.invokeFactory<T>(token, registration.factory, owningFrame, stack);
+      return this.#invokeFactory<T>(token, registration.factory, owningFrame, stack);
     }
 
-    return this.construct<T>(token, registration.ctor, owningFrame, stack);
+    return this.#construct<T>(token, registration.ctor, owningFrame, stack);
   }
 
   /**
@@ -334,7 +337,7 @@ export class ServiceProvider<S extends string = string>
    * `ScopeFactory` typed param). Produces a ServiceProvider-like view that
    * continues the active cycle `stack` and resolves relative to `owningFrame`.
    */
-  private makeProviderView(owningFrame: Scope | undefined, stack: Token[]): Resolver & ScopeFactory<S> {
+  #makeProviderView(owningFrame: Scope | undefined, stack: Token[]): Resolver & ScopeFactory<S> {
     const sp = this;
     return {
       resolve: <U>(depToken?: Token): U => {
@@ -344,14 +347,14 @@ export class ServiceProvider<S extends string = string>
               "runtime).",
           );
         }
-        return sp.resolveWith<U>(depToken, owningFrame, stack);
+        return sp.#resolveWith<U>(depToken, owningFrame, stack);
       },
       resolveFactory: (depToken: Token, depParams?: readonly Token[]): unknown =>
-        sp.makeFactory({ type: depToken, params: depParams }, owningFrame),
+        sp.#makeFactory({ type: depToken, params: depParams }, owningFrame),
       createScope: (...args: ["scoped"?] | [S]): ServiceProvider<S> => {
         const name = (args[0] ?? "scoped") as string;
         const childFrame = new Scope(name, owningFrame);
-        return new ServiceProvider<S>(sp.registrations, childFrame);
+        return new ServiceProvider<S>(sp.#registrations, childFrame);
       },
     } as Resolver & ScopeFactory<S>;
   }
@@ -365,19 +368,19 @@ export class ServiceProvider<S extends string = string>
    *     `factory(providerView)` with the live provider view as its sole argument.
    * Deps resolve relative to `owningFrame` (the owning scope) — §5.4.
    */
-  private invokeFactory<T>(
+  #invokeFactory<T>(
     token: Token,
     factory: Factory,
     owningFrame: Scope | undefined,
     stack: Token[],
   ): T {
-    const providerView = this.makeProviderView(owningFrame, stack);
+    const providerView = this.#makeProviderView(owningFrame, stack);
     const record = getDeps(factory);
     if (record === undefined || !record.signatures.length) {
       return factory(providerView) as T;
     }
 
-    const signature = this.selectSignature(
+    const signature = this.#selectSignature(
       token,
       factory.name,
       record.signatures,
@@ -385,10 +388,10 @@ export class ServiceProvider<S extends string = string>
     );
     const args = signature.map((slot) => {
       if (isScopeRef(slot)) {return providerView;}
-      if (isFactoryRef(slot)) {return this.makeFactory(slot, owningFrame);}
-      if (isUnion(slot)) {return this.resolveUnion(slot, owningFrame, stack);}
+      if (isFactoryRef(slot)) {return this.#makeFactory(slot, owningFrame);}
+      if (isUnion(slot)) {return this.#resolveUnion(slot, owningFrame, stack);}
       // Selection guarantees every remaining slot is a resolvable string token.
-      return this.resolveWith<unknown>(slot as Token, owningFrame, stack);
+      return this.#resolveWith<unknown>(slot as Token, owningFrame, stack);
     });
     return factory(...args) as T;
   }
@@ -403,7 +406,7 @@ export class ServiceProvider<S extends string = string>
    *   - a `FactoryRef` → injected as a callable (see `makeFactory`);
    *   - a `ScopeRef` → the live provider view.
    */
-  private construct<T>(
+  #construct<T>(
     token: Token,
     ctor: Ctor,
     owningFrame: Scope | undefined,
@@ -420,9 +423,9 @@ export class ServiceProvider<S extends string = string>
       return new ctor() as T;
     }
 
-    const signature = this.selectSignature(token, ctor.name, record.signatures, owningFrame);
+    const signature = this.#selectSignature(token, ctor.name, record.signatures, owningFrame);
 
-    const providerView = this.makeProviderView(owningFrame, stack);
+    const providerView = this.#makeProviderView(owningFrame, stack);
     const args = signature.map((slot) => {
       if (isScopeRef(slot)) {
         // A `Resolver`/`ScopeFactory`/`ResolveScope`-typed parameter: inject the
@@ -433,15 +436,15 @@ export class ServiceProvider<S extends string = string>
         // A factory-injected parameter: a callable that builds the target on demand,
         // resolving the target's own deps relative to the owning frame so §5.4
         // still holds at call time.
-        return this.makeFactory(slot, owningFrame);
+        return this.#makeFactory(slot, owningFrame);
       }
       if (isUnion(slot)) {
         // A union slot: try members in declaration order, return first resolvable.
-        return this.resolveUnion(slot, owningFrame, stack);
+        return this.#resolveUnion(slot, owningFrame, stack);
       }
       // A string token — resolve it through the owning frame's chain. Selection
       // guarantees every string-token slot here is resolvable.
-      return this.resolveWith<unknown>(slot as Token, owningFrame, stack);
+      return this.#resolveWith<unknown>(slot as Token, owningFrame, stack);
     });
 
     return new ctor(...(args as never[])) as T;
@@ -472,12 +475,12 @@ export class ServiceProvider<S extends string = string>
    * The closure captures `owningFrame`. §5.4 holds at call time: the target's
    * deps resolve relative to the scope that owns the factory-holding instance.
    */
-  private makeFactory(
+  #makeFactory(
     ref: FactoryRef,
     owningFrame: Scope | undefined,
   ): Func<unknown[], unknown> {
     const sp = this;
-    const target = this.lookup(ref.type);
+    const target = this.#lookup(ref.type);
 
     if (target === undefined) {
       throw new FactoryTargetError(ref.type, "unregistered");
@@ -486,7 +489,7 @@ export class ServiceProvider<S extends string = string>
     // A value target has no construction step — the "factory" is a thunk that
     // returns the stored instance (its lifetime is moot: a value is itself).
     if (target.kind === "value") {
-      return () => sp.resolveWith<unknown>(ref.type, owningFrame, []);
+      return () => sp.#resolveWith<unknown>(ref.type, owningFrame, []);
     }
 
     const callerParams = ref.params !== undefined && ref.params.length
@@ -496,7 +499,7 @@ export class ServiceProvider<S extends string = string>
     if (callerParams === undefined) {
       // Strict zero-arg mode: every slot must resolve. Route through the normal
       // resolve path so the registered lifetime is respected.
-      return () => sp.resolveWith<unknown>(ref.type, owningFrame, []);
+      return () => sp.#resolveWith<unknown>(ref.type, owningFrame, []);
     }
 
     // Parameterized mode: the dep-metadata target is the ctor (class) or the
@@ -507,14 +510,14 @@ export class ServiceProvider<S extends string = string>
     const targetSignature =
       record === undefined || !record.signatures.length
         ? undefined
-        : sp.selectTargetSignature(record.signatures);
+        : sp.#selectTargetSignature(record.signatures);
 
     // Build a fresh instance on every call, threading caller args into the
     // params-claimed slots and resolving the remainder from the container.
     // A fresh cycle stack per call — the factory runs outside the resolve that
     // created it.
     return (...callArgs: unknown[]) =>
-      sp.buildPartitioned(
+      sp.#buildPartitioned(
         target,
         targetSignature as ReadonlyArray<DepSlot> | undefined,
         callerParams,
@@ -540,7 +543,7 @@ export class ServiceProvider<S extends string = string>
    * `signature` may be `undefined` when the target has no DepRecord (zero-arg
    * ctor or record-less factory) — in that case args is empty.
    */
-  private buildPartitioned<T>(
+  #buildPartitioned<T>(
     target: ClassRegistration | FactoryRegistration,
     signature: ReadonlyArray<DepSlot> | undefined,
     callerParams: readonly Token[],
@@ -548,7 +551,7 @@ export class ServiceProvider<S extends string = string>
     owningFrame: Scope | undefined,
   ): T {
     const stack: Token[] = [];
-    const providerView = this.makeProviderView(owningFrame, stack);
+    const providerView = this.#makeProviderView(owningFrame, stack);
 
     if (signature === undefined || !signature.length) {
       // No metadata: zero-arg ctor or record-less factory. Build directly.
@@ -574,8 +577,8 @@ export class ServiceProvider<S extends string = string>
 
     const args = signature.map((slot) => {
       if (isScopeRef(slot)) {return providerView;}
-      if (isFactoryRef(slot)) {return this.makeFactory(slot, owningFrame);}
-      if (isUnion(slot)) {return this.resolveUnion(slot, owningFrame, stack);}
+      if (isFactoryRef(slot)) {return this.#makeFactory(slot, owningFrame);}
+      if (isUnion(slot)) {return this.#resolveUnion(slot, owningFrame, stack);}
 
       // String token slot: check if it is claimed by callerParams (caller wins,
       // even if the token is also registered).
@@ -590,14 +593,14 @@ export class ServiceProvider<S extends string = string>
       }
 
       // Not claimed by callerParams. Must resolve from the container.
-      if (!this.isResolvable(token)) {
+      if (!this.#isResolvable(token)) {
         throw new NoSatisfiableSignatureError(
           token,
           token,
           [token],
         );
       }
-      return this.resolveWith<unknown>(token, owningFrame, stack);
+      return this.#resolveWith<unknown>(token, owningFrame, stack);
     });
 
     return (
@@ -619,7 +622,7 @@ export class ServiceProvider<S extends string = string>
    * An unregistered string token is not satisfiable. Equal-arity ties break by
    * registration order. None satisfiable ⇒ throw naming the unsatisfiable tokens.
    */
-  private selectSignature(
+  #selectSignature(
     token: Token,
     targetName: string,
     signatures: ReadonlyArray<ReadonlyArray<DepSlot>>,
@@ -642,12 +645,12 @@ export class ServiceProvider<S extends string = string>
         if (isFactoryRef(slot) || isScopeRef(slot)) {continue;}
         if (isUnion(slot)) {
           // A union slot is satisfiable iff at least one member is resolvable.
-          if (!this.isResolvableSlot(slot)) {
+          if (!this.#isResolvableSlot(slot)) {
             satisfiable = false;
           }
           continue;
         }
-        if (!this.isResolvable(slot)) {
+        if (!this.#isResolvable(slot)) {
           satisfiable = false;
           if (typeof slot === "string") {unsatisfiable.add(slot);}
         }
@@ -665,7 +668,7 @@ export class ServiceProvider<S extends string = string>
    * choice is purely the longest signature, equal-arity ties broken by
    * registration order.
    */
-  private selectTargetSignature(
+  #selectTargetSignature(
     signatures: ReadonlyArray<ReadonlyArray<DepSlot>>,
   ): ReadonlyArray<DepSlot> {
     return signatures
@@ -682,8 +685,8 @@ export class ServiceProvider<S extends string = string>
    * `FactoryRef`, `ScopeRef`, or `Union` is not tested here — use
    * `isResolvableSlot` for a full slot check.
    */
-  private isResolvable(slot: DepSlot): boolean {
-    return typeof slot === "string" && this.lookup(slot) !== undefined;
+  #isResolvable(slot: DepSlot): boolean {
+    return typeof slot === "string" && this.#lookup(slot) !== undefined;
   }
 
   /**
@@ -692,12 +695,12 @@ export class ServiceProvider<S extends string = string>
    *   - `Union` — satisfiable iff at least one member is resolvable (recursive);
    *   - string token — registered in the sealed map.
    */
-  private isResolvableSlot(slot: DepSlot): boolean {
+  #isResolvableSlot(slot: DepSlot): boolean {
     if (isFactoryRef(slot) || isScopeRef(slot)) {return true;}
     if (isUnion(slot)) {
-      return slot.union.some((member) => this.isResolvableSlot(member as DepSlot));
+      return slot.union.some((member) => this.#isResolvableSlot(member as DepSlot));
     }
-    return this.isResolvable(slot);
+    return this.#isResolvable(slot);
   }
 
   /**
@@ -705,14 +708,14 @@ export class ServiceProvider<S extends string = string>
    * the first resolvable one. If no member is resolvable, throws
    * `NoSatisfiableUnionError`.
    */
-  private resolveUnion<T>(
+  #resolveUnion<T>(
     slot: Union,
     owningFrame: Scope | undefined,
     stack: Token[],
   ): T {
     for (const member of slot.union) {
-      if (this.isResolvableSlot(member as DepSlot)) {
-        return this.resolveSlot<T>(member as DepSlot, owningFrame, stack);
+      if (this.#isResolvableSlot(member as DepSlot)) {
+        return this.#resolveSlot<T>(member as DepSlot, owningFrame, stack);
       }
     }
     throw new NoSatisfiableUnionError(slot.union);
@@ -722,15 +725,15 @@ export class ServiceProvider<S extends string = string>
    * Resolves a single `DepSlot` to its value, dispatching on slot kind.
    * Used by `resolveUnion` to recurse into members.
    */
-  private resolveSlot<T>(
+  #resolveSlot<T>(
     slot: DepSlot,
     owningFrame: Scope | undefined,
     stack: Token[],
   ): T {
-    if (isScopeRef(slot)) {return this.makeProviderView(owningFrame, stack) as T;}
-    if (isFactoryRef(slot)) {return this.makeFactory(slot, owningFrame) as T;}
-    if (isUnion(slot)) {return this.resolveUnion<T>(slot, owningFrame, stack);}
-    return this.resolveWith<T>(slot as Token, owningFrame, stack);
+    if (isScopeRef(slot)) {return this.#makeProviderView(owningFrame, stack) as T;}
+    if (isFactoryRef(slot)) {return this.#makeFactory(slot, owningFrame) as T;}
+    if (isUnion(slot)) {return this.#resolveUnion<T>(slot, owningFrame, stack);}
+    return this.#resolveWith<T>(slot as Token, owningFrame, stack);
   }
 
   // ── Disposal ────────────────────────────────────────────────────────────────
@@ -745,9 +748,9 @@ export class ServiceProvider<S extends string = string>
    * must use `disposeAsync()`. Idempotent: a second call is a no-op.
    */
   public dispose(): void {
-    if (this.disposed) {return;}
+    if (this.#disposed) {return;}
 
-    const owned = this.frame?.owned ?? [];
+    const owned = this.#frame?.owned ?? [];
 
     for (const instance of owned) {
       if (isThenable(instance)) {
@@ -755,14 +758,14 @@ export class ServiceProvider<S extends string = string>
       }
     }
 
-    this.disposed = true;
+    this.#disposed = true;
     for (let i = owned.length - 1; i >= 0; i--) {
       const instance = owned[i];
       if (isDisposable(instance)) {
         instance[Symbol.dispose]();
       }
     }
-    this.clear();
+    this.#clear();
   }
 
   /**
@@ -772,10 +775,10 @@ export class ServiceProvider<S extends string = string>
    * `Symbol.asyncDispose` and `Symbol.dispose`. Idempotent.
    */
   public async disposeAsync(): Promise<void> {
-    if (this.disposed) {return;}
-    this.disposed = true;
+    if (this.#disposed) {return;}
+    this.#disposed = true;
 
-    const owned = this.frame?.owned ?? [];
+    const owned = this.#frame?.owned ?? [];
 
     // Resolve any Promise-valued instances to their settled values so the
     // disposer sees the real object, not the wrapper.
@@ -792,14 +795,14 @@ export class ServiceProvider<S extends string = string>
         instance[Symbol.dispose]();
       }
     }
-    this.clear();
+    this.#clear();
   }
 
   /** Drops owned references after disposal so they can be collected. */
-  private clear(): void {
-    if (this.frame) {
-      this.frame.cache.clear();
-      this.frame.owned.length = 0;
+  #clear(): void {
+    if (this.#frame) {
+      this.#frame.cache.clear();
+      this.#frame.owned.length = 0;
     }
   }
 
