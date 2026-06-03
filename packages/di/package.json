@@ -31,9 +31,9 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc --noEmit -p tsconfig.json && bun build.ts",
-    "test": "bun test",
-    "lint": "tsc --noEmit -p tsconfig.json"
+    "build": "moon run di:build",
+    "test": "moon run di:test",
+    "lint": "moon run di:lint"
   },
   "publishConfig": {
     "access": "public",

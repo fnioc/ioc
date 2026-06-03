@@ -6,10 +6,10 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "moon run examples-without-transformer:build",
     "start": "node dist/main.js",
-    "test": "node dist/main.js > /tmp/fnioc-without-transformer.out && diff -u expected.txt /tmp/fnioc-without-transformer.out",
-    "lint": "tsc --noEmit -p tsconfig.json"
+    "test": "moon run examples-without-transformer:test",
+    "lint": "moon run examples-without-transformer:lint"
   },
   "dependencies": {
     "@fnioc/di": "workspace:*"

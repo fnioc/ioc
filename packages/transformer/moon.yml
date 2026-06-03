@@ -19,7 +19,9 @@ dependsOn:
 
 tasks:
   build:
-    command: 'bun run build'
+    # Typecheck first, then bundle: tsc --noEmit catches type errors before bun
+    # build.ts produces the dist artefacts.
+    script: 'bun x tsc --noEmit -p tsconfig.json && bun build.ts'
     deps:
       - 'core:build'
     inputs:
@@ -32,7 +34,7 @@ tasks:
     outputs:
       - 'dist'
   test:
-    command: 'bun run test'
+    command: 'bun test'
     # The ts-patch e2e (test/e2e.test.ts) loads the BUILT @fnioc/transformer as a
     # plugin and runs `node tspc`, which resolves both @fnioc/transformer and the
     # injected @fnioc/core import via their `dist` entry points. Both must be
@@ -47,7 +49,7 @@ tasks:
       - 'tsconfig.json'
       - 'package.json'
   lint:
-    command: 'bun run lint'
+    command: 'bun x tsc --noEmit -p tsconfig.json'
     # `augment.ts` typechecks against @fnioc/di's exported types. The tsconfig
     # `customConditions: ["source"]` routes `@fnioc/di` to source, so no di:build
     # dep is needed here.

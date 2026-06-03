@@ -31,9 +31,9 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc --noEmit -p tsconfig.json && bun build.ts",
-    "test": "bun test",
-    "lint": "tsc --noEmit -p tsconfig.json"
+    "build": "moon run transformer:build",
+    "test": "moon run transformer:test",
+    "lint": "moon run transformer:lint"
   },
   "dependencies": {
     "@rhombus-toolkit/func": "3.5.3"

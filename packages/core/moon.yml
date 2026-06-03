@@ -9,19 +9,19 @@ language: 'typescript'
 # source is inlined into @fnioc/di and @fnioc/transformer at their build time.
 tasks:
   build:
-    command: 'bun run build'
+    command: 'bun x tsc --noEmit -p tsconfig.json'
     inputs:
       - 'src/**/*'
       - 'tsconfig.json'
       - '/tsconfig.base.json'
   test:
-    command: 'bun run test'
+    command: 'bun test'
     inputs:
       - 'src/**/*'
       - 'test/**/*'
       - 'tsconfig.json'
       - 'package.json'
   lint:
-    command: 'bun run lint'
+    command: 'bun x tsc --noEmit -p tsconfig.json'
     options:
       cache: false
