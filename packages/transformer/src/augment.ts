@@ -14,8 +14,11 @@
 // referencing `@fnioc/transformer` pulls the augmentation into its program.
 
 import type { Ctor, Func } from "@rhombus-toolkit/func";
-
-import type { AddBuilder } from "@fnioc/di";
+// Side-effect type import: makes @fnioc/di a known module in this program so
+// the `declare module "@fnioc/di"` block below is treated as an augmentation
+// (extending the package's types) rather than an ambient module declaration.
+// No symbols are imported — the import exists solely to anchor the augmentation.
+import type {} from "@fnioc/di";
 
 // Re-export `Inject` so transformer consumers can use `Inject<T, "tok">` without
 // importing from `@fnioc/core` directly. A single import of `@fnioc/transformer`
@@ -23,7 +26,10 @@ import type { AddBuilder } from "@fnioc/di";
 export type { Inject } from "@fnioc/core";
 
 declare module "@fnioc/di" {
-  interface DiBuilder<Root extends string, Children extends string> {
+  interface DiBuilder<
+    Root extends string = "singleton",
+    Children extends string = never,
+  > {
     /**
      * Type-driven class authoring — lowers to `add("token", C)`. The ctor is
      * typed `Ctor<any[], I>` (a plain construct signature, so an abstract class

@@ -13,7 +13,13 @@
     // transformer-compiled output) and index token maps heavily. Relaxing
     // `noUncheckedIndexedAccess` here keeps the assertions readable without
     // `!`-littering every token lookup; the production packages keep it on.
-    "noUncheckedIndexedAccess": false
+    "noUncheckedIndexedAccess": false,
+    // Resolve @fnioc/di to its source tree for live cross-package typechecking.
+    // Without this, tsc follows the package.json "types" field which points at
+    // the built dist — meaning a source edit in di is invisible here until dist
+    // is rebuilt. The "source" condition routes @fnioc/di to its src/index.ts
+    // so edits reflect immediately without a rebuild step.
+    "customConditions": ["source"]
   },
   "include": ["test/**/*"]
 }

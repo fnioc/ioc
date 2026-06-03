@@ -6,7 +6,8 @@
     "composite": false,
     "declaration": false,
     "declarationMap": false,
-    "sourceMap": false
+    "sourceMap": false,
+    "customConditions": ["source"]
   },
   "include": ["src/**/*"]
 }
