@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.0.1](https://github.com/fnioc/ioc/compare/transformer-v3.0.0...transformer-v3.0.1) (2026-06-03)
+
+
+### Bug Fixes
+
+* **tooling:** resolve workspace packages to source for live cross-package types ([#40](https://github.com/fnioc/ioc/issues/40)) ([7c86ab1](https://github.com/fnioc/ioc/commit/7c86ab170be3c7def6a8b3bbfec709078febc3c2))
+* **transformer:** honor Inject brand on optional params (union-aware token detection) ([#38](https://github.com/fnioc/ioc/issues/38)) ([8b0c28b](https://github.com/fnioc/ioc/commit/8b0c28bf6ba4c7c6348c4ac02ffb38fc6ff46c60))
+
 ## [3.0.0](https://github.com/fnioc/ioc/compare/transformer-v2.0.0...transformer-v3.0.0) (2026-06-02)
 
 
