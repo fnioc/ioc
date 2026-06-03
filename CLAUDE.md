@@ -35,6 +35,16 @@ release is always a deliberate manual merge, never automatic.
 (including release PRs) is tested against an up-to-date `main` before it lands —
 no PR merges without passing `verify` in queue.
 
+## Wiki must stay current
+
+The project wiki (`git@github.com:fnioc/ioc.wiki.git`) documents user-facing
+behavior — token derivation, resolution, and the registration API. It tracks
+`main`, not aspirations.
+
+**Any PR that changes user-observable behavior must include a wiki update.**
+Update the relevant wiki page(s) as part of the same PR cycle — don't defer
+it. A behavior change that ships without a wiki update is incomplete.
+
 ## Auth split
 
 - **`@next` publish** — OIDC trusted publisher, no token. The trusted-publisher
