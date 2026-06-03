@@ -18,8 +18,8 @@
 // resolve. That is what makes a long-lived service depending on a shorter-lived
 // one fail loudly instead of silently capturing it.
 
-import { getDeps, isFactoryRef as coreIsFactoryRef, isScopeRef as coreIsScopeRef, isUnionSlot } from "@fnioc/core";
-import type { DepSlot, FactoryRef, ScopeRef, Token, Union } from "@fnioc/core";
+import { getDeps, isFactoryRef as coreIsFactoryRef, isLiteralRef as coreIsLiteralRef, isScopeRef as coreIsScopeRef, isUnionSlot } from "@fnioc/core";
+import type { DepSlot, FactoryRef, LiteralRef, ScopeRef, Token, Union } from "@fnioc/core";
 import type { Func } from "@rhombus-toolkit/func";
 
 import {
@@ -90,6 +90,27 @@ const isScopeRef: (slot: DepSlot) => slot is ScopeRef = coreIsScopeRef as (slot:
  * declaration order.
  */
 const isUnion: (slot: DepSlot) => slot is Union = isUnionSlot;
+
+/**
+ * True when a `DepSlot` is a `LiteralRef` — a singular literal supplying its
+ * value directly (Rule 2). Always satisfiable; injected as `slot.value`.
+ */
+const isLiteralRef: (slot: DepSlot) => slot is LiteralRef = coreIsLiteralRef;
+
+/**
+ * The string-token members of a `Union` (recursing into nested unions), used to
+ * name what a fully-unsatisfiable union slot needs registered. Non-token members
+ * (FactoryRef / ScopeRef / LiteralRef) contribute no token.
+ */
+function* unionTokenMembers(slot: Union): Generator<Token> {
+  for (const member of slot.union) {
+    if (typeof member === "string") {
+      yield member;
+    } else if (isUnion(member as DepSlot)) {
+      yield* unionTokenMembers(member as Union);
+    }
+  }
+}
 
 /**
  * A scope frame — a node in the parent-linked chain. Holds this scope's name,
@@ -390,6 +411,7 @@ export class ServiceProvider<S extends string = string>
       if (isScopeRef(slot)) {return providerView;}
       if (isFactoryRef(slot)) {return this.#makeFactory(slot, owningFrame);}
       if (isUnion(slot)) {return this.#resolveUnion(slot, owningFrame, stack);}
+      if (isLiteralRef(slot)) {return slot.value;}
       // Selection guarantees every remaining slot is a resolvable string token.
       return this.#resolveWith<unknown>(slot as Token, owningFrame, stack);
     });
@@ -441,6 +463,10 @@ export class ServiceProvider<S extends string = string>
       if (isUnion(slot)) {
         // A union slot: try members in declaration order, return first resolvable.
         return this.#resolveUnion(slot, owningFrame, stack);
+      }
+      if (isLiteralRef(slot)) {
+        // A singular literal (Rule 2): supply its value directly, no lookup.
+        return slot.value;
       }
       // A string token — resolve it through the owning frame's chain. Selection
       // guarantees every string-token slot here is resolvable.
@@ -579,6 +605,7 @@ export class ServiceProvider<S extends string = string>
       if (isScopeRef(slot)) {return providerView;}
       if (isFactoryRef(slot)) {return this.#makeFactory(slot, owningFrame);}
       if (isUnion(slot)) {return this.#resolveUnion(slot, owningFrame, stack);}
+      if (isLiteralRef(slot)) {return slot.value;}
 
       // String token slot: check if it is claimed by callerParams (caller wins,
       // even if the token is also registered).
@@ -616,6 +643,7 @@ export class ServiceProvider<S extends string = string>
    *
    *   - a `FactoryRef` — always satisfiable; injected as a callable;
    *   - a `ScopeRef` — always satisfiable; filled with the live provider view;
+   *   - a `LiteralRef` — always satisfiable; injected as its value (Rule 2);
    *   - a `Union` — satisfiable iff at least one member is resolvable; or
    *   - a string token whose registration exists in the sealed map.
    *
@@ -642,11 +670,14 @@ export class ServiceProvider<S extends string = string>
     for (const { sig } of ordered) {
       let satisfiable = true;
       for (const slot of sig) {
-        if (isFactoryRef(slot) || isScopeRef(slot)) {continue;}
+        if (isFactoryRef(slot) || isScopeRef(slot) || isLiteralRef(slot)) {continue;}
         if (isUnion(slot)) {
           // A union slot is satisfiable iff at least one member is resolvable.
+          // When none is, surface its string-token members so the error names
+          // exactly what to register.
           if (!this.#isResolvableSlot(slot)) {
             satisfiable = false;
+            for (const token of unionTokenMembers(slot)) {unsatisfiable.add(token);}
           }
           continue;
         }
@@ -691,12 +722,12 @@ export class ServiceProvider<S extends string = string>
 
   /**
    * True when a slot is resolvable in ANY form:
-   *   - `FactoryRef` / `ScopeRef` — always satisfiable (injected);
+   *   - `FactoryRef` / `ScopeRef` / `LiteralRef` — always satisfiable (injected);
    *   - `Union` — satisfiable iff at least one member is resolvable (recursive);
    *   - string token — registered in the sealed map.
    */
   #isResolvableSlot(slot: DepSlot): boolean {
-    if (isFactoryRef(slot) || isScopeRef(slot)) {return true;}
+    if (isFactoryRef(slot) || isScopeRef(slot) || isLiteralRef(slot)) {return true;}
     if (isUnion(slot)) {
       return slot.union.some((member) => this.#isResolvableSlot(member as DepSlot));
     }
@@ -705,8 +736,13 @@ export class ServiceProvider<S extends string = string>
 
   /**
    * Resolves a `Union` slot: tries each member in declaration order and returns
-   * the first resolvable one. If no member is resolvable, throws
-   * `NoSatisfiableUnionError`.
+   * the first one that resolves. A member that is statically not resolvable
+   * (`#isResolvableSlot` is false — an unregistered token, or a FactoryRef whose
+   * target is unregistered) is skipped immediately. A member that IS resolvable
+   * but THROWS at resolution time — a captive `MissingScopeError`, or any other
+   * failure to actually build it — is caught and treated as "did not resolve",
+   * so the union falls through to the next member. Only when every member is
+   * exhausted does it throw `NoSatisfiableUnionError`.
    */
   #resolveUnion<T>(
     slot: Union,
@@ -714,8 +750,13 @@ export class ServiceProvider<S extends string = string>
     stack: Token[],
   ): T {
     for (const member of slot.union) {
-      if (this.#isResolvableSlot(member as DepSlot)) {
+      if (!this.#isResolvableSlot(member as DepSlot)) {continue;}
+      try {
         return this.#resolveSlot<T>(member as DepSlot, owningFrame, stack);
+      } catch {
+        // Member resolvable in principle but failed to build (captive scope, …) —
+        // fall through to the next candidate.
+        continue;
       }
     }
     throw new NoSatisfiableUnionError(slot.union);
@@ -733,6 +774,7 @@ export class ServiceProvider<S extends string = string>
     if (isScopeRef(slot)) {return this.#makeProviderView(owningFrame, stack) as T;}
     if (isFactoryRef(slot)) {return this.#makeFactory(slot, owningFrame) as T;}
     if (isUnion(slot)) {return this.#resolveUnion<T>(slot, owningFrame, stack);}
+    if (isLiteralRef(slot)) {return slot.value as T;}
     return this.#resolveWith<T>(slot as Token, owningFrame, stack);
   }
 
