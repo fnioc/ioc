@@ -4,8 +4,12 @@ import { DiagnosticCode } from "../src/index.js";
 
 // Dependency extraction → defineDeps emission (PRD §8). The emitted shape is the
 // ABI `Token[][]`: an array of signatures, each a positional array of
-// tokens / FactoryRef / ScopeRef / Union slots. There is no `null`/hole sentinel;
-// unresolvable types produce a hard UnderivableToken diagnostic.
+// tokens / FactoryRef / ScopeRef / Union / LiteralRef slots. There is no
+// `null`/hole sentinel. Under Rule 1 EVERY named type tokenizes by its name —
+// intrinsics (`string`, `number`, `boolean`, `any`, `unknown`, `void`, …) become
+// their keyword as a token; an unregistered token simply misses at runtime, it is
+// NOT a compile error. ONLY an anonymous inline structure (a `__type`/nameless
+// non-intrinsic) still produces the hard UnderivableToken diagnostic.
 
 /**
  * Pull the `[[...]]` signature array text out of a defineDeps(...) call for the
@@ -27,8 +31,11 @@ function depsArrayFor(output: string, ctor: string): string {
 }
 
 describe("dependency extraction", () => {
-  test("primitive parameter types produce hard UnderivableToken diagnostics", () => {
-    // Per design §5: no silent fallback. Unresolvable types → hard error.
+  test("primitive parameter types tokenize by their keyword (Rule 1, no diagnostics)", () => {
+    // Rule 1: every named type — including the intrinsics — tokenizes by its
+    // name. `string`/`number`/`boolean` are NOT a compile error; they become the
+    // bare tokens "string"/"number"/"boolean" and simply miss at runtime when
+    // unregistered.
     const src = `
       interface IMarker {}
       class Prims implements IMarker {
@@ -41,18 +48,18 @@ describe("dependency extraction", () => {
       declare const services: any;
       services.add<IMarker>(Prims).as<"singleton">();
     `;
-    const { diagnostics } = transform(fixture(src));
-    const errCodes = diagnostics
-      .filter((d) => d.code === DiagnosticCode.UnderivableToken)
-      .map((d) => d.code);
-    // Each unresolvable param produces one diagnostic.
-    expect(errCodes.length).toBe(3);
-    expect(diagnostics.find((d) => d.code === DiagnosticCode.UnderivableToken)!.category).toBe(
-      1 /* ts.DiagnosticCategory.Error */,
-    );
+    const { output, diagnostics } = transform(fixture(src));
+    expect(
+      diagnostics.filter((d) => d.code === DiagnosticCode.UnderivableToken).length,
+    ).toBe(0);
+    expect(depsArrayFor(output, "Prims")).toBe('[["string", "number", "boolean"]]');
   });
 
-  test("any / unknown / void also produce UnderivableToken diagnostics", () => {
+  test("any / unknown tokenize (Rule 1); void supplies undefined (Rule 2)", () => {
+    // any / unknown tokenize by keyword. `void` is a singleton type (one
+    // inhabitant), so it supplies `undefined` directly as a LiteralRef — NOT a
+    // token. `void` is not `| undefined` (no Undefined flag), so it is not an
+    // optional param: no overload drop, a single signature.
     const src = `
       interface IMarker {}
       class Tops implements IMarker {
@@ -61,10 +68,52 @@ describe("dependency extraction", () => {
       declare const services: any;
       services.add<IMarker>(Tops).as<"singleton">();
     `;
-    const { diagnostics } = transform(fixture(src));
+    const { output, diagnostics } = transform(fixture(src));
     expect(
       diagnostics.filter((d) => d.code === DiagnosticCode.UnderivableToken).length,
-    ).toBe(3);
+    ).toBe(0);
+    expect(depsArrayFor(output, "Tops")).toBe(
+      '[["any", "unknown", { value: void 0 }]]',
+    );
+  });
+
+  test("whole-type undefined / null params supply their value (Rule 2)", () => {
+    const src = `
+      interface IMarker {}
+      class Nullish implements IMarker {
+        constructor(a: undefined, b: null) {}
+      }
+      declare const services: any;
+      services.add<IMarker>(Nullish).as<"singleton">();
+    `;
+    const { output, diagnostics } = transform(fixture(src));
+    expect(
+      diagnostics.filter((d) => d.code === DiagnosticCode.UnderivableToken).length,
+    ).toBe(0);
+    // `a: undefined` is a trailing-from-the-left optional? No — `b: null` is not
+    // optional (null ≠ undefined), so `a: undefined` is interior. An interior
+    // whole-type `undefined` is still a singleton LiteralRef (Rule 2), and `b:
+    // null` supplies null. Neither earns an overload drop (b is required).
+    expect(depsArrayFor(output, "Nullish")).toBe(
+      '[[{ value: void 0 }, { value: null }]]',
+    );
+  });
+
+  test("anonymous inline structure STILL hard-errors (Rule 1 exception)", () => {
+    // The ONLY remaining UnderivableToken case: an anonymous structural type with
+    // no name (a `__type` symbol). It has no token, so it is a hard error.
+    const src = `
+      interface IMarker {}
+      class Anon implements IMarker {
+        constructor(a: { x: number }) {}
+      }
+      declare const services: any;
+      services.add<IMarker>(Anon).as<"singleton">();
+    `;
+    const { diagnostics } = transform(fixture(src));
+    const errs = diagnostics.filter((d) => d.code === DiagnosticCode.UnderivableToken);
+    expect(errs.length).toBe(1);
+    expect(errs[0]!.category).toBe(1 /* ts.DiagnosticCategory.Error */);
   });
 
   test("tokens for interface parameters", () => {
@@ -82,7 +131,7 @@ describe("dependency extraction", () => {
     expect(depsArrayFor(output, "Svc")).toBe('[["./app/ILogger", "./app/IDb"]]');
   });
 
-  test("mixed multi-param ctor: tokens for resolvable params, error for unresolvable", () => {
+  test("mixed multi-param ctor: every param tokenizes, including the `string` (Rule 1)", () => {
     const src = `
       interface ILogger {}
       interface IDbConnection {}
@@ -93,11 +142,14 @@ describe("dependency extraction", () => {
       declare const services: any;
       services.add<IUserRepo>(SqlUserRepo).as<"request">();
     `;
-    const { diagnostics } = transform(fixture(src));
-    // The `string` param produces a hard error.
+    const { output, diagnostics } = transform(fixture(src));
+    // The `string` param no longer errors — it tokenizes to the bare "string".
     expect(
       diagnostics.filter((d) => d.code === DiagnosticCode.UnderivableToken).length,
-    ).toBe(1);
+    ).toBe(0);
+    expect(depsArrayFor(output, "SqlUserRepo")).toBe(
+      '[["./app/ILogger", "./app/IDbConnection", "string"]]',
+    );
   });
 
   test("class is registered, emits exactly one signature (array-of-one)", () => {

@@ -279,10 +279,11 @@ describe("inline union lowering (§8)", () => {
     expect(arr).toContain("CacheProvider");
   });
 
-  test("T | undefined optional param does NOT become a union slot", () => {
-    // `dep?: IFoo` (or `dep: IFoo | undefined`) is optional-overload territory —
-    // the `| undefined` is the optionality marker, not a union of alternatives.
-    // The transformer strips it and uses IFoo's token, producing optional overloads.
+  test("T | undefined optional param → union(T, { value: undefined }) — one signature", () => {
+    // Optionality is unified on union (no overload expansion). `dep?: IFoo` (or
+    // `dep: IFoo | undefined`) lowers to a single signature whose slot is
+    // `union(IFoo, { value: undefined })` — IFoo wins when registered, else the
+    // always-satisfiable LiteralRef supplies `undefined`.
     const src = `
       interface IFoo {}
       interface IHandler {}
@@ -293,19 +294,18 @@ describe("inline union lowering (§8)", () => {
       services.add<IHandler>(Handler).as<"singleton">();
     `;
     const { output } = transform(fixture(src));
-    // Two overloads: [["./app/IFoo"], []] (with optional dep, without).
-    const arr = depsArrayFor(output, "Handler");
-    expect(arr).not.toContain("union:");
-    expect(arr).toContain("./app/IFoo");
-    // The shorter overload (dep omitted) must also be present.
-    expect(arr).toContain("[]");
+    expect(depsArrayFor(output, "Handler")).toBe(
+      '[[{ union: ["./app/IFoo", { value: void 0 }] }]]',
+    );
   });
 });
 
 // ── Hard error for unresolvable types (design §5) ─────────────────────────────
 
 describe("hard error on unresolvable token (§5)", () => {
-  test("unbranded primitive param type produces error diagnostic", () => {
+  test("unbranded primitive param type tokenizes by keyword — NO error (Rule 1)", () => {
+    // Rule 1 flipped this: `name: string` is no longer underivable. It becomes
+    // the bare token "string" and misses at runtime if unregistered.
     const src = `
       interface ISvc {}
       class Svc implements ISvc {
@@ -316,9 +316,7 @@ describe("hard error on unresolvable token (§5)", () => {
     `;
     const { diagnostics } = transform(fixture(src));
     const errs = diagnostics.filter((d) => d.code === DiagnosticCode.UnderivableToken);
-    expect(errs.length).toBe(1);
-    expect(errs[0]!.category).toBe(1 /* ts.DiagnosticCategory.Error */);
-    expect(String(errs[0]!.messageText)).toContain("Inject<T");
+    expect(errs.length).toBe(0);
   });
 
   test("anonymous structural type produces error diagnostic", () => {
@@ -394,16 +392,18 @@ describe("resolveFactory lowering with params (§2)", () => {
     );
   });
 
-  test("resolve<(a: string) => T>() with unresolvable param → hard error", () => {
-    // A primitive param in the resolveFactory function type → UnderivableToken.
+  test("resolve<(a: string) => T>() — primitive param tokenizes to 'string' (Rule 1)", () => {
+    // Rule 1: a primitive factory param is no longer underivable; it becomes the
+    // bare token "string" in the resolveFactory params array.
     const src = `
       interface IT {}
       declare const scope: any;
       scope.resolve<(name: string) => IT>();
     `;
-    const { diagnostics } = transform(fixture(src));
+    const { output, diagnostics } = transform(fixture(src));
     const errs = diagnostics.filter((d) => d.code === DiagnosticCode.UnderivableToken);
-    expect(errs.length).toBeGreaterThanOrEqual(1);
+    expect(errs.length).toBe(0);
+    expect(output).toContain('scope.resolveFactory("./app/IT", ["string"])');
   });
 });
 

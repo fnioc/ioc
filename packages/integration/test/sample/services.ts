@@ -36,23 +36,27 @@ export class SqlDb implements IDbConnection {
 }
 
 /**
- * Ctor deps: a logger + a db (both registered). Previously had an optional
- * `table?: string` parameter to demonstrate overload expansion, but primitive
- * `string` is not tokenizable in the new design (no symbol, no named alias).
- * The overload-expansion / caller-supplied pattern is demonstrated via
- * `resolveFactory(token, params)` in the parity tests.
+ * Ctor deps: a logger + a db (both registered) + an optional `table?: string`.
+ * Optionality is unified on union: `table?: string` lowers to a single slot
+ * `union("string", { value: undefined })`. The `"string"` token wins when
+ * registered; nothing registers it here, so the always-satisfiable LiteralRef
+ * fallback supplies `undefined` and `table` stays `undefined`. This demonstrates
+ * the optional-primitive union fallback end-to-end — an unregistered primitive
+ * token degrades to `undefined` rather than erroring.
  */
 export class SqlUserRepo implements IUserRepo {
   public static built = 0;
   public constructor(
     public readonly logger: ILogger,
     public readonly db: IDbConnection,
+    public readonly table?: string,
   ) {
     SqlUserRepo.built += 1;
   }
   public find(id: number): string {
     this.logger.log(`find ${id}`);
-    return this.db.query(`SELECT * FROM users WHERE id=${id}`);
+    const from = this.table ?? "users";
+    return this.db.query(`SELECT * FROM ${from} WHERE id=${id}`);
   }
 }
 

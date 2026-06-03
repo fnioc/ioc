@@ -54,13 +54,15 @@ describe("emit contract — transformer-emitted lowered output (PRD §8)", () =>
     expect(wiring).toContain('import { defineDeps } from "@fnioc/di"');
   });
 
-  test("class with two registered deps emits a single two-slot signature", () => {
+  test("class with two registered deps + optional primitive emits one union-fallback signature", () => {
     const wiring = project.emitted("sample/wiring.js");
-    // SqlUserRepo has exactly two ctor params (logger + db), both registered.
-    // No optional params → single signature, no overload expansion.
+    // SqlUserRepo ctor: (logger, db, table?: string). logger + db tokenize to
+    // their interface tokens; the optional `table?: string` lowers to
+    // `union("string", { value: undefined })` — the "string" token wins if
+    // registered, else `undefined` is supplied. One signature, no expansion.
     const n = hoistName(wiring, "SqlUserRepo");
     expect(wiring).toContain(
-      `defineDeps(${n}, [["./sample/contracts/ILogger", "./sample/contracts/IDbConnection"]]);`,
+      `defineDeps(${n}, [["./sample/contracts/ILogger", "./sample/contracts/IDbConnection", { union: ["string", { value: void 0 }] }]]);`,
     );
     expect(wiring).toContain(
       `services.add("./sample/contracts/IUserRepo", ${n}).as("request");`,
