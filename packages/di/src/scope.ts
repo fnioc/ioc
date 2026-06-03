@@ -217,7 +217,7 @@ export class ServiceProvider<S extends string = string>
    */
   private lookup(token: Token): Registration | undefined {
     const list = this.registrations.get(token);
-    return list !== undefined && list.length > 0 ? list[list.length - 1] : undefined;
+    return list !== undefined && list.length ? list[list.length - 1] : undefined;
   }
 
   /**
@@ -230,7 +230,7 @@ export class ServiceProvider<S extends string = string>
   ): Scope | undefined {
     let node = vantage;
     while (node !== undefined) {
-      if (node.name === scopeName) return node;
+      if (node.name === scopeName) {return node;}
       node = node.parent;
     }
     return undefined;
@@ -373,7 +373,7 @@ export class ServiceProvider<S extends string = string>
   ): T {
     const providerView = this.makeProviderView(owningFrame, stack);
     const record = getDeps(factory);
-    if (record === undefined || record.signatures.length === 0) {
+    if (record === undefined || !record.signatures.length) {
       return factory(providerView) as T;
     }
 
@@ -384,9 +384,9 @@ export class ServiceProvider<S extends string = string>
       owningFrame,
     );
     const args = signature.map((slot) => {
-      if (isScopeRef(slot)) return providerView;
-      if (isFactoryRef(slot)) return this.makeFactory(slot, owningFrame);
-      if (isUnion(slot)) return this.resolveUnion(slot, owningFrame, stack);
+      if (isScopeRef(slot)) {return providerView;}
+      if (isFactoryRef(slot)) {return this.makeFactory(slot, owningFrame);}
+      if (isUnion(slot)) {return this.resolveUnion(slot, owningFrame, stack);}
       // Selection guarantees every remaining slot is a resolvable string token.
       return this.resolveWith<unknown>(slot as Token, owningFrame, stack);
     });
@@ -413,8 +413,8 @@ export class ServiceProvider<S extends string = string>
 
     // No metadata: a zero-arg ctor is `new`ed directly; a ctor with parameters
     // and no record is a hard error with actionable guidance.
-    if (record === undefined || record.signatures.length === 0) {
-      if (ctor.length > 0) {
+    if (record === undefined || !record.signatures.length) {
+      if (ctor.length) {
         throw new MissingMetadataError(token, ctor.name);
       }
       return new ctor() as T;
@@ -489,7 +489,7 @@ export class ServiceProvider<S extends string = string>
       return () => sp.resolveWith<unknown>(ref.type, owningFrame, []);
     }
 
-    const callerParams = ref.params !== undefined && ref.params.length > 0
+    const callerParams = ref.params !== undefined && ref.params.length
       ? ref.params
       : undefined;
 
@@ -505,7 +505,7 @@ export class ServiceProvider<S extends string = string>
     const depTarget = target.kind === "class" ? target.ctor : target.factory;
     const record = getDeps(depTarget);
     const targetSignature =
-      record === undefined || record.signatures.length === 0
+      record === undefined || !record.signatures.length
         ? undefined
         : sp.selectTargetSignature(record.signatures);
 
@@ -550,7 +550,7 @@ export class ServiceProvider<S extends string = string>
     const stack: Token[] = [];
     const providerView = this.makeProviderView(owningFrame, stack);
 
-    if (signature === undefined || signature.length === 0) {
+    if (signature === undefined || !signature.length) {
       // No metadata: zero-arg ctor or record-less factory. Build directly.
       return (
         target.kind === "class"
@@ -573,9 +573,9 @@ export class ServiceProvider<S extends string = string>
     const remainingParamIndices: number[] = callerParams.map((_, i) => i);
 
     const args = signature.map((slot) => {
-      if (isScopeRef(slot)) return providerView;
-      if (isFactoryRef(slot)) return this.makeFactory(slot, owningFrame);
-      if (isUnion(slot)) return this.resolveUnion(slot, owningFrame, stack);
+      if (isScopeRef(slot)) {return providerView;}
+      if (isFactoryRef(slot)) {return this.makeFactory(slot, owningFrame);}
+      if (isUnion(slot)) {return this.resolveUnion(slot, owningFrame, stack);}
 
       // String token slot: check if it is claimed by callerParams (caller wins,
       // even if the token is also registered).
@@ -639,7 +639,7 @@ export class ServiceProvider<S extends string = string>
     for (const { sig } of ordered) {
       let satisfiable = true;
       for (const slot of sig) {
-        if (isFactoryRef(slot) || isScopeRef(slot)) continue;
+        if (isFactoryRef(slot) || isScopeRef(slot)) {continue;}
         if (isUnion(slot)) {
           // A union slot is satisfiable iff at least one member is resolvable.
           if (!this.isResolvableSlot(slot)) {
@@ -649,10 +649,10 @@ export class ServiceProvider<S extends string = string>
         }
         if (!this.isResolvable(slot)) {
           satisfiable = false;
-          if (typeof slot === "string") unsatisfiable.add(slot);
+          if (typeof slot === "string") {unsatisfiable.add(slot);}
         }
       }
-      if (satisfiable) return sig;
+      if (satisfiable) {return sig;}
     }
 
     throw new NoSatisfiableSignatureError(token, targetName, [...unsatisfiable]);
@@ -693,7 +693,7 @@ export class ServiceProvider<S extends string = string>
    *   - string token — registered in the sealed map.
    */
   private isResolvableSlot(slot: DepSlot): boolean {
-    if (isFactoryRef(slot) || isScopeRef(slot)) return true;
+    if (isFactoryRef(slot) || isScopeRef(slot)) {return true;}
     if (isUnion(slot)) {
       return slot.union.some((member) => this.isResolvableSlot(member as DepSlot));
     }
@@ -727,9 +727,9 @@ export class ServiceProvider<S extends string = string>
     owningFrame: Scope | undefined,
     stack: Token[],
   ): T {
-    if (isScopeRef(slot)) return this.makeProviderView(owningFrame, stack) as T;
-    if (isFactoryRef(slot)) return this.makeFactory(slot, owningFrame) as T;
-    if (isUnion(slot)) return this.resolveUnion<T>(slot, owningFrame, stack);
+    if (isScopeRef(slot)) {return this.makeProviderView(owningFrame, stack) as T;}
+    if (isFactoryRef(slot)) {return this.makeFactory(slot, owningFrame) as T;}
+    if (isUnion(slot)) {return this.resolveUnion<T>(slot, owningFrame, stack);}
     return this.resolveWith<T>(slot as Token, owningFrame, stack);
   }
 
@@ -745,7 +745,7 @@ export class ServiceProvider<S extends string = string>
    * must use `disposeAsync()`. Idempotent: a second call is a no-op.
    */
   public dispose(): void {
-    if (this.disposed) return;
+    if (this.disposed) {return;}
 
     const owned = this.frame?.owned ?? [];
 
@@ -772,7 +772,7 @@ export class ServiceProvider<S extends string = string>
    * `Symbol.asyncDispose` and `Symbol.dispose`. Idempotent.
    */
   public async disposeAsync(): Promise<void> {
-    if (this.disposed) return;
+    if (this.disposed) {return;}
     this.disposed = true;
 
     const owned = this.frame?.owned ?? [];

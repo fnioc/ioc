@@ -48,13 +48,13 @@ function slotsEqual(a: DepSlot, b: DepSlot): boolean {
   const aIsRef = isFactoryRef(a);
   const bIsRef = isFactoryRef(b);
   if (aIsRef || bIsRef) {
-    if (!aIsRef || !bIsRef) return false;
-    if (a.type !== b.type) return false;
+    if (!aIsRef || !bIsRef) {return false;}
+    if (a.type !== b.type) {return false;}
     const aParams = a.params ?? [];
     const bParams = b.params ?? [];
-    if (aParams.length !== bParams.length) return false;
+    if (aParams.length !== bParams.length) {return false;}
     for (let i = 0; i < aParams.length; i++) {
-      if (aParams[i] !== bParams[i]) return false;
+      if (aParams[i] !== bParams[i]) {return false;}
     }
     return true;
   }
@@ -66,10 +66,10 @@ function slotsEqual(a: DepSlot, b: DepSlot): boolean {
   const aIsUnion = isUnionSlot(a);
   const bIsUnion = isUnionSlot(b);
   if (aIsUnion || bIsUnion) {
-    if (!aIsUnion || !bIsUnion) return false;
-    if (a.union.length !== b.union.length) return false;
+    if (!aIsUnion || !bIsUnion) {return false;}
+    if (a.union.length !== b.union.length) {return false;}
     for (let i = 0; i < a.union.length; i++) {
-      if (!slotsEqual(a.union[i] as DepSlot, b.union[i] as DepSlot)) return false;
+      if (!slotsEqual(a.union[i] as DepSlot, b.union[i] as DepSlot)) {return false;}
     }
     return true;
   }
@@ -78,9 +78,9 @@ function slotsEqual(a: DepSlot, b: DepSlot): boolean {
 
 /** True when two positional signature arrays are element-wise identical. */
 function signaturesEqual(a: readonly DepSlot[], b: readonly DepSlot[]): boolean {
-  if (a.length !== b.length) return false;
+  if (a.length !== b.length) {return false;}
   for (let i = 0; i < a.length; i++) {
-    if (!slotsEqual(a[i] as DepSlot, b[i] as DepSlot)) return false;
+    if (!slotsEqual(a[i] as DepSlot, b[i] as DepSlot)) {return false;}
   }
   return true;
 }

@@ -156,10 +156,10 @@ function rewriteResolve(node: ts.Node, ctx: LowerContext): ts.Node {
 /** True when `call` is a tokenless `*.resolve<I>()` (1 type arg, 0 value args). */
 function isTokenlessResolveCall(call: ts.CallExpression): boolean {
   const callee = call.expression;
-  if (!ts.isPropertyAccessExpression(callee)) return false;
-  if (callee.name.text !== "resolve") return false;
-  if (!call.typeArguments || call.typeArguments.length !== 1) return false;
-  return call.arguments.length === 0;
+  if (!ts.isPropertyAccessExpression(callee)) {return false;}
+  if (callee.name.text !== "resolve") {return false;}
+  if (!call.typeArguments || call.typeArguments.length !== 1) {return false;}
+  return !call.arguments.length;
 }
 
 /** `*.resolve<I>()` → `*.resolve("tok")` / `*.resolveFactory("tok:return", [...])`. */
@@ -229,7 +229,7 @@ function lowerResolveCall(
 
   // Build the argument list: always token, then params array if non-empty.
   const args: ts.Expression[] = [tokenLiteral];
-  if (paramTokens && paramTokens.length > 0) {
+  if (paramTokens && paramTokens.length) {
     args.push(
       ctx.factory.createArrayLiteralExpression(
         paramTokens.map((p) => ctx.factory.createStringLiteral(p)),
@@ -269,15 +269,15 @@ function rewriteNameof(node: ts.Node, ctx: LowerContext): ts.Node {
  * be the transformer's `nameof`.
  */
 function isNameofCall(call: ts.CallExpression, checker: ts.TypeChecker): boolean {
-  if (!call.typeArguments || call.typeArguments.length !== 1) return false;
+  if (!call.typeArguments || call.typeArguments.length !== 1) {return false;}
   const callee = call.expression;
   const id = ts.isIdentifier(callee)
     ? callee
     : ts.isPropertyAccessExpression(callee)
       ? callee.name
       : undefined;
-  if (!id) return false;
-  if (id.text === NAMEOF_NAME) return true;
+  if (!id) {return false;}
+  if (id.text === NAMEOF_NAME) {return true;}
 
   // Aliased import: resolve through the alias and check the real exported name.
   const symbol = checker.getSymbolAtLocation(callee);
@@ -299,7 +299,7 @@ function collectForCtorAnnotations(
       ts.isCallExpression(node) &&
       ts.isIdentifier(node.expression) &&
       node.expression.text === "forCtor" &&
-      node.arguments.length >= 1
+      node.arguments.length
     ) {
       const arg = node.arguments[0]!;
       const symbol = checker.getSymbolAtLocation(arg);
@@ -307,7 +307,7 @@ function collectForCtorAnnotations(
         symbol && symbol.flags & ts.SymbolFlags.Alias
           ? checker.getAliasedSymbol(symbol)
           : symbol;
-      if (target) annotated.add(target);
+      if (target) {annotated.add(target);}
     }
     ts.forEachChild(node, visit);
   };
@@ -325,7 +325,7 @@ function existingDefineDepsBinding(
   file: ts.SourceFile,
 ): ts.Identifier | undefined {
   for (const statement of file.statements) {
-    if (!ts.isImportDeclaration(statement)) continue;
+    if (!ts.isImportDeclaration(statement)) {continue;}
     const named = statement.importClause?.namedBindings;
     if (named && ts.isNamedImports(named)) {
       for (const element of named.elements) {
@@ -381,7 +381,7 @@ function injectDefineDepsImport(
 /** Best-effort project root: the program's common source directory. */
 function computeProjectRoot(program: ts.Program): string {
   const opts = program.getCompilerOptions();
-  if (opts.rootDir) return opts.rootDir.replace(/\\/g, "/");
+  if (opts.rootDir) {return opts.rootDir.replace(/\\/g, "/");}
   // `getCommonSourceDirectory` exists at runtime but is not in the public
   // typings; fall back to the current directory when unavailable.
   const withCommon = program as ts.Program & {

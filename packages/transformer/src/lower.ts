@@ -121,10 +121,10 @@ export function lowerStatement(
   statement: ts.Statement,
   ctx: LowerContext,
 ): ts.Statement[] | undefined {
-  if (!ts.isExpressionStatement(statement)) return undefined;
+  if (!ts.isExpressionStatement(statement)) {return undefined;}
 
   const registrations = findRegistrationCalls(statement.expression);
-  if (registrations.length === 0) return undefined;
+  if (!registrations.length) {return undefined;}
 
   const preludes: ts.Statement[] = [];
   const plans = new Map<ts.CallExpression, RegPlan>();
@@ -175,21 +175,21 @@ export function lowerStatement(
  */
 function registrationMethod(call: ts.CallExpression): RegMethod | undefined {
   const callee = call.expression;
-  if (!ts.isPropertyAccessExpression(callee)) return undefined;
-  if (call.typeArguments && call.typeArguments.length > 1) return undefined;
+  if (!ts.isPropertyAccessExpression(callee)) {return undefined;}
+  if (call.typeArguments && call.typeArguments.length > 1) {return undefined;}
   const name = callee.name.text;
-  if (name !== "add" && name !== "addValue") return undefined;
+  if (name !== "add" && name !== "addValue") {return undefined;}
   // addValue only accepts exactly one value arg.
   if (name === "addValue") {
     return call.arguments.length === 1 ? "addValue" : undefined;
   }
   // add: accept 1 arg (standard form) or 2 args (override-array form).
-  if (call.arguments.length === 1) return "add";
+  if (call.arguments.length === 1) {return "add";}
   if (call.arguments.length === 2) {
     // Two-arg form is only type-driven when there IS a type argument.
     // Without a type arg + two value args → already-lowered explicit form,
     // or the string-first explicit form → leave untouched.
-    if (!call.typeArguments || call.typeArguments.length === 0) return undefined;
+    if (!call.typeArguments || !call.typeArguments.length) {return undefined;}
     return "add";
   }
   return undefined;
@@ -198,9 +198,9 @@ function registrationMethod(call: ts.CallExpression): RegMethod | undefined {
 /** True when `call` is a `*.as<"x">()` fluent scope tag. */
 function isAsCall(call: ts.CallExpression): boolean {
   const callee = call.expression;
-  if (!ts.isPropertyAccessExpression(callee)) return false;
-  if (callee.name.text !== "as") return false;
-  if (!call.typeArguments || call.typeArguments.length !== 1) return false;
+  if (!ts.isPropertyAccessExpression(callee)) {return false;}
+  if (callee.name.text !== "as") {return false;}
+  if (!call.typeArguments || call.typeArguments.length !== 1) {return false;}
   return true;
 }
 
@@ -249,14 +249,14 @@ function applyOverrides(
   factory: ts.NodeFactory,
   ctx: LowerContext,
 ): Signature | undefined {
-  if (!ts.isArrayLiteralExpression(overrideNode)) return undefined;
+  if (!ts.isArrayLiteralExpression(overrideNode)) {return undefined;}
   const overrides = overrideNode.elements;
   const result: Slot[] = baseSignature.slice();
   for (let i = 0; i < overrides.length; i++) {
     const elem = overrides[i]!;
     // OmittedExpression (elision) or `undefined` literal → keep derived.
-    if (ts.isOmittedExpression(elem)) continue;
-    if (ts.isIdentifier(elem) && elem.text === "undefined") continue;
+    if (ts.isOmittedExpression(elem)) {continue;}
+    if (ts.isIdentifier(elem) && elem.text === "undefined") {continue;}
     // Anything else is the override. We try to interpret it as a slot:
     // - string literal → token string
     // - object literal `{ type: "..." }` → factory slot  (for manual FactoryRef)
@@ -302,7 +302,7 @@ function planAddRegistration(
   // Constructable → a class. Prefer the full ClassDeclaration path (PRD §8
   // checks); fall back to the construct signature for a class with no static
   // declaration (a `getCtor()` result, a const-bound class expression).
-  if (type.getConstructSignatures().length > 0) {
+  if (type.getConstructSignatures().length) {
     const extraction = extractFromExpression(arg, ctx);
     let signatures = extraction
       ? classSignatureFromExtraction(extraction, arg, ctx)
@@ -320,7 +320,7 @@ function planAddRegistration(
   }
 
   // Callable (not constructable) → a factory.
-  if (type.getCallSignatures().length > 0) {
+  if (type.getCallSignatures().length) {
     const signatures = extractFactoryReferenceSignature(arg, ctx);
     return signatures
       ? emitHoisted(arg, token, signatures, "addFactory", ctx, preludes)
@@ -477,7 +477,7 @@ function slotLiteral(slot: Slot, factory: ts.NodeFactory): ts.Expression {
         factory.createStringLiteral(slot.type),
       ),
     ];
-    if (slot.params && slot.params.length > 0) {
+    if (slot.params && slot.params.length) {
       props.push(
         factory.createPropertyAssignment(
           "params",
@@ -593,10 +593,10 @@ function tokenForReg(reg: FoundReg, ctx: LowerContext): string | undefined {
 /** The type the matched overload binds to `T` for a no-type-arg registration. */
 function inferredRegType(reg: FoundReg, ctx: LowerContext): ts.Type {
   const type = ctx.checker.getTypeAtLocation(reg.arg);
-  if (reg.method === "addValue") return type;
+  if (reg.method === "addValue") {return type;}
   const ctorSigs = type.getConstructSignatures();
-  if (ctorSigs.length > 0) return ctorSigs[0]!.getReturnType();
+  if (ctorSigs.length) {return ctorSigs[0]!.getReturnType();}
   const callSigs = type.getCallSignatures();
-  if (callSigs.length > 0) return callSigs[0]!.getReturnType();
+  if (callSigs.length) {return callSigs[0]!.getReturnType();}
   return type;
 }
