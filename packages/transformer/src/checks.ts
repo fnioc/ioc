@@ -27,6 +27,8 @@ import {
 import {
   tokenForType,
   deriveToken,
+  intrinsicToken,
+  singletonValue,
   type TokenContext,
 } from "./tokens.js";
 import {
@@ -135,14 +137,19 @@ function checkFactoryParam(
   const producedCtor = findConstructor(producedClass);
   if (!producedCtor) {return;}
 
-  // The produced ctor's holes (unregistered-shaped params), in order — these
-  // are exactly the params the factory caller must supply.
-  const expected = producedCtor.parameters
-    .map((p) => slotForParam(p, ctx))
-    .filter((slot) => slot === null);
+  // The produced ctor's caller-supplied params, in order — these are exactly the
+  // params the factory caller must supply. Under Rule 1 every named type derives
+  // a token, so "the caller supplies it" no longer means "underivable"; it means
+  // a PRIMITIVE SCALAR — a bare intrinsic keyword (`string`/`number`/…), a
+  // singular literal value (Rule 2), or an anonymous structure with no token.
+  // A real DI service (a named interface/class token) is container-resolved, not
+  // caller-supplied.
+  const expected = producedCtor.parameters.filter((p) =>
+    isCallerSuppliedParam(p, ctx),
+  );
 
   // The factory's own declared params.
-  const declared = typeNode.parameters.map((p) => slotForParam(p, ctx));
+  const declared = typeNode.parameters;
 
   if (declared.length !== expected.length) {
     const name = param.name.getText();
@@ -158,6 +165,27 @@ function checkFactoryParam(
       ),
     );
   }
+}
+
+/**
+ * True when a produced-ctor parameter is CALLER-SUPPLIED at a parameterized
+ * factory boundary (a §4.5 "hole"). Under Rule 1 every named type tokenizes, so
+ * this is no longer "underivable" — it is a PRIMITIVE SCALAR the container does
+ * not provide:
+ *   - a singular literal (Rule 2 — its value is caller/registration data),
+ *   - a bare intrinsic keyword token (`string` / `number` / `boolean` / …), or
+ *   - an anonymous structure with no token at all.
+ * A param whose type is a named interface/class (a real DI service) is
+ * container-resolved, so it is NOT caller-supplied.
+ */
+function isCallerSuppliedParam(
+  param: ts.ParameterDeclaration,
+  ctx: CheckContext,
+): boolean {
+  const type = ctx.checker.getTypeAtLocation(param);
+  if (singletonValue(type) !== undefined) {return true;}
+  if (intrinsicToken(type) !== undefined) {return true;}
+  return slotForParam(param, ctx) === null;
 }
 
 /**

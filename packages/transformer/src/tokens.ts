@@ -62,6 +62,43 @@ export interface TokenContext {
  */
 export type TokenResult = { readonly kind: "resolvable"; readonly token: string };
 
+/**
+ * The bare token for an INTRINSIC type — `string`, `number`, `boolean`,
+ * `symbol`, `bigint`, `any`, `unknown`, `void`, `never` — derived uniformly from
+ * the checker's `intrinsicName` (Rule 1: every named type tokenizes by its
+ * name). Returns `undefined` for any non-intrinsic type.
+ *
+ * Two exclusions keep this from over-matching:
+ *   - boolean LITERALS (`true` / `false`) carry the `Intrinsic` flag AND a
+ *     `BooleanLiteral` flag with `intrinsicName` `"true"`/`"false"`; those are
+ *     singular literals (Rule 2), not the wide `boolean` token, so they are
+ *     excluded here and fall through to literal handling.
+ *   - `null` / `undefined` / `void` are intrinsic SINGLETONS — exactly one
+ *     inhabitant — so they are supplied directly as a `LiteralRef` (Rule 2), not
+ *     tokenized. Excluded here so the caller's `singletonValue` path claims them.
+ *     `never` (zero inhabitants — nothing to supply) is NOT excluded: it stays a
+ *     Rule-1 token `"never"` and simply misses at runtime.
+ *
+ * Wide `boolean` is modelled by TypeScript as the union `false | true` but still
+ * carries the `Intrinsic` flag and `intrinsicName === "boolean"`, so it lands
+ * here as the bare token `"boolean"` (NOT the literal-union `"false | true"`).
+ */
+export function intrinsicToken(type: ts.Type): string | undefined {
+  // `TypeFlags.Intrinsic` is not in the public typings (it exists at runtime,
+  // value 67359327). The presence of a string `intrinsicName` IS the intrinsic
+  // marker — every intrinsic type carries it, no non-intrinsic does — so we read
+  // that directly rather than depend on the private flag.
+  if (type.flags & ts.TypeFlags.BooleanLiteral) {return undefined;}
+  if (
+    type.flags &
+    (ts.TypeFlags.Null | ts.TypeFlags.Undefined | ts.TypeFlags.Void)
+  ) {
+    return undefined;
+  }
+  const name = (type as unknown as { intrinsicName?: unknown }).intrinsicName;
+  return typeof name === "string" && name.length ? name : undefined;
+}
+
 /** Unwrap a single `Promise<X>` layer, returning `X`'s type (or the input). */
 function unwrapPromise(type: ts.Type, checker: ts.TypeChecker): ts.Type {
   const symbol = type.getSymbol();
@@ -78,13 +115,14 @@ function unwrapPromise(type: ts.Type, checker: ts.TypeChecker): ts.Type {
  * `Promise<X>` layer first.
  *
  * Returns `{ kind: "resolvable", token }` when a token can be derived, or
- * `undefined` when the type yields no derivable token (a wide primitive / top /
- * bottom type with no symbol, an anonymous structural type with no name). The
- * caller is responsible for emitting the `UnderivableToken` hard diagnostic
- * when `undefined` is returned and no `Inject` brand is present.
- *
- * There is NO pre-emptive "primitive → hole" mask: the type is looked up exactly
- * as written. A literal type IS a token (`"dev"` → `"dev"`), since it resolves.
+ * `undefined` only for an ANONYMOUS inline structure with no name (a `__type`
+ * symbol, or a nameless non-intrinsic type). Every NAMED type tokenizes (Rule
+ * 1): each intrinsic — `string`, `number`, `boolean`, `symbol`, `bigint`,
+ * `any`, `unknown`, `void`, `never` — yields its keyword as a token, and a
+ * literal yields its quoted/rendered token. An unregistered token simply misses
+ * at runtime (UnregisteredTokenError); it is NOT a compile error. The caller
+ * emits the `UnderivableToken` hard diagnostic only when `undefined` is returned
+ * (anonymous structure) and no `Inject` brand is present.
  */
 export function tokenForType(
   type: ts.Type,
@@ -188,9 +226,10 @@ export function tokenForReturnType(
 }
 
 /**
- * Derive the token string for a (already Promise-unwrapped, non-primitive)
- * type. Returns `undefined` when no declaration with a name is reachable (an
- * anonymous / structural type with no symbol — treated as a hole by the caller).
+ * Derive the token string for a (already Promise-unwrapped) type. Returns
+ * `undefined` ONLY for an anonymous structural type with no name (a `__type`
+ * symbol or a nameless non-intrinsic) — the caller treats that as the underivable
+ * hard-error case. Intrinsics tokenize by name (Rule 1); literals by value.
  */
 export function deriveToken(
   type: ts.Type,
@@ -202,6 +241,13 @@ export function deriveToken(
   // `resolve<"a" | "b">()`).
   const literal = literalToken(type);
   if (literal !== undefined) {return literal;}
+
+  // Rule 1: every intrinsic (string / number / boolean / symbol / bigint / any /
+  // unknown / void / never) tokenizes by its name. Wide `boolean` lands here as
+  // `"boolean"` (literalToken excludes it). Intrinsics carry no symbol, so this
+  // must precede the symbol lookup below.
+  const intrinsic = intrinsicToken(type);
+  if (intrinsic !== undefined) {return intrinsic;}
 
   const symbol = type.aliasSymbol ?? type.getSymbol();
   if (!symbol) {return undefined;}
@@ -254,6 +300,54 @@ function literalText(type: ts.Type): string | undefined {
   return undefined;
 }
 
+/** The value payload of a singular (Rule-2) type — may itself be `undefined`/`null`. */
+export type LiteralValue = string | number | boolean | bigint | undefined | null;
+
+/**
+ * A Rule-2 match: a SINGULAR (non-union) type whose lone value is supplied
+ * directly. Wrapped so the `void`/`undefined` case (`value: undefined`) is
+ * distinguishable from "not a singular type" (a plain `undefined` return). The
+ * caller emits a `LiteralRef` slot from `.value`.
+ */
+export interface LiteralResult {
+  readonly value: LiteralValue;
+}
+
+/**
+ * Detect a SINGULAR (Rule-2) type and return its value, or `undefined` when the
+ * type is not singular. Covers:
+ *   - string / number / bigint / boolean LITERALS → the literal's value,
+ *   - whole-type `void` / `undefined` → `{ value: undefined }`,
+ *   - whole-type `null` → `{ value: null }`.
+ * Excludes (returns `undefined`, so the caller tokenizes / strips instead):
+ *   - wide `boolean` (`false | true` — a scalar token), and
+ *   - any UNION (a literal union stays a token; a nullish union is stripped by
+ *     the optional/overload path — this never sees a union as its WHOLE type).
+ * `never` is deliberately NOT singular here — it stays a Rule-1 token.
+ */
+export function singletonValue(type: ts.Type): LiteralResult | undefined {
+  if (type.isUnion()) {return undefined;}
+  if (type.flags & ts.TypeFlags.Boolean) {return undefined;}
+  if (type.isStringLiteral()) {return { value: type.value };}
+  if (type.isNumberLiteral()) {return { value: type.value };}
+  if (type.flags & ts.TypeFlags.BigIntLiteral) {
+    const value = (type as ts.BigIntLiteralType).value;
+    return { value: BigInt(`${value.negative ? "-" : ""}${value.base10Value}`) };
+  }
+  if (type.flags & ts.TypeFlags.BooleanLiteral) {
+    return {
+      value:
+        (type as unknown as { intrinsicName: string }).intrinsicName === "true",
+    };
+  }
+  // Singleton non-literal types: void / undefined → undefined; null → null.
+  if (type.flags & (ts.TypeFlags.Void | ts.TypeFlags.Undefined)) {
+    return { value: undefined };
+  }
+  if (type.flags & ts.TypeFlags.Null) {return { value: null }; }
+  return undefined;
+}
+
 /**
  * A deterministic token for a literal type or a union of literal types. Members
  * are rendered as valid TS (see `literalText`), SORTED (so member order is
@@ -283,6 +377,46 @@ function literalToken(type: ts.Type): string | undefined {
     return parts.length ? parts.sort().join(" | ") : undefined;
   }
   return undefined;
+}
+
+/**
+ * For an OPTIONAL pure-literal union (`"a" | "b" | undefined`), the sorted
+ * literal-union token over JUST its non-nullish members (`"a" | "b"`), or
+ * `undefined` when the type is not such a union. Used so an optional pure-literal
+ * param keeps a single discriminated token as the non-nullish part of its
+ * union-with-`undefined` fallback, rather than splitting into per-member
+ * LiteralRefs. `literalToken` itself can't do this — it rejects the union as soon
+ * as the `| undefined` member is present.
+ */
+export function literalUnionTokenForOptional(type: ts.Type): string | undefined {
+  if (!type.isUnion()) {return undefined;}
+  const nonNullishMembers = type.types.filter(
+    (t) =>
+      !(t.flags &
+        (ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void)),
+  );
+  if (nonNullishMembers.length < 2) {return undefined;}
+  const parts: string[] = [];
+  for (const member of nonNullishMembers) {
+    const text = literalText(member);
+    if (text === undefined) {return undefined;}
+    parts.push(text);
+  }
+  return parts.sort().join(" | ");
+}
+
+/**
+ * True when `type` is a UNION whose every member is a literal (string / number /
+ * bigint / boolean literal) — a "pure literal union" like `"a" | "b"` or `1 | 2`.
+ * Such a union is a discriminated CHOICE that `literalToken` mints a single sorted
+ * token for (`"a" | "b"`), so it stays a resolved token rather than lowering to a
+ * `union(...)` of LiteralRef members. Wide `boolean` (the `false | true` union)
+ * returns false — it is a scalar token, handled separately.
+ */
+export function isPureLiteralUnion(type: ts.Type): boolean {
+  if (type.flags & ts.TypeFlags.Boolean) {return false;}
+  if (!type.isUnion()) {return false;}
+  return type.types.every((member) => literalText(member) !== undefined);
 }
 
 /** The declaration we anchor a token on — prefer interface/class/type-alias. */

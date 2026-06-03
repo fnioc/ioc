@@ -21,7 +21,7 @@
 // (skip emission + info diagnostic).
 
 import ts from "typescript";
-import { deriveToken, type TokenContext } from "./tokens.js";
+import { deriveToken, type LiteralValue, type TokenContext } from "./tokens.js";
 import {
   extractCtorReferenceSignature,
   extractFactoryReferenceSignature,
@@ -29,6 +29,7 @@ import {
   extractSignatureFromFunction,
   hasSignatureDecorator,
   isFactorySlot,
+  isLiteralSlot,
   isScopeSlot,
   isUnionSlot,
   type ConstructorExtraction,
@@ -448,6 +449,7 @@ function defineDepsStatement(
  *   - `{ type: "<token>" }` (or `{ type: "<token>", params: [...] }`) for a factory ref
  *   - `{ scope: true }` for a scope ref
  *   - `{ union: [slot, slot, ...] }` for a union slot (recursive)
+ *   - `{ value: <literal> }` for a literal slot (Rule 2)
  *
  * There is no `null` emission — the `null`/hole sentinel has been removed.
  */
@@ -467,6 +469,12 @@ function slotLiteral(slot: Slot, factory: ts.NodeFactory): ts.Expression {
           factory.createArrayLiteralExpression(memberExprs, false),
         ),
       ],
+      false,
+    );
+  }
+  if (isLiteralSlot(slot)) {
+    return factory.createObjectLiteralExpression(
+      [factory.createPropertyAssignment("value", literalExpression(slot.value, factory))],
       false,
     );
   }
@@ -491,6 +499,39 @@ function slotLiteral(slot: Slot, factory: ts.NodeFactory): ts.Expression {
     return factory.createObjectLiteralExpression(props, false);
   }
   return factory.createStringLiteral(slot);
+}
+
+/**
+ * Render a `LiteralRef` value as its TS literal expression. `undefined` emits
+ * `void 0` (a non-shadowable undefined); `null` emits `null`. A negative number
+ * is a unary minus over its magnitude; a bigint emits a `BigIntLiteral`
+ * (`createBigIntLiteral` takes the digit string WITH the trailing `n`, magnitude
+ * only, so a negative bigint is a unary minus over the positive literal).
+ */
+export function literalExpression(
+  value: LiteralValue,
+  factory: ts.NodeFactory,
+): ts.Expression {
+  if (value === undefined) {
+    return factory.createVoidExpression(factory.createNumericLiteral(0));
+  }
+  if (value === null) {return factory.createNull();}
+  if (typeof value === "string") {return factory.createStringLiteral(value);}
+  if (typeof value === "boolean") {
+    return value ? factory.createTrue() : factory.createFalse();
+  }
+  if (typeof value === "bigint") {
+    const negative = value < 0n;
+    const literal = factory.createBigIntLiteral(`${negative ? -value : value}n`);
+    return negative
+      ? factory.createPrefixUnaryExpression(ts.SyntaxKind.MinusToken, literal)
+      : literal;
+  }
+  const negative = value < 0 || Object.is(value, -0);
+  const literal = factory.createNumericLiteral(Math.abs(value));
+  return negative
+    ? factory.createPrefixUnaryExpression(ts.SyntaxKind.MinusToken, literal)
+    : literal;
 }
 
 /**
