@@ -12,19 +12,43 @@ function codes(diags: readonly { code: number }[]): number[] {
 }
 
 describe("factory-signature diagnostic (§4.5)", () => {
-  test("fires when the factory takes the wrong number of args", () => {
-    // Foo ctor: (a: IA, b: string) — IA is a resolvable token, b is a hole. The
-    // factory must supply exactly the 1 hole; declaring 2 params is a mismatch.
+  test("fires when the factory declares fewer params than the produced ctor has holes", () => {
+    // Foo ctor: (a: string, b: number) — both holes (primitives). The factory
+    // declares only 1 param but there are 2 holes that must be covered → mismatch.
+    const src = `
+      interface IFoo {}
+      class Foo implements IFoo {
+        constructor(a: string, b: number) {}
+      }
+      interface ISvc {}
+      class Svc implements ISvc {
+        constructor(makeFoo: (x: string) => Foo) {}
+      }
+      declare const services: any;
+      services.add<ISvc>(Svc).as<"singleton">();
+    `;
+    const { diagnostics } = transform(fixture(src));
+    const diag = diagnostics.find(
+      (d) => d.code === DiagnosticCode.FactorySignatureMismatch,
+    );
+    expect(diag).toBeDefined();
+    expect(diag!.category).toBe(0 /* ts.DiagnosticCategory.Warning */);
+    expect(String(diag!.messageText)).toContain("makeFoo");
+    expect(String(diag!.messageText)).not.toContain("lower");
+  });
+
+  test("fires when the factory declares more params than the produced ctor has total slots", () => {
+    // Foo ctor: (a: IA, b: string) — 2 total slots. Declaring 3 factory params
+    // exceeds the ctor's slot count → mismatch.
     const src = `
       interface IA {}
-      class B2 {}
       interface IFoo {}
       class Foo implements IFoo {
         constructor(a: IA, b: string) {}
       }
       interface ISvc {}
       class Svc implements ISvc {
-        constructor(makeFoo: (x: B2, y: number) => Foo) {}
+        constructor(makeFoo: (x: IA, y: string, z: number) => Foo) {}
       }
       declare const services: any;
       services.add<ISvc>(Svc).as<"singleton">();
@@ -60,25 +84,42 @@ describe("factory-signature diagnostic (§4.5)", () => {
     );
   });
 
-  test("fires for a hand-declared @signature factory slot with a bad arity", () => {
-    // SqlUserRepo is hand-annotated via @signature (authoritative — no
-    // transformer-synthesized defineDeps). Its ctor still carries an inline
-    // factory param `makeFoo: (...) => Foo`. Foo's ctor has exactly one hole
-    // (b: string; a: IA is resolvable), so the factory must take 1 arg; it
-    // declares 2 → mismatch. The §8 factory-signature diagnostic must still
-    // fire for the hand-declared slot, not be skipped by the annotated path.
+  test("no diagnostic when factory additionally declares a registered-service override", () => {
+    // Foo ctor: (a: IA registered, b: string hole) — 1 hole, 2 total slots. The
+    // factory declares both (override IA + cover the string hole) → valid.
     const src = `
-      import { signature } from "@fnioc/core";
       interface IA {}
-      class B2 {}
       interface IFoo {}
       class Foo implements IFoo {
         constructor(a: IA, b: string) {}
       }
       interface ISvc {}
+      class Svc implements ISvc {
+        constructor(makeFoo: (a: IA, b: string) => Foo) {}
+      }
+      declare const services: any;
+      services.add<ISvc>(Svc).as<"singleton">();
+    `;
+    const { diagnostics } = transform(fixture(src));
+    expect(codes(diagnostics)).not.toContain(
+      DiagnosticCode.FactorySignatureMismatch,
+    );
+  });
+
+  test("fires for a hand-declared @signature factory slot with too few params", () => {
+    // Foo ctor: (a: string, b: number) — both holes. The factory declares only 1
+    // param but there are 2 holes that must be covered → mismatch. The §8 diagnostic
+    // must still fire for the hand-declared slot, not be skipped by the annotated path.
+    const src = `
+      import { signature } from "@fnioc/core";
+      interface IFoo {}
+      class Foo implements IFoo {
+        constructor(a: string, b: number) {}
+      }
+      interface ISvc {}
       @signature("manual:IA")
       class Svc implements ISvc {
-        constructor(makeFoo: (x: B2, y: number) => Foo) {}
+        constructor(makeFoo: (x: string) => Foo) {}
       }
       declare const services: any;
       services.add<ISvc>(Svc).as<"singleton">();
@@ -95,18 +136,17 @@ describe("factory-signature diagnostic (§4.5)", () => {
     expect(String(diag!.messageText)).not.toContain("lower");
   });
 
-  test("fires for a forCtor-annotated class factory slot with a bad arity", () => {
+  test("fires for a forCtor-annotated class factory slot with too few params", () => {
+    // Foo ctor: (a: string, b: number) — both holes. Factory declares only 1 → mismatch.
     const src = `
       import { forCtor } from "@fnioc/core";
-      interface IA {}
-      class B2 {}
       interface IFoo {}
       class Foo implements IFoo {
-        constructor(a: IA, b: string) {}
+        constructor(a: string, b: number) {}
       }
       interface ISvc {}
       class Svc implements ISvc {
-        constructor(makeFoo: (x: B2, y: number) => Foo) {}
+        constructor(makeFoo: (x: string) => Foo) {}
       }
       forCtor(Svc).signature({ factory: "manual:IFoo" });
       declare const services: any;

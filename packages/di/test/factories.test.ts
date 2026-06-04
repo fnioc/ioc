@@ -196,6 +196,65 @@ describe("parameterized factory", () => {
   });
 });
 
+describe("transformer-emitted params: declared named-service param → caller wins", () => {
+  // ILogger IS registered in the container. The ctor takes (log: ILogger, table: string).
+  // The factory is declared (log: ILogger) => IRepo, so the transformer emits
+  // params: [T_LOGGER] meaning the caller supplies the logger even though it is registered.
+  // table is an unregistered primitive hole — it is NOT covered by the declared factory params,
+  // so the runtime resolves it... which fails unless it is registered. To keep the test
+  // self-contained, we use a ctor where the covered+registered slot is the only slot.
+
+  const T_LOGGER = "test:tf:ILogger" as const;
+  const T_REPO = "test:tf:IRepo" as const;
+  const T_HOLDER = "test:tf:IHolder" as const;
+
+  class Logger {
+    public readonly id: string;
+    public constructor(id: string) {
+      this.id = id;
+    }
+  }
+
+  class Repo {
+    public static built = 0;
+    public constructor(public readonly log: Logger) {
+      Repo.built += 1;
+    }
+  }
+
+  test("declared (log: ILogger) => IRepo uses caller logger over registered one", () => {
+    Repo.built = 0;
+    defineDeps(Repo, [[T_LOGGER]]);
+
+    class Holder {
+      public constructor(
+        public readonly make: (log: Logger) => Repo,
+      ) {}
+    }
+    // Transformer would emit: { type: T_REPO, params: [T_LOGGER] }
+    defineDeps(Holder, [[factoryOf(T_REPO, [T_LOGGER])]]);
+
+    const registeredLogger = new Logger("registered");
+    const services = new DiBuilder<"singleton">();
+    services.addValue(T_LOGGER, registeredLogger); // registered, but params claim it
+    services.add(T_REPO, Repo).as("singleton");
+    services.add(T_HOLDER, Holder).as("singleton");
+
+    const holder = services.build().resolve<Holder>(T_HOLDER);
+
+    const callerLogger = new Logger("caller");
+    const r1 = holder.make(callerLogger);
+    const r2 = holder.make(callerLogger);
+
+    // Caller-supplied logger used, NOT the registered one.
+    expect(r1.log).toBe(callerLogger);
+    expect(r1.log.id).toBe("caller");
+    // Parameterized factory builds a fresh instance every call (bypasses cache).
+    expect(r1).not.toBe(r2);
+    expect(Repo.built).toBe(2);
+  });
+});
+
 describe("§5.4 — owning-scope rule holds for factory targets", () => {
   test("a singleton-held factory of a request-scoped target throws at call time", () => {
     // Foo is request-scoped. Holder is a singleton, so it OWNS its factory; the
