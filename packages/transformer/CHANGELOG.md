@@ -1,5 +1,17 @@
 # Changelog
 
+## [5.0.0](https://github.com/fnioc/ioc/compare/transformer-v4.0.0...transformer-v5.0.0) (2026-06-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* **di:** DiBuilder, DiBuilderClass, and DiBuilderCtor are removed from @fnioc/di. Callers must replace all three with their ServiceManifest-prefixed counterparts.
+
+### Features
+
+* **di:** per-scope add-methods minted from scope tags ([#68](https://github.com/fnioc/ioc/issues/68)) ([aacb897](https://github.com/fnioc/ioc/commit/aacb897e748464754042441e45a87564f0d20246))
+* **di:** rename DiBuilder to ServiceManifest ([#72](https://github.com/fnioc/ioc/issues/72)) ([c6b5862](https://github.com/fnioc/ioc/commit/c6b58628d77732f340b9384cee2aeaa1f29329d2))
+
 ## [4.0.0](https://github.com/fnioc/ioc/compare/transformer-v3.1.0...transformer-v4.0.0) (2026-06-04)
 
 
