@@ -32,6 +32,19 @@ The transformer is the hard 80%. The engine is small because it never sees types
 
 ---
 
+## Design philosophy — scopes are uniform tags
+
+**Scopes are uniform tags — there is no root.** `"singleton"` is literally just a tag you happen to open once at the top. You can run the container without ever opening a scope at all; with no matching frame open, resolution is transient.
+
+This is the central organizing principle of the runtime, not a footnote. A registration's lifetime tag (`.as("singleton")`, `.as("request")`, …) names a scope *frame*; the engine caches the instance in the nearest enclosing **open** frame that carries that tag. Nothing is special about any one tag:
+
+- **`build()` returns a frameless provider.** No root scope is pre-opened, and there is no instance cache at the provider level. Open a scope explicitly with `createScope(name)` when you want a tagged registration to cache — `"singleton"` included.
+- **No matching frame open ⇒ transient.** Resolving a tagged registration when no enclosing frame carries that tag yields a fresh instance, no cache, no error — exactly like an untagged registration. This holds at the provider level (no frames at all ⇒ everything transient) and inside scopes (a `"singleton"`-tagged dep resolved inside only a `"request"` frame is transient).
+- **Caching still works when the right frame is open.** Open a `"singleton"` frame and singleton-tagged registrations cache there for its lifetime; nest a `"request"` frame and request-tagged registrations cache per request. The mechanism is uniform — find the nearest enclosing frame with the matching tag.
+- **The captive-dependency safety is preserved structurally.** A longer-lived service still resolves its dependencies relative to the frame that *owns* it (the construct-relative-to-owner rule, §5.4). So a singleton never cache-captures a shorter-lived instance: when no enclosing frame carries the dependency's tag, it gets a fresh transient — never a stale cached one held forever.
+
+---
+
 ## 2. Goals & Non-Goals
 
 ### Goals
@@ -49,7 +62,7 @@ The transformer is the hard 80%. The engine is small because it never sees types
 
 - Runtime decorator scanning (`emitDecoratorMetadata`, `reflect-metadata`) — explicitly rejected.
 - A separate async resolution channel or `resolveAsync()` API — async is values; one channel.
-- Auto-creating missing ancestor scopes — missing tag ancestor always throws.
+- Auto-creating missing scope frames — a tag whose frame is not open resolves transiently; a frame is opened only by an explicit `createScope(name)`.
 - `static $inject` as a v1 authoring surface — deferred; reintroduces prototype-bleed the WeakMap design prevents.
 - Wessberg-style two-type-param `add<IFoo, Foo>()` with ctor inferred from generic — deferred (TS partial type-argument inference blocker).
 - By-name dep matching — deferred.
@@ -63,7 +76,7 @@ The transformer is the hard 80%. The engine is small because it never sees types
 |---|---|
 | **Token** | A stable `string` identifying a type. The DI key. Derived by the transformer from a TypeScript type name. Every named type tokenizes: `string` → `"string"`, `IFoo` → `"pkg:IFoo"`, `boolean` → `"boolean"`, etc. Only anonymous inline structures (object literal types, nameless non-intrinsics) are non-tokenizable and produce a compile error. |
 | **LiteralRef** | A `{ value }` slot, emitted when a constructor/factory parameter (or `resolve<T>()` type argument) is a **singular** (non-union) literal type (`"dev"`, `42`, `true`, `1n`) or a nullish singleton (`void`/`undefined` → `undefined`, `null` → `null`). At resolve time the value is injected directly — no container lookup; always satisfiable. `value` may be `undefined`, so the slot is identified by the *presence* of the `value` key. Literal unions (`"a"\|"b"`) are NOT `LiteralRef`; they derive a single sorted token and resolve through the container. |
-| **Union slot** | A `{ union: [...] }` slot — member-level alternatives tried in declaration order; the first resolvable member wins, and a member that resolves but throws (e.g. a captive `MissingScopeError`) falls through to the next. Satisfiable iff at least one member is. Used for inline union parameter types (`A \| B`) and as the lowering of an **optional** parameter: `x?: X` → `union(X, { value: undefined })` with the always-satisfiable `LiteralRef` fallback last. |
+| **Union slot** | A `{ union: [...] }` slot — member-level alternatives tried in declaration order; the first resolvable member wins, and a member that resolves but throws at build time (a cycle, an unresolvable nested dep) falls through to the next. Satisfiable iff at least one member is. Used for inline union parameter types (`A \| B`) and as the lowering of an **optional** parameter: `x?: X` → `union(X, { value: undefined })` with the always-satisfiable `LiteralRef` fallback last. |
 | **Signature** | A positional array of `DepSlot` values parallel to a constructor's parameter list. `signature[i]` describes how to satisfy constructor parameter `i`: a `string` token resolved from the container, a `LiteralRef` injected directly, a `FactoryRef`, a `ScopeRef`, or a `Union` of alternatives. The word "signature" is used consistently in the ABI field name, the `@signature` decorator, and the `forCtor(...).signature(...)` fluent API. |
 | **DepRecord** | `{ abi: number, signatures: ReadonlyArray<ReadonlyArray<DepSlot>> }` — the per-constructor metadata stored in the global WeakMap. Multi-signature from v1 to support constructor overloads without an ABI break. |
 | **Scope** | A node in a parent-linked chain that owns and caches instances. Scope names are a user-defined string union passed to `DiBuilder<Scopes>`. |
@@ -361,7 +374,7 @@ The lowered form is the ABI contract. Libraries publish this form. Consumers wit
 Three registration methods on `DiBuilder`, each with a transformer-authored form and an explicit-token form:
 
 ```typescript
-const services = new DiBuilder<"singleton", "request">();
+const services = new DiBuilder<"singleton" | "request">();
 
 // Transformer-authored (type-driven):
 services.add<ILogger>(ConsoleLogger).as<"singleton">();   // class: token from ILogger
@@ -393,31 +406,29 @@ const services = new DiBuilder<"singleton" | "request">();
 
 ### Scope model
 
-Scopes form a parent chain. The root scope must be a real, app-lifetime object.
+Scopes are uniform tags forming a parent chain. There is no root: `build()` returns a frameless provider, and `"singleton"` is just a tag you open once at the top.
 
 ```typescript
-const root = services.build();                   // mints the root scope (app lifetime)
-const req  = root.createScope("request");        // created per HTTP request (for example)
+const provider = services.build();               // frameless — no scope pre-opened
+const app  = provider.createScope("singleton");  // open the app-lifetime frame
+const req  = app.createScope("request");         // created per HTTP request (for example)
 const reqChild = req.createScope("request");     // nested if needed
 ```
 
-**Resolution walks UP the parent chain for two purposes:**
-
-1. **Registration lookup** — a child scope can shadow/override a parent registration (Angular-style hierarchical DI). Walk up until the token is found.
-2. **Instance ownership** — the lifetime tag names which ancestor scope owns and caches the instance. Walk up to the nearest ancestor whose tag matches the registration's tag.
+**Resolution walks UP the parent chain for instance ownership:** the lifetime tag names which enclosing open frame owns and caches the instance. Walk up to the nearest enclosing frame whose name matches the registration's tag. (Registration lookup is flat — the sealed map is shared across the whole tree; scope-local registration was removed in the container redesign.)
 
 **Rules:**
 - Untagged (transient) → fresh instance every resolve, never cached.
-- Tagged → walk ancestry for a matching scope. If found: return the cached instance or construct-and-cache there. **If no ancestor matches the tag: throw.** This is not an error to swallow — it is the captive-dependency / misconfiguration detector.
-- Never auto-create a scope to satisfy a missing tag. The root/singleton scope is a real object; lazily minting a "singleton" scope per resolve would mean singletons aren't singletons.
+- Tagged → walk the enclosing chain for a frame with a matching name. If found: return the cached instance or construct-and-cache there. **If no enclosing frame matches the tag: resolve transiently** — a fresh instance, no cache, no error. An absent frame is just transient; that is the whole point of uniform tags.
+- Never auto-create a scope to satisfy a missing tag. A frame is opened only by an explicit `createScope(name)`; until then (and outside it) the tag's registrations are transient.
 
 ### The critical correctness rule (originally §5.4)
 
-**Resolve a service's constructor dependencies relative to the scope that will OWN that service's instance — not the scope that triggered the resolve.**
+**Resolve a service's constructor dependencies relative to the frame that will OWN that service's instance — not the frame that triggered the resolve.**
 
-Example: a `"singleton"` service depends on a `"request"` service. Resolution triggered from a `request` scope walks up and finds the `singleton` ancestor. That `singleton` scope owns the instance, so its deps are resolved relative to the `singleton` scope's chain. The singleton scope's chain has no `"request"` ancestor — it throws. The singleton never silently captures a single request's `IDb` and holds it forever across all requests.
+Example: a `"singleton"` service depends on a `"request"` service, with a `"singleton"` frame open and a `"request"` frame nested under it. Resolution triggered from the `request` scope finds the singleton frame as the owner of the singleton service. That singleton frame owns the instance, so its deps are resolved relative to the singleton frame's chain. The singleton frame's chain has no enclosing `"request"` frame (request is a *descendant*, not an ancestor) — so the request dep resolves to a **fresh transient**, never the request's cached instance. The singleton never silently captures one request's `IDb` and holds it across all requests.
 
-This mirrors `Microsoft.Extensions.DependencyInjection`'s scope-validation discipline. The throw is the feature, not an edge case.
+This preserves `Microsoft.Extensions.DependencyInjection`'s captive-dependency safety, but via the uniform-tag transient fallback rather than a throw: the construct-relative-to-owner rule is what guarantees a longer-lived service can't cache-capture a shorter-lived one. The fresh transient is the safe outcome, not an edge case.
 
 ### Greedy overload selection
 
