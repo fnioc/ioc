@@ -45,7 +45,7 @@
     },
     "packages/di": {
       "name": "@fnioc/di",
-      "version": "4.0.1",
+      "version": "4.1.0",
       "devDependencies": {
         "@fnioc/core": "workspace:*",
         "@rhombus-toolkit/func": "3.5.3",

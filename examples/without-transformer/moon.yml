@@ -35,8 +35,6 @@ tasks:
       - 'package.json'
   lint:
     command: 'bun x tsc --noEmit -p tsconfig.json'
-    deps:
-      - 'di:build'
     inputs:
       - 'src/**/*'
       - 'tsconfig.json'

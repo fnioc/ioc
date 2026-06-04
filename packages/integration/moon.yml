@@ -5,20 +5,16 @@ layer: 'application'
 language: 'typescript'
 
 # Integration verification — runs the transformer-compiled sample against the di
-# engine. The test gate needs all three packages' dist present: the tspc step
-# loads core + transformer from dist, and the lowered output is executed against
-# di's dist. `dependsOn` + per-task `deps` serialize those builds first.
+# engine. tspc (ts-patch) loads the transformer dist; di and core now resolve
+# from source in the workspace (bun condition / source condition), so their dists
+# are not required. Only transformer:build is needed as a task dep.
 dependsOn:
-  - 'core'
-  - 'di'
   - 'transformer'
 
 tasks:
   test:
     command: 'bun test'
     deps:
-      - 'core:build'
-      - 'di:build'
       - 'transformer:build'
     inputs:
       - 'test/**/*'
@@ -27,8 +23,6 @@ tasks:
   lint:
     command: 'bun x tsc -p tsconfig.json --noEmit'
     deps:
-      - 'core:build'
-      - 'di:build'
       - 'transformer:build'
     inputs:
       - 'test/**/*'

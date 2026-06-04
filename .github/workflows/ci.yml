@@ -146,31 +146,6 @@ jobs:
         if: ${{ steps.release.outputs.releases_created == 'true' }}
         run: moon run :build
 
-      # Resolve Bun's `workspace:*` protocol to concrete sibling versions before
-      # publishing. npm publish does NOT rewrite `workspace:` — the literal
-      # string would ship in the tarball and break consumers. bun publish would
-      # rewrite it but lacks --provenance / OIDC trusted-publisher support
-      # (oven-sh/bun#15601). So we rewrite ourselves before `npm publish`.
-      # First, build a { name → version } map from every workspace package.json
-      # (release-please has bumped them — the release PR's merge commit IS the
-      # bump).
-      - name: Build sibling version map
-        id: siblings
-        if: ${{ steps.release.outputs.releases_created == 'true' }}
-        run: |
-          set -euo pipefail
-          map=$(jq -s 'map({(.name): .version}) | add' \
-            packages/core/package.json \
-            packages/di/package.json \
-            packages/transformer/package.json)
-          echo "Resolved siblings:"
-          echo "$map" | jq .
-          {
-            echo "map<<EOF"
-            echo "$map"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
       # Topo-sort `paths_released` so dependencies publish before dependents.
       # @fnioc/core is PRIVATE and inlined at build time — it is never released
       # or published, so it never appears in `paths_released`. di and transformer
@@ -189,55 +164,13 @@ jobs:
           echo "Sorted order:   $sorted"
           echo "sorted=${sorted}" >> "$GITHUB_OUTPUT"
 
-      # Translation follows Bun's documented rules:
-      #   workspace:*       → ^<version>
-      #   workspace:^       → ^<version>
-      #   workspace:~       → ~<version>
-      #   workspace:<x.y.z> → <x.y.z>
-      - name: Resolve workspace:* deps to concrete versions
-        if: ${{ steps.release.outputs.releases_created == 'true' }}
-        env:
-          SORTED: ${{ steps.sorted.outputs.sorted }}
-          SIBLINGS: ${{ steps.siblings.outputs.map }}
-        run: |
-          set -euo pipefail
-          echo "$SORTED" | jq -r '.[]' | while read -r pkg_path; do
-            pkg_json="$pkg_path/package.json"
-            echo "::group::Rewriting workspace:* deps in $pkg_json"
-            tmp=$(mktemp)
-            jq --argjson siblings "$SIBLINGS" '
-              def rewrite_deps:
-                with_entries(
-                  if (.value | type == "string" and startswith("workspace:")) then
-                    .value as $spec
-                    | .key as $dep
-                    | ($siblings[$dep]
-                        // error("no sibling version for workspace dep " + $dep)) as $sv
-                    | if   $spec == "workspace:*" then .value = "^" + $sv
-                      elif $spec == "workspace:^" then .value = "^" + $sv
-                      elif $spec == "workspace:~" then .value = "~" + $sv
-                      else .value = ($spec | sub("^workspace:"; ""))
-                      end
-                  else . end
-                );
-              (if has("dependencies")         then .dependencies         |= rewrite_deps else . end)
-              | (if has("devDependencies")      then .devDependencies      |= rewrite_deps else . end)
-              | (if has("peerDependencies")     then .peerDependencies     |= rewrite_deps else . end)
-              | (if has("optionalDependencies") then .optionalDependencies |= rewrite_deps else . end)
-            ' "$pkg_json" > "$tmp"
-            mv "$tmp" "$pkg_json"
-            jq '{name, version, dependencies, devDependencies, peerDependencies, optionalDependencies} | with_entries(select(.value != null))' "$pkg_json"
-            echo "::endgroup::"
-          done
-
-      # Strip the private @fnioc/core devDependency before publishing. core is
+      # Strip the private @fnioc/core devDependency before packing. core is
       # inlined into di's and transformer's dist at build time (its source is
       # bundled into the JS and its types rolled into the .d.ts), so the published
-      # packages never reference it. It is a workspace devDependency for the dev
-      # loop only; left in the published manifest it would carry an unresolvable
-      # `workspace:*` (or, post-rewrite, a `^1.0.0` that is never on npm since
-      # core is private). Delete it in the runner tree right before publish; the
-      # committed package.json keeps it for local builds.
+      # packages never reference it. Committed package.json keeps it for local
+      # builds; pnpm pack would rewrite the workspace:* protocol to a real version
+      # but that version is never on npm. Strip it before pack so it never appears
+      # in the tarball manifest.
       - name: Strip private @fnioc/core dep before publish
         if: ${{ steps.release.outputs.releases_created == 'true' }}
         env:
@@ -255,76 +188,34 @@ jobs:
             echo "::endgroup::"
           done
 
-      # Refresh bun.lock against the freshly-bumped package.jsons. release-please
-      # bumps package.json but not bun.lock; re-syncing keeps the runner tree
-      # consistent. Not committed back (would re-trigger this job).
-      - name: Refresh bun.lock workspace versions
-        if: ${{ steps.release.outputs.releases_created == 'true' }}
-        run: bun install
-
-      # Invariant: after the rewrite, every sibling dep in every to-be-published
-      # package.json must resolve to a version that is either (a) about to be
-      # published earlier in this topo-sorted run, or (b) already on npm. Refuses
-      # to publish a broken chain rather than shipping it and needing a republish.
-      - name: Verify rewritten workspace deps resolve
-        if: ${{ steps.release.outputs.releases_created == 'true' }}
-        env:
-          SORTED: ${{ steps.sorted.outputs.sorted }}
-        run: |
-          set -euo pipefail
-          about_to_publish=$(echo "$SORTED" | jq -r '.[]' \
-            | while read -r p; do jq -r '.name' "$p/package.json"; done \
-            | sort -u)
-          echo "About to publish: $(echo $about_to_publish | tr '\n' ' ')"
-
-          fail=0
-          for pkg_path in $(echo "$SORTED" | jq -r '.[]'); do
-            pkg_json="$pkg_path/package.json"
-            pkg_name=$(jq -r '.name' "$pkg_json")
-            echo "::group::Verifying deps for $pkg_name ($pkg_path)"
-            while read -r dep_name dep_range; do
-              if [[ "$dep_range" == workspace:* ]]; then
-                echo "::error::$pkg_name still has unrewritten $dep_name=$dep_range after rewrite step"
-                fail=1
-                continue
-              fi
-              version=$(echo "$dep_range" | sed -E 's/^[\^~]?([0-9]+\.[0-9]+\.[0-9]+).*/\1/')
-              if echo "$about_to_publish" | grep -qx "$dep_name"; then
-                echo "  ok: $pkg_name -> $dep_name@$version (publishing earlier this run)"
-                continue
-              fi
-              if npm view "$dep_name@$version" version >/dev/null 2>&1; then
-                echo "  ok: $pkg_name -> $dep_name@$version (already on npm)"
-              else
-                echo "::error::$pkg_name depends on $dep_name@$version, which is neither in this release nor on npm. Refusing to publish."
-                fail=1
-              fi
-            done < <(jq -r '
-              [.dependencies // {}, .devDependencies // {}, .peerDependencies // {}, .optionalDependencies // {}]
-              | map(to_entries) | add
-              | .[]
-              | select(.key | IN("@fnioc/core","@fnioc/di","@fnioc/transformer"))
-              | "\(.key) \(.value)"
-            ' "$pkg_json")
-            echo "::endgroup::"
-          done
-          if [ "$fail" -ne 0 ]; then
-            echo "::error::One or more workspace deps would not resolve. Refusing to publish."
-            exit 1
-          fi
-
-      # Publish each package to the `@next` dist-tag, in topo order. `@latest` is
-      # promoted separately by promote.yml (manual). --provenance attaches an
-      # OIDC-signed provenance attestation; the same OIDC token authenticates the
-      # publish via the trusted-publisher config (no token needed).
-      - name: Publish released packages
+      # Pack and publish each released package via pnpm + npm.
+      #
+      # Why pnpm pack:
+      #   @fnioc/di's workspace package.json carries dev-time source exports
+      #   (main/types/exports point at ./src/index.ts so edits are immediately
+      #   visible in the workspace without a build step). pnpm pack applies
+      #   `publishConfig` overrides — rewriting those fields to the dist-pointing
+      #   values in the tarball — and rewrites workspace:* protocol deps to concrete
+      #   semver ranges. bun pm pack (verified locally) does not apply publishConfig
+      #   field overrides (oven-sh/bun#15601 still open as of 2026-06-04), so pnpm
+      #   is used for packing. pnpm is pinned via mise.toml (pnpm = "10").
+      #
+      # Why npm publish <tarball>:
+      #   npm trusted-publisher OIDC authenticates the publish. pnpm publish's OIDC
+      #   path had a regression in pnpm 11 (pnpm/pnpm#11513, fixed, but v10 avoids
+      #   the risk). Using npm for the actual publish keeps OIDC on the proven path
+      #   and lets --provenance attach an attestation via the same OIDC token.
+      #
+      # @latest is promoted separately by promote.yml (manual).
+      - name: Pack and publish released packages
         if: ${{ steps.release.outputs.releases_created == 'true' }}
         env:
           SORTED: ${{ steps.sorted.outputs.sorted }}
         run: |
           set -euo pipefail
           echo "$SORTED" | jq -r '.[]' | while read -r pkg_path; do
-            echo "::group::Publishing $pkg_path"
-            (cd "$pkg_path" && npm publish --provenance --tag next)
+            echo "::group::Packing and publishing $pkg_path"
+            tarball=$(cd "$pkg_path" && pnpm pack --pack-destination /tmp 2>&1 | grep '\.tgz$' | tail -1)
+            npm publish "$tarball" --provenance --tag next
             echo "::endgroup::"
           done
