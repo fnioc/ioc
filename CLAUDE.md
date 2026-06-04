@@ -1,5 +1,17 @@
 # ioc — project policy
 
+## Core design principle — scopes are uniform tags
+
+There is **no root scope** and nothing is pre-opened. `"singleton"` is literally
+just a tag you happen to open once at the top. The container runs without ever
+opening a scope at all: a registration tagged scope S caches in the nearest
+enclosing **open** frame tagged S; **if no matching frame is open, resolution is
+transient** — fresh instance, no cache, no error.
+
+Never re-introduce a distinguished root/app scope in API, docs, examples, or
+tests. Any design that treats `"singleton"` as more than a conventional default
+tag violates this principle.
+
 ## Two-stage publish
 
 Releases ship in two stages. The first is automatic; the second is never.
