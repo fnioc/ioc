@@ -396,6 +396,13 @@ export function literalUnionTokenForOptional(type: ts.Type): string | undefined 
         (ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void)),
   );
   if (nonNullishMembers.length < 2) {return undefined;}
+  // Wide `boolean` is `false | true` internally. After stripping `| undefined`
+  // from `boolean | undefined`, the survivors are both BooleanLiterals — which
+  // together form the wide boolean scalar. Fall through so `intrinsicToken`
+  // yields `"boolean"` instead of the misleading token `"false | true"`.
+  if (nonNullishMembers.every((t) => !!(t.flags & ts.TypeFlags.BooleanLiteral))) {
+    return undefined;
+  }
   const parts: string[] = [];
   for (const member of nonNullishMembers) {
     const text = literalText(member);

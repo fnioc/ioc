@@ -404,6 +404,8 @@ function nonNullishMemberSlots(
   // pure-literal union (step 4). Render it from just the non-nullish members
   // (`nonNullish` keeps `| undefined` in place when >1 member survives, and
   // `literalToken` rejects the union outright once a nullish member is present).
+  // Wide `boolean | undefined` is explicitly excluded by `literalUnionTokenForOptional`
+  // and falls through here so the annotation-based path below yields `"boolean"`.
   const literalUnion = literalUnionTokenForOptional(rawType);
   if (literalUnion !== undefined) {return [literalUnion];}
 
@@ -416,6 +418,18 @@ function nonNullishMemberSlots(
         t.kind !== ts.SyntaxKind.VoidKeyword,
     );
     if (kept.length) {
+      // When every surviving member resolves to a BooleanLiteral, the pair
+      // `true | false` is the wide boolean — collapse to the scalar `"boolean"`
+      // token rather than two separate LiteralRef slots.
+      if (
+        kept.every(
+          (t) =>
+            !!(ctx.checker.getTypeFromTypeNode(t).flags &
+              ts.TypeFlags.BooleanLiteral),
+        )
+      ) {
+        return ["boolean"];
+      }
       return kept.map((t) => extractParamSlotFromTypeNode(t, param, ctx));
     }
   }
@@ -428,6 +442,18 @@ function nonNullishMemberSlots(
   if (brandedCore !== undefined) {return [brandedCore];}
   const singleton = singletonValue(core);
   if (singleton) {return [{ value: singleton.value }];}
+  // `nonNullish` can only collapse a union when a SINGLE non-nullish member
+  // survives. When two non-nullish members survive (e.g. `false | true` from
+  // `boolean | undefined`), `core` is still the original union, and
+  // `tokenForType(core)` would fail because the outer union has no intrinsic
+  // name. Derive from the type annotation node instead when available — the node
+  // carries the *unannotated* type (e.g. the `boolean` keyword) without the
+  // synthesised `| undefined` that the checker appends for `?` params.
+  if (core === rawType && typeNode && !ts.isUnionTypeNode(typeNode)) {
+    const nodeType = ctx.checker.getTypeFromTypeNode(typeNode);
+    const nodeResult = tokenForType(nodeType, ctx);
+    if (nodeResult !== undefined) {return [nodeResult.token];}
+  }
   const result = tokenForType(core, ctx);
   return result !== undefined ? [result.token] : [];
 }
@@ -564,7 +590,16 @@ export function extractFactoryReferenceSignature(
   if (type.getConstructSignatures().length) {return undefined;}
   const callSignatures = type.getCallSignatures();
   if (!callSignatures.length) {return undefined;}
-  return signatureToSlots(callSignatures[0]!, ctx);
+  // Map ALL call signatures (declared overloads), not just the first one.
+  // The static class-declaration path (`extractSignatureFromClass`) emits one
+  // signature per declared overload; this path must match that behaviour.
+  const results: Signature[] = [];
+  for (const sig of callSignatures) {
+    const slots = signatureToSlots(sig, ctx);
+    if (slots === undefined) {return undefined;}
+    results.push(...slots);
+  }
+  return results.length ? results : undefined;
 }
 
 /**
@@ -583,7 +618,16 @@ export function extractCtorReferenceSignature(
     .getTypeAtLocation(expr)
     .getConstructSignatures();
   if (!constructSignatures.length) {return undefined;}
-  return signatureToSlots(constructSignatures[0]!, ctx);
+  // Map ALL construct signatures (declared overloads), not just the first one.
+  // The static class-declaration path (`extractSignatureFromClass`) emits one
+  // signature per declared overload; this path must match that behaviour.
+  const results: Signature[] = [];
+  for (const sig of constructSignatures) {
+    const slots = signatureToSlots(sig, ctx);
+    if (slots === undefined) {return undefined;}
+    results.push(...slots);
+  }
+  return results.length ? results : undefined;
 }
 
 /**

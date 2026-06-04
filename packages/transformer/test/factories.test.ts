@@ -126,6 +126,48 @@ describe("factory detection", () => {
     expect(depsArrayFor(output, "Svc")).toBe('[[{ type: "string" }]]');
   });
 
+  test("class expression with two construct overloads emits both signatures (Fix 2)", () => {
+    // `extractCtorReferenceSignature` must iterate ALL construct signatures, not
+    // just the first. A const-bound class expression with declared overloads is
+    // the representative shape.
+    const src = `
+      interface IFoo {}
+      interface IBar {}
+      interface IMarker {}
+      const Impl = class implements IMarker {
+        constructor(a: IFoo);
+        constructor(a: IFoo, b: IBar);
+        constructor(a: IFoo, b?: IBar) {}
+      };
+      declare const services: any;
+      services.add<IMarker>(Impl).as<"singleton">();
+    `;
+    const { output } = transform(fixture(src));
+    // Both declared overloads must appear — the impl is ignored.
+    expect(depsArrayFor(output, "Impl")).toBe(
+      '[["./app/IFoo"], ["./app/IFoo", "./app/IBar"]]',
+    );
+  });
+
+  test("factory reference with two call overloads emits both signatures (Fix 2)", () => {
+    // `extractFactoryReferenceSignature` must iterate ALL call signatures. A
+    // named factory function with declared overloads is the representative shape.
+    const src = `
+      interface IFoo {}
+      interface IBar {}
+      interface IMarker {}
+      declare function makeMarker(a: IFoo): IMarker;
+      declare function makeMarker(a: IFoo, b: IBar): IMarker;
+      declare const services: any;
+      services.add<IMarker>(makeMarker).as<"singleton">();
+    `;
+    const { output } = transform(fixture(src));
+    // Both call overloads must appear.
+    expect(depsArrayFor(output, "makeMarker")).toBe(
+      '[["./app/IFoo"], ["./app/IFoo", "./app/IBar"]]',
+    );
+  });
+
   test("package-public factory return type keys on the package token", () => {
     const files: VirtualFiles = {
       "/proj/node_modules/your-lib/package.json": JSON.stringify({
