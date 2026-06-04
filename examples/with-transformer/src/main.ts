@@ -44,7 +44,7 @@ services.add<IMetricsBackend>(InMemoryMetrics).as<"singleton">();
 
 // Inline-union demo: UnionConsumer takes `ILogger | IMetricsBackend`. The
 // transformer emits a union slot; ILogger is declared first so it wins.
-services.add<UnionConsumer>(UnionConsumer).as<"singleton">();
+services.add(UnionConsumer).as<"singleton">();
 
 // Inject brand demo: DiagnosticsService's `clock` param is branded
 // `Inject<IClock, "app:primary-clock">`. The transformer uses `"app:primary-clock"`
