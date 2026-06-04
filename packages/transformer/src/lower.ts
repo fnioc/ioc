@@ -81,10 +81,30 @@ export interface LowerContext extends CheckContext, DepContext {
 /** A method that the transformer lowers, keyed by its callee name. */
 type RegMethod = "add" | "addValue";
 
+/**
+ * What `registrationMethod` matched: the canonical lowered method (`add` /
+ * `addValue`) plus, for a per-scope authoring form (`addRequest(C)`), the scope
+ * tag baked into the method name. A plain `add<I>(...)` carries no scope.
+ */
+interface MatchedMethod {
+  readonly method: RegMethod;
+  /**
+   * The scope tag recovered from a per-scope `add${ProperCase<K>}` method name
+   * (`addRequest` → `"request"`), or `undefined` for a plain `add`/`addValue`.
+   * When set, the lowered call gains a trailing `.as(scope)`.
+   */
+  readonly scope?: string;
+}
+
 /** A registration call found on the original (pre-rewrite) expression. */
 interface FoundReg {
   readonly call: ts.CallExpression;
   readonly method: RegMethod;
+  /**
+   * The scope tag from a per-scope authoring method (`addRequest`), appended as
+   * `.as(scope)` on the lowered call. `undefined` for a plain `add`/`addValue`.
+   */
+  readonly scope?: string;
   /**
    * The explicit `<I>` type argument, or `undefined` for a no-type-arg call
    * (`add(Something)`) where the token is derived from the value arg's own type.
@@ -110,6 +130,12 @@ interface RegPlan {
    * identifier instead of the original expression.
    */
   readonly hoistName?: string;
+  /**
+   * A per-scope authoring tag (`addRequest` → `"request"`). When set, the lowered
+   * call is wrapped in `.as(scope)` — the scope was baked into the source method
+   * name rather than written as a fluent `.as<"request">()` continuation.
+   */
+  readonly scope?: string;
 }
 
 /**
@@ -137,10 +163,16 @@ export function lowerStatement(
       plans.set(reg.call, { token, calleeMethod: "addValue" });
       continue;
     }
-    plans.set(
-      reg.call,
-      planAddRegistration(reg.arg, token, ctx, preludes, reg.overrideArg),
+    const plan = planAddRegistration(
+      reg.arg,
+      token,
+      ctx,
+      preludes,
+      reg.overrideArg,
     );
+    // A per-scope authoring method (`addRequest(C)`) bakes its scope into the
+    // method name; carry it so the lowered call gains a trailing `.as(scope)`.
+    plans.set(reg.call, reg.scope === undefined ? plan : { ...plan, scope: reg.scope });
   }
 
   const loweredExpr = lowerRegistrationExpression(
@@ -174,27 +206,52 @@ export function lowerStatement(
  * We detect the already-lowered form by checking: if the call has NO type arg
  * and the first arg is a string literal, leave it untouched.
  */
-function registrationMethod(call: ts.CallExpression): RegMethod | undefined {
+function registrationMethod(call: ts.CallExpression): MatchedMethod | undefined {
   const callee = call.expression;
   if (!ts.isPropertyAccessExpression(callee)) {return undefined;}
   if (call.typeArguments && call.typeArguments.length > 1) {return undefined;}
   const name = callee.name.text;
+
+  // Per-scope authoring method: `add${ProperCase<K>}` (`addRequest`, `addSession`)
+  // — NOT `add` / `addFactory` / `addValue`. Scope tags are guarded lowercase-first
+  // (`ValidScopes`), so the scope is the EXACT uncapitalize-first of the suffix.
+  // Only the SINGLE-arg authored form lowers (`addRequest(C)` / `addRequest(fn)`);
+  // the two-arg runtime form (`addRequest("token", C)`) is already lowered and
+  // passes through untouched.
+  if (
+    SCOPE_ADD_METHOD.test(name) &&
+    name !== "addFactory" &&
+    name !== "addValue"
+  ) {
+    if (call.arguments.length !== 1) {return undefined;}
+    const scope = name[3]!.toLowerCase() + name.slice(4);
+    return { method: "add", scope };
+  }
+
   if (name !== "add" && name !== "addValue") {return undefined;}
   // addValue only accepts exactly one value arg.
   if (name === "addValue") {
-    return call.arguments.length === 1 ? "addValue" : undefined;
+    return call.arguments.length === 1 ? { method: "addValue" } : undefined;
   }
   // add: accept 1 arg (standard form) or 2 args (override-array form).
-  if (call.arguments.length === 1) {return "add";}
+  if (call.arguments.length === 1) {return { method: "add" };}
   if (call.arguments.length === 2) {
     // Two-arg form is only type-driven when there IS a type argument.
     // Without a type arg + two value args → already-lowered explicit form,
     // or the string-first explicit form → leave untouched.
     if (!call.typeArguments || !call.typeArguments.length) {return undefined;}
-    return "add";
+    return { method: "add" };
   }
   return undefined;
 }
+
+/**
+ * The per-scope authoring method pattern: `add` followed by an uppercase letter
+ * (`addRequest`, `addSession`). `addFactory` / `addValue` also match this regex,
+ * so callers exclude them explicitly — they are the existing runtime methods, not
+ * scope-minted ones.
+ */
+const SCOPE_ADD_METHOD = /^add[A-Z]/;
 
 /** True when `call` is a `*.as<"x">()` fluent scope tag. */
 function isAsCall(call: ts.CallExpression): boolean {
@@ -217,11 +274,12 @@ function findRegistrationCalls(expr: ts.Node): FoundReg[] {
   const found: FoundReg[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node)) {
-      const method = registrationMethod(node);
-      if (method) {
+      const matched = registrationMethod(node);
+      if (matched) {
         found.push({
           call: node,
-          method,
+          method: matched.method,
+          scope: matched.scope,
           typeArg: node.typeArguments?.[0],
           arg: node.arguments[0]!,
           overrideArg: node.arguments.length >= 2 ? node.arguments[1] : undefined,
@@ -580,18 +638,33 @@ function lowerRegistrationCall(
       ? factory.createIdentifier(plan.hoistName)
       : call.arguments[0]!;
 
-  // Same callee name (class `add`, `addValue`) → update in place. A factory
-  // authored as `add<I>(fn)` is renamed to `addFactory`.
-  if (callee.name.text === plan.calleeMethod) {
-    return factory.updateCallExpression(call, call.expression, undefined, [
-      tokenLiteral,
-      valueArg,
-    ]);
+  // The two-arg runtime call. Same callee name (class `add`, `addValue`) → update
+  // in place; a factory authored as `add<I>(fn)` or any per-scope method is built
+  // fresh on `plan.calleeMethod` (`add` / `addFactory`).
+  const runtimeCall =
+    callee.name.text === plan.calleeMethod
+      ? factory.updateCallExpression(call, call.expression, undefined, [
+          tokenLiteral,
+          valueArg,
+        ])
+      : factory.createCallExpression(
+          factory.createPropertyAccessExpression(
+            callee.expression,
+            plan.calleeMethod,
+          ),
+          undefined,
+          [tokenLiteral, valueArg],
+        );
+
+  // A per-scope authoring form (`addRequest(C)`) bakes the scope into the name —
+  // append `.as(scope)`, mirroring the lowered fluent `add<I>(C).as("request")`.
+  if (plan.scope === undefined) {
+    return runtimeCall;
   }
   return factory.createCallExpression(
-    factory.createPropertyAccessExpression(callee.expression, plan.calleeMethod),
+    factory.createPropertyAccessExpression(runtimeCall, "as"),
     undefined,
-    [tokenLiteral, valueArg],
+    [factory.createStringLiteral(plan.scope)],
   );
 }
 
