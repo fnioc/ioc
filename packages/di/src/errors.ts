@@ -29,7 +29,7 @@ export class UnregisteredTokenError extends DiError {
 }
 
 /**
- * A constructor with parameters has no DepRecord in the WeakMap — the
+ * A constructor with parameters has no DepRecord in the global-symbol Map — the
  * transformer never saw it and it was never hand-annotated.
  */
 export class MissingMetadataError extends DiError {

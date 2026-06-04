@@ -10,8 +10,8 @@
  *   - `DepSlot`        — one positional slot: Token | FactoryRef | ScopeRef | Union | LiteralRef
  *   - `Inject`         — compile-time brand that pins a token for one arg
  *   - `DepTarget`      — a ctor or factory function metadata attaches to
- *   - `DepRecord`      — shape of per-constructor metadata in the WeakMap
- *   - `defineDeps`     — the single write path into the global WeakMap
+ *   - `DepRecord`      — shape of per-constructor metadata in the global-symbol Map
+ *   - `defineDeps`     — the single write path into the global-symbol Map
  *   - `getDeps`        — the read path (consumed by @fnioc/di)
  *   - `union`          — runtime helper: constructs a Union slot from member slots
  *   - `isFactoryRef`   — type guard for FactoryRef slots

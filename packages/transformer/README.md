@@ -235,7 +235,7 @@ This is the opt-out path. Hand-annotate a class with `@signature` or `forCtor` t
 
 ## Fully-dynamic classes
 
-If the transformer cannot statically inspect a constructor (a class reference passed through a variable, a dynamically-constructed class), it emits no `defineDeps` call. At resolve time, `@fnioc/di` checks the WeakMap and throws with guidance if the constructor has parameters but no record:
+If the transformer cannot statically inspect a constructor (a class reference passed through a variable, a dynamically-constructed class), it emits no `defineDeps` call. At resolve time, `@fnioc/di` checks the global-symbol Map and throws with guidance if the constructor has parameters but no record:
 
 ```
 No dep metadata found for <ClassName>. The constructor has parameters but

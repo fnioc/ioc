@@ -3,7 +3,7 @@ import type { Ctor, Func } from "@rhombus-toolkit/func";
 /**
  * Anything dependency metadata can be attached to: a class constructor (its
  * deps are the ctor parameters) or a factory function (its deps are the call
- * parameters). Both are objects, so both are valid global-WeakMap keys. The
+ * parameters). Both are objects, so both are valid global-symbol Map keys. The
  * `never[]` rest keeps any concrete function assignable here regardless of its
  * own parameter list.
  */
@@ -83,7 +83,7 @@ export interface LiteralRef {
 export type DepSlot = Token | FactoryRef | ScopeRef | Union | LiteralRef;
 
 /**
- * Per-constructor dependency metadata stored in the global WeakMap.
+ * Per-constructor dependency metadata stored in the global-symbol Map.
  *
  * `signatures` is an array of arrays: each element is one constructor signature
  * (for overload support). `signatures[i][j]` is the `DepSlot` — a token, a

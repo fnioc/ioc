@@ -63,7 +63,7 @@ This is the central organizing principle of the runtime, not a footnote. A regis
 - Runtime decorator scanning (`emitDecoratorMetadata`, `reflect-metadata`) — explicitly rejected.
 - A separate async resolution channel or `resolveAsync()` API — async is values; one channel.
 - Auto-creating missing scope frames — a tag whose frame is not open resolves transiently; a frame is opened only by an explicit `createScope(name)`.
-- `static $inject` as a v1 authoring surface — deferred; reintroduces prototype-bleed the WeakMap design prevents.
+- `static $inject` as a v1 authoring surface — deferred; reintroduces prototype-bleed the global-symbol Map design prevents.
 - Wessberg-style two-type-param `add<IFoo, Foo>()` with ctor inferred from generic — deferred (TS partial type-argument inference blocker).
 - By-name dep matching — deferred.
 - A separate `@fnioc/abi` package — `@fnioc/core` *is* the ABI.
@@ -78,11 +78,11 @@ This is the central organizing principle of the runtime, not a footnote. A regis
 | **LiteralRef** | A `{ value }` slot, emitted when a constructor/factory parameter (or `resolve<T>()` type argument) is a **singular** (non-union) literal type (`"dev"`, `42`, `true`, `1n`) or a nullish singleton (`void`/`undefined` → `undefined`, `null` → `null`). At resolve time the value is injected directly — no container lookup; always satisfiable. `value` may be `undefined`, so the slot is identified by the *presence* of the `value` key. Literal unions (`"a"\|"b"`) are NOT `LiteralRef`; they derive a single sorted token and resolve through the container. |
 | **Union slot** | A `{ union: [...] }` slot — member-level alternatives tried in declaration order; the first resolvable member wins, and a member that resolves but throws at build time (a cycle, an unresolvable nested dep) falls through to the next. Satisfiable iff at least one member is. Used for inline union parameter types (`A \| B`) and as the lowering of an **optional** parameter: `x?: X` → `union(X, { value: undefined })` with the always-satisfiable `LiteralRef` fallback last. |
 | **Signature** | A positional array of `DepSlot` values parallel to a constructor's parameter list. `signature[i]` describes how to satisfy constructor parameter `i`: a `string` token resolved from the container, a `LiteralRef` injected directly, a `FactoryRef`, a `ScopeRef`, or a `Union` of alternatives. The word "signature" is used consistently in the ABI field name, the `@signature` decorator, and the `forCtor(...).signature(...)` fluent API. |
-| **DepRecord** | `{ abi: number, signatures: ReadonlyArray<ReadonlyArray<DepSlot>> }` — the per-constructor metadata stored in the global WeakMap. Multi-signature from v1 to support constructor overloads without an ABI break. |
+| **DepRecord** | `{ signatures: ReadonlyArray<ReadonlyArray<DepSlot>> }` — the per-constructor metadata stored in the global-symbol Map. Multi-signature from v1 to support constructor overloads without an ABI break. |
 | **Scope** | A node in a parent-linked chain that owns and caches instances. Scope names are a user-defined string union passed to `DiBuilder<Scopes>`. |
 | **Lifetime tag** | The scope name a registration is bound to. Determines which ancestor scope caches the instance. A registration with no tag is transient. |
 | **Transient** | A registration with no lifetime tag. Fresh instance on every resolve; never cached. Conceptually an ephemeral throwaway scope — the engine just skips the cache. |
-| **ABI\_VERSION** | An exported integer constant (currently `1`). Coarse runtime-compatibility guard for the global WeakMap key. Only bumped on an actual wire-format break — rarer than a `core` semver major. |
+| **store** | A plain `Map<DepTarget, DepRecord>` anchored on `globalThis` under `Symbol.for("fnioc:deps")`. Shared across all copies of `@fnioc/core` in the same process via the global symbol registry. |
 
 ---
 
@@ -96,7 +96,7 @@ Three packages in v1. Dependency graph: `core` ← `di`, `core` ← `transformer
 Token type           DiBuilder           ts-patch transformer
 DepSlot types        Scope chain         Token generation
 DepRecord shape      Registration API    Dep extraction
-ABI_VERSION          Resolution engine   defineDeps emission
+global-symbol Map    Resolution engine   defineDeps emission
 defineDeps()         Disposal            Registration lowering
 @signature           Cycle detection     §4.5 factory diagnostic
 forCtor()            Factory injection
@@ -107,7 +107,7 @@ forCtor()            Factory injection
 
 | Package | Responsibility | Depends on |
 |---|---|---|
-| `@fnioc/core` | Immutable substrate: ABI types, global WeakMap, `defineDeps`, `@signature`, `forCtor` | — |
+| `@fnioc/core` | Immutable substrate: ABI types, global-symbol Map, `defineDeps`, `@signature`, `forCtor` | — |
 | `@fnioc/di` | Runtime engine: resolution, scoping, lifecycle, disposal, factories | `@fnioc/core` |
 | `@fnioc/transformer` | Build-time ts-patch plugin: token gen, dep extraction, lowered output emission | `@fnioc/core` (ABI/token format only) |
 
@@ -121,7 +121,7 @@ forCtor()            Factory injection
 
 ## 5. The ABI (`@fnioc/core`)
 
-`@fnioc/core` is the ABI. There is no separate `@fnioc/abi` package — the ABI types and the WeakMap/`defineDeps` that read and write them are one intrinsic unit; splitting them buys no decoupling.
+`@fnioc/core` is the ABI. There is no separate `@fnioc/abi` package — the ABI types and the Map/`defineDeps` that read and write them are one intrinsic unit; splitting them buys no decoupling.
 
 ### DepRecord shape
 
@@ -153,63 +153,60 @@ export interface Union { readonly union: ReadonlyArray<DepSlot>; }
 export type DepSlot = Token | LiteralRef | FactoryRef | ScopeRef | Union;
 
 export interface DepRecord {
-  readonly abi: number;
   readonly signatures: ReadonlyArray<ReadonlyArray<DepSlot>>;
 }
-
-export const ABI_VERSION = 1;
 ```
 
 `signatures` is an array of arrays from v1. Multiple signatures support **manual** constructor overloads (`@signature` stacking, `forCtor` chaining) and **declared** ctor overloads (one signature per bodyless declaration). Auto-extraction from an implementation constructor always emits exactly one signature — optionality is expressed *within* a signature via a `Union` slot, not by emitting extra shorter signatures.
 
-### Global-symbol WeakMap hardening
+### Global-symbol Map
 
-The WeakMap is anchored on `globalThis` under a version-suffixed `Symbol.for` key:
+The dep-metadata store is a plain `Map<DepTarget, DepRecord>` anchored on `globalThis` under a fixed `Symbol.for` key:
 
 ```typescript
-const KEY = Symbol.for(`@fnioc/core:deps@${ABI_VERSION}`);
+const KEY: unique symbol = Symbol.for("fnioc:deps");
 // Using Symbol.for (never Symbol()) — the registry is global, so two bundles
-// with the same ABI_VERSION share the same key and thus the same WeakMap.
-const deps: WeakMap<Function, DepRecord> =
-  (globalThis as any)[KEY] ??= new WeakMap();
+// share the same key and thus the same Map.
+const store: Map<DepTarget, DepRecord> =
+  (globalThis as any)[KEY] ??= new Map();
 ```
 
-**Why `Symbol.for` and never `Symbol()`:** a unique symbol would fragment the map between two copies of `core` loaded into the same runtime (the dual-package hazard). `Symbol.for` entries are global-registry entries; two copies of the same `@fnioc/core@N` loading in the same process will find the same symbol and the same WeakMap.
+**Why a regular Map and not a WeakMap:** every key is a constructor or factory function pinned for the module's lifetime — class bindings, `@signature`/`forCtor` named declarations, transformer-hoisted `const` factories. No key ever becomes unreachable, so a WeakMap could never collect an entry — its weakness would be pure ceremony.
+
+**Why `Symbol.for` and never `Symbol()`:** a unique symbol would fragment the map between two copies of `core` loaded into the same runtime (the dual-package hazard). `Symbol.for` entries are global-registry entries; two copies of `@fnioc/core` loading in the same process will find the same symbol and the same Map.
 
 **What is (and is not) globalized:** only the immutable, app-agnostic dep-metadata (the `DepRecord` entries keyed by constructor function). The container/registry is per-instance — globalizing it would break multi-tenant SSR and multiple-container scenarios.
-
-**ABI version isolation:** different `ABI_VERSION` integers produce different `Symbol.for` keys and therefore different WeakMaps. They remain isolated by design. A v1 `core` and a hypothetical v2 `core` coexist cleanly.
 
 ### `defineDeps` — the single shared writer
 
 ```typescript
 export function defineDeps(
-  ctor: Function,
+  target: DepTarget,
   signatures: ReadonlyArray<ReadonlyArray<DepSlot>>,
 ): void {
-  const existing = deps.get(ctor);
+  const existing = store.get(target);
   if (existing) {
     // Merge: append unique signatures (for stacking @signature calls)
     const merged = [...existing.signatures];
     for (const sig of signatures) {
-      if (!merged.some(s => arraysEqual(s, sig))) {
+      if (!merged.some(s => signaturesEqual(s, sig))) {
         merged.push(sig);
       }
     }
-    deps.set(ctor, { abi: ABI_VERSION, signatures: merged });
+    store.set(target, { signatures: merged });
   } else {
-    deps.set(ctor, { abi: ABI_VERSION, signatures });
+    store.set(target, { signatures });
   }
 }
 ```
 
-`defineDeps` is the single write path. Both the transformer-emitted code and `@signature`/`forCtor` funnel through it. No other code writes to the WeakMap.
+`defineDeps` is the single write path. Both the transformer-emitted code and `@signature`/`forCtor` funnel through it. No other code writes to the store.
 
 ### Versioning policy
 
-Each package is versioned independently via release-please (semver). `ABI_VERSION` is a separate, coarse integer bumped only on an actual wire-format break — it is not tied to `@fnioc/core`'s semver major. The combination gives fine-grained package versioning for bugfixes and new features, and a blunt compatibility guard for the rare cases that break the dep-metadata wire format.
+Each package is versioned independently via release-please (semver). The dep-metadata wire format (`DepRecord`) is kept backward-compatible across `core` semver minors; a breaking change to the wire format would require a coordinated update across all packages.
 
-**Dual-package hazard:** if two copies of `@fnioc/core` at the same `ABI_VERSION` end up in the same bundle (e.g. a deduplication failure), the `Symbol.for` hardening means they share one WeakMap — data written through either copy is visible to both. If the copies have different `ABI_VERSION` values, they are isolated, which is the correct behavior (different wire formats should not mix). The remaining residual risk is two copies at the same ABI but different *content* — a corner case that the hardening doesn't fully close, mitigated by declaring `@fnioc/core` a peer dependency.
+**Dual-package hazard:** if two copies of `@fnioc/core` end up in the same bundle (e.g. a deduplication failure), the `Symbol.for("fnioc:deps")` key means they share one Map — data written through either copy is visible to both, which is the correct behavior. The residual risk is two copies at different *content* (shape mismatch) — mitigated by declaring `@fnioc/core` a peer dependency.
 
 ---
 
@@ -363,7 +360,7 @@ defineDeps(ɵreg1, [
 services.add("pkg:IUserRepo", ɵreg1).as("request");
 ```
 
-The lowered form is the ABI contract. Libraries publish this form. Consumers without the transformer use it directly. The emitted-call format is kept backward-compatible across `core` semver minors; a breaking change bumps `ABI_VERSION`.
+The lowered form is the ABI contract. Libraries publish this form. Consumers without the transformer use it directly. The emitted-call format is kept backward-compatible across `core` semver minors.
 
 ---
 
@@ -602,7 +599,7 @@ The multi-signature `signatures` array is therefore exercised by **declared ctor
 
 ### Lowered output / ABI contract
 
-The lowered form is a contract. Libraries compile with the transformer and publish the lowered JS; consumers run it without the transformer. The emitted-call format is versioned via `ABI_VERSION` and kept backward-compatible.
+The lowered form is a contract. Libraries compile with the transformer and publish the lowered JS; consumers run it without the transformer. The emitted-call format is kept backward-compatible.
 
 ```typescript
 // Author code — `table?: string` is optional → union-with-fallback, one signature
@@ -640,7 +637,7 @@ When the transformer encounters a class that already has a `@signature` decorato
 
 ### Fully-dynamic classes
 
-A constructor that the transformer cannot statically inspect (e.g. a class reference passed through a variable, a dynamically-constructed class) gets no dep array emitted. At resolve time, if the constructor has parameters but no DepRecord in the WeakMap, the engine **throws with guidance**:
+A constructor that the transformer cannot statically inspect (e.g. a class reference passed through a variable, a dynamically-constructed class) gets no dep array emitted. At resolve time, if the constructor has parameters but no DepRecord in the global-symbol Map, the engine **throws with guidance**:
 
 ```
 No dep metadata found for <ClassName>. The constructor has parameters but
@@ -754,15 +751,15 @@ Prefer native over toolkit wherever a native feature has superseded it. Confirme
 | `emitDecoratorMetadata` | Only works in legacy decorator mode; eliminated with the above. |
 | Parameter decorators | Do not exist in TC39 standard decorators. |
 | `reflect-metadata` | Interface-blind (`design:paramtypes` maps interfaces to `Object`); global side-effecting polyfill; redundant with the transformer doing the same job at compile time. |
-| `Symbol.metadata` as the dep store | Only auto-populated by decorators; would force the transformer to emulate its object-creation/inheritance semantics; requires a polyfill. The WeakMap is correct. |
+| `Symbol.metadata` as the dep store | Only auto-populated by decorators; would force the transformer to emulate its object-creation/inheritance semantics; requires a polyfill. The global-symbol Map is correct. |
 | Writing dep data onto the class as primary store (`$inject` static / symbol static) | Prototype-inheritance bleed (subclass silently inherits parent's dep array); pollutes the class surface. |
-| `static $inject` in v1 | Reintroduces prototype-bleed that the WeakMap design exists to prevent; `forCtor` makes it unnecessary. If ever added: read once, cache into the WeakMap keyed by the exact ctor — never walk the prototype chain. |
+| `static $inject` in v1 | Reintroduces prototype-bleed that the global-symbol Map design exists to prevent; `forCtor` makes it unnecessary. If ever added: read once, cache into the store keyed by the exact ctor — never walk the prototype chain. |
 | Ramda-style placeholder args exposed to factory callers | Leaks constructor arity/structure to call sites; the §4.5 diagnostic provides fail-loud safety without that exposure. |
 | Computed/branded return types for `nameof` | `string` is sufficient; the token value is plain text, not a branded or literal TS type. |
 | `toString()` / AST-parsing of ctor arg names at runtime | Fragile under minification; the transformer supplies precise data instead. |
 | `@injectable` as the decorator name | Rejected on principle by the project author — use `@signature`. |
 | A separate async resolution channel / `resolveAsync()` | Async is values through the sync channel; one channel, honest contract. |
-| A separate `@fnioc/abi` package | The ABI types and the WeakMap/`defineDeps` that read-write them are one intrinsic unit; splitting buys no decoupling. `@fnioc/core` is the ABI. |
+| A separate `@fnioc/abi` package | The ABI types and the Map/`defineDeps` that read-write them are one intrinsic unit; splitting buys no decoupling. `@fnioc/core` is the ABI. |
 
 ---
 
@@ -786,12 +783,12 @@ These were the open questions from the original handoff (originally §12); each 
 
 | Question | Resolution |
 |---|---|
-| Exact lowered-call ABI shape and versioning scheme | `DepRecord { abi: number, signatures: DepSlot[][] }` in `@fnioc/core`, where `DepSlot = Token \| LiteralRef \| FactoryRef \| ScopeRef \| Union`. `ABI_VERSION` integer exported from `core`; version-suffixed `Symbol.for` key for global WeakMap. Semver per package via release-please; `ABI_VERSION` bumped only on wire-format break. |
-| Support `static $inject` fallback in v1? | Dropped. Reintroduces prototype-inheritance bleed the WeakMap design prevents. `forCtor` is the plugin-less alternative for classes you don't own. |
+| Exact lowered-call ABI shape and versioning scheme | `DepRecord { signatures: DepSlot[][] }` in `@fnioc/core`, where `DepSlot = Token \| LiteralRef \| FactoryRef \| ScopeRef \| Union`. Store is a plain `Map<DepTarget, DepRecord>` on `globalThis[Symbol.for("fnioc:deps")]`. Semver per package via release-please; wire format kept backward-compatible across semver minors. |
+| Support `static $inject` fallback in v1? | Dropped. Reintroduces prototype-inheritance bleed the global-symbol Map design prevents. `forCtor` is the plugin-less alternative for classes you don't own. |
 | Behavior when transformer encounters already-hand-annotated class | Manual annotation is authoritative. Transformer skips emission and emits an info diagnostic. Never silent; never double-writes. |
 | Behavior for fully-dynamic registration (ctor transformer can't see) | No dep array emitted. At resolve time: if ctor has params but no DepRecord → throw with actionable guidance (`forCtor` or `useFactory`). Zero-arg ctor → `new` directly. |
 | Async resolution / async disposal | Async = values through the sync channel. Container never awaits. Async disposal retained (native `AsyncDisposable`). No `resolveAsync` channel. |
-| Global-symbol WeakMap hardening — v1 or deferred? | Promoted to v1. `globalThis[Symbol.for("@fnioc/core:deps@N")]` with `??=` init; version-suffixed key; `Symbol.for` only. |
+| Global-symbol Map — v1 or deferred? | Promoted to v1. `globalThis[Symbol.for("fnioc:deps")]` with `??=` init; fixed key; plain `Map`, not `WeakMap`. |
 | Decorator name — `@injectable` or something else? | `@signature`. `@injectable` rejected on principle. |
 | Separate `@fnioc/abi` package? | No. `@fnioc/core` is the ABI. |
 
