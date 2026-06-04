@@ -1,5 +1,16 @@
 # Changelog
 
+## [4.0.0](https://github.com/fnioc/ioc/compare/transformer-v3.1.0...transformer-v4.0.0) (2026-06-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* **di:** DiBuilder<Root, Children> -> DiBuilder<Scopes>; the rootName constructor argument is removed; build() no longer pre-opens a "singleton" root (open it with createScope("singleton")); MissingScopeError is removed and a tagged registration with no open frame now resolves transiently instead of throwing.
+
+### Features
+
+* **di:** uniform scope tags — no pre-opened root frame ([#62](https://github.com/fnioc/ioc/issues/62)) ([ed2f6e2](https://github.com/fnioc/ioc/commit/ed2f6e270673734732bbfd63ffddfdf76f4528f3))
+
 ## [3.1.0](https://github.com/fnioc/ioc/compare/transformer-v3.0.1...transformer-v3.1.0) (2026-06-04)
 
 
