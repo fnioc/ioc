@@ -33,8 +33,10 @@ import {
   UnionConsumer,
 } from "./services.js";
 
-// `singleton` is the root (app-lifetime) scope; `request` is a child scope.
-const services = new DiBuilder<"singleton", "request">();
+// `singleton` and `request` are the two scope tags this app opens. There is no
+// root: scopes are uniform tags, and `singleton` is just the one we open once at
+// the top (below, via `createScope("singleton")`) for app-lifetime instances.
+const services = new DiBuilder<"singleton" | "request">();
 
 services.add<ILogger>(ConsoleLogger).as<"singleton">();
 services.add<IClock>(SystemClock).as<"singleton">();
@@ -53,10 +55,13 @@ services.add(UnionConsumer).as<"singleton">();
 services.add("app:primary-clock", SystemClock);
 services.add<IDiagnosticsService>(DiagnosticsService).as<"singleton">();
 
-const root = services.build();
+// build() returns a frameless provider — nothing is pre-opened. Open the
+// "singleton" scope explicitly so singleton-tagged registrations cache for the
+// app's lifetime. (Resolving them off the frameless provider would be transient.)
+const root = services.build().createScope("singleton");
 
-// Resolve the greeter twice from the root scope. As a singleton it is the same
-// instance both times, so the singleton logger it holds accumulates every line.
+// Resolve the greeter twice from the singleton scope. As a singleton it is the
+// same instance both times, so the singleton logger it holds accumulates every line.
 const greeterA = root.resolve<IGreeter>("./contracts/IGreeter");
 const greeterB = root.resolve<IGreeter>("./contracts/IGreeter");
 
