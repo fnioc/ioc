@@ -31,11 +31,11 @@ describe("sync disposal — reverse construction order", () => {
     defineDeps(First, [[]]);
     defineDeps(Second, [["d:first"]]);
 
-    const services = new DiBuilder<"app">("app");
+    const services = new DiBuilder<"app">();
     services.add("d:first", First).as("app");
     services.add("d:second", Second).as("app");
 
-    const root = services.build();
+    const root = services.build().createScope("app");
     root.resolve("d:second"); // constructs First then Second
 
     root.dispose();
@@ -44,12 +44,12 @@ describe("sync disposal — reverse construction order", () => {
   });
 
   test("sync dispose() throws AsyncDisposalRequiredError when the scope owns a Promise", () => {
-    const services = new DiBuilder<"app">("app");
+    const services = new DiBuilder<"app">();
     // addFactory (no defineDeps record) → engine calls factory(scope); returns a
     // Promise which is cached on the "app" scope and triggers the async-disposal guard.
     services.addFactory("async:value", () => Promise.resolve({ ready: true })).as("app");
 
-    const root = services.build();
+    const root = services.build().createScope("app");
     root.resolve("async:value"); // caches the Promise on the root
 
     let caught: unknown;
@@ -71,9 +71,9 @@ describe("sync disposal — reverse construction order", () => {
     }
     defineDeps(Thing, [[]]);
 
-    const services = new DiBuilder<"app">("app");
+    const services = new DiBuilder<"app">();
     services.add("d:thing", Thing).as("app");
-    const root = services.build();
+    const root = services.build().createScope("app");
     root.resolve("d:thing");
 
     root.dispose();
@@ -103,11 +103,11 @@ describe("async disposal — awaits Promise-valued instances, reverse order", ()
     defineDeps(AsyncFirst, [[]]);
     defineDeps(SyncSecond, [["a:first"]]);
 
-    const services = new DiBuilder<"app">("app");
+    const services = new DiBuilder<"app">();
     services.add("a:first", AsyncFirst).as("app");
     services.add("a:second", SyncSecond).as("app");
 
-    const root = services.build();
+    const root = services.build().createScope("app");
     root.resolve("a:second"); // AsyncFirst then SyncSecond
 
     await root.disposeAsync();
@@ -124,12 +124,12 @@ describe("async disposal — awaits Promise-valued instances, reverse order", ()
       }
     }
 
-    const services = new DiBuilder<"app">("app");
+    const services = new DiBuilder<"app">();
     // addFactory (no defineDeps record) → called with the live scope; returns a
     // Promise<Resource> cached on "app" — disposeAsync awaits it then disposes.
     services.addFactory("a:resource", () => Promise.resolve(new Resource())).as("app");
 
-    const root = services.build();
+    const root = services.build().createScope("app");
     const p = root.resolve<Promise<Resource>>("a:resource");
     expect(p).toBeInstanceOf(Promise);
 
@@ -160,7 +160,7 @@ describe("async as values — Promise<T> useFactory cached as a singleton Promis
       return Promise.resolve(new Db());
     }).as("singleton");
 
-    const root = services.build();
+    const root = services.build().createScope("singleton");
     const p1 = root.resolve<Promise<Db>>("av:db");
     const p2 = root.resolve<Promise<Db>>("av:db");
 
@@ -193,7 +193,7 @@ describe("async as values — Promise<T> useFactory cached as a singleton Promis
     }).as("singleton");
     services.add("av:consumer", Consumer).as("singleton");
 
-    const root = services.build();
+    const root = services.build().createScope("singleton");
     const consumer = root.resolve<Consumer>("av:consumer");
     expect(consumer.db).toBeInstanceOf(Promise);
     // The same cached Promise the engine handed to the consumer.

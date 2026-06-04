@@ -39,9 +39,13 @@ const T = {
 
 export { T, resetConfigFactoryRuns };
 
-/** Mints the root (singleton) scope from the transformer-lowered registrations. */
+/**
+ * Opens the top-level "singleton" scope from the transformer-lowered
+ * registrations. `build()` is frameless (no root); opening the "singleton" frame
+ * here is what lets singleton-tagged registrations cache for the app's lifetime.
+ */
 export function rootScope(): ServiceProvider<SampleScopes> {
-  return services.build();
+  return services.build().createScope("singleton");
 }
 
 export interface ResolvedGraph {

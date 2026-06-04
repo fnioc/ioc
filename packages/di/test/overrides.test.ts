@@ -22,7 +22,7 @@ describe("useValue", () => {
   });
 
   test("useValue resolves without any scope (no lifetime, no caching dance)", () => {
-    const services = new DiBuilder<"singleton", "request">();
+    const services = new DiBuilder<"singleton" | "request">();
     services.addValue(T.Config, "literal-value");
 
     const req = services.build().createScope("request");
@@ -68,7 +68,7 @@ describe("useFactory", () => {
       return { n: calls };
     }).as("singleton");
 
-    const root = services.build();
+    const root = services.build().createScope("singleton");
     const a = root.resolve<{ n: number }>(T.Service);
     const b = root.resolve<{ n: number }>(T.Service);
     expect(calls).toBe(1);
@@ -77,7 +77,7 @@ describe("useFactory", () => {
 
   test("a request-scoped factory caches per request scope", () => {
     let calls = 0;
-    const services = new DiBuilder<"singleton", "request">();
+    const services = new DiBuilder<"singleton" | "request">();
     services.addFactory(T.Service, () => ({ n: ++calls })).as("request");
 
     const root = services.build();
@@ -113,7 +113,7 @@ describe("async as values", () => {
       return { id: calls };
     }).as("singleton");
 
-    const root = services.build();
+    const root = services.build().createScope("singleton");
     const p1 = root.resolve<Promise<{ id: number }>>(T.Db);
     const p2 = root.resolve<Promise<{ id: number }>>(T.Db);
 

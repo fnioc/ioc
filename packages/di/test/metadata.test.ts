@@ -168,7 +168,7 @@ describe("cycle detection", () => {
     services.add(T.C, C).as("singleton");
     services.add(T.A, A).as("singleton");
 
-    const a = services.build().resolve<A>(T.A);
+    const a = services.build().createScope("singleton").resolve<A>(T.A);
     expect(a.b.d).toBe(a.c.d); // shared singleton D, no false cycle
   });
 });

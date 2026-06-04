@@ -66,7 +66,8 @@ describe("transient vs singleton caching", () => {
     const services = new DiBuilder<"singleton">();
     services.add(T.Logger, ConsoleLogger).as("singleton");
 
-    const root = services.build();
+    // Open the "singleton" frame — that is what makes the tag cache.
+    const root = services.build().createScope("singleton");
     const a = root.resolve<ConsoleLogger>(T.Logger);
     const b = root.resolve<ConsoleLogger>(T.Logger);
 
@@ -87,10 +88,12 @@ describe("transient vs singleton caching", () => {
   });
 
   test("singleton is shared across child scopes (owned by the ancestor)", () => {
-    const services = new DiBuilder<"singleton", "request">();
+    const services = new DiBuilder<"singleton" | "request">();
     services.add(T.Logger, ConsoleLogger).as("singleton");
 
-    const root = services.build();
+    // Open the "singleton" frame at the top; requests nest under it, so they
+    // share the one singleton instance owned by that enclosing frame.
+    const root = services.build().createScope("singleton");
     const reqA = root.createScope("request");
     const reqB = root.createScope("request");
 
@@ -105,7 +108,7 @@ describe("transient vs singleton caching", () => {
 
 describe(".as tagging", () => {
   test("request-tagged: one instance per request scope, distinct across them", () => {
-    const services = new DiBuilder<"singleton", "request">();
+    const services = new DiBuilder<"singleton" | "request">();
     services.add(T.Db, SqlDb).as("request");
 
     const root = services.build();

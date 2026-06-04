@@ -34,12 +34,8 @@ import {
   ThunkConsumer,
 } from "./services.js";
 
+/** The declarable scope tags — the single `Scopes` type arg to `DiBuilder`. */
 export type SampleScopes = "singleton" | "request";
-
-/** The root scope's lifetime tag (the `Root` type arg to `DiBuilder`). */
-export type SampleRoot = "singleton";
-/** The declarable child-scope names (the `Children` type arg to `DiBuilder`). */
-export type SampleChildren = "request";
 
 /** The token the di engine uses for the async config registration. */
 export const CONFIG_TOKEN = "./sample/contracts/IConfig";
@@ -64,7 +60,7 @@ export function makeConfig(): Promise<IConfig> {
   return Promise.resolve({ endpoint: "https://db.example/api" });
 }
 
-export const services = new DiBuilder<SampleRoot, SampleChildren>();
+export const services = new DiBuilder<SampleScopes>();
 
 // Type-driven registrations — TOP-LEVEL so the transformer lowers each type arg
 // to a string token and injects a `defineDeps(C, [...])` prelude per class.
