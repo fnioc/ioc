@@ -20,7 +20,7 @@ describe("sync disposal", () => {
     services.addFactory(T.B, () => new SyncDisposable("B", log)).as("singleton");
     services.addFactory(T.C, () => new SyncDisposable("C", log)).as("singleton");
 
-    const root = services.build();
+    const root = services.build().createScope("singleton");
     root.resolve(T.A); // constructed first
     root.resolve(T.B);
     root.resolve(T.C); // constructed last
@@ -37,7 +37,7 @@ describe("sync disposal", () => {
     services.addFactory(T.A, () => new SyncDisposable("A", log)).as("singleton");
     services.addFactory(T.B, () => plain).as("singleton");
 
-    const root = services.build();
+    const root = services.build().createScope("singleton");
     const a = root.resolve<SyncDisposable>(T.A);
     root.resolve(T.B);
     root.dispose();
@@ -48,11 +48,11 @@ describe("sync disposal", () => {
 
   test("a child scope's dispose does NOT dispose ancestor-owned instances", () => {
     const log = new DisposeLog();
-    const services = new DiBuilder<"singleton", "request">();
+    const services = new DiBuilder<"singleton" | "request">();
     services.addFactory(T.A, () => new SyncDisposable("singleton-A", log)).as("singleton");
     services.addFactory(T.B, () => new SyncDisposable("request-B", log)).as("request");
 
-    const root = services.build();
+    const root = services.build().createScope("singleton");
     const req = root.createScope("request");
     req.resolve(T.A); // owned by root
     req.resolve(T.B); // owned by req
@@ -69,7 +69,7 @@ describe("sync disposal", () => {
     const services = new DiBuilder<"singleton">();
     services.addFactory(T.A, () => new SyncDisposable("A", log)).as("singleton");
 
-    const root = services.build();
+    const root = services.build().createScope("singleton");
     root.resolve(T.A);
     root.dispose();
     root.dispose();
@@ -96,7 +96,7 @@ describe("async disposal", () => {
     services.addFactory(T.A, () => new AsyncDisposableThing("A", log)).as("singleton");
     services.addFactory(T.B, () => new AsyncDisposableThing("B", log)).as("singleton");
 
-    const root = services.build();
+    const root = services.build().createScope("singleton");
     root.resolve(T.A);
     root.resolve(T.B);
     await root.disposeAsync();
@@ -110,7 +110,7 @@ describe("async disposal", () => {
     services.addFactory(T.A, () => new SyncDisposable("sync", log)).as("singleton");
     services.addFactory(T.B, () => new AsyncDisposableThing("async", log)).as("singleton");
 
-    const root = services.build();
+    const root = services.build().createScope("singleton");
     root.resolve(T.A);
     root.resolve(T.B);
     await root.disposeAsync();
@@ -124,7 +124,7 @@ describe("async disposal", () => {
     const services = new DiBuilder<"singleton">();
     services.addFactory(T.A, async () => new AsyncDisposableThing("resolved", log)).as("singleton");
 
-    const root = services.build();
+    const root = services.build().createScope("singleton");
     root.resolve<Promise<AsyncDisposableThing>>(T.A);
     await root.disposeAsync();
 
@@ -138,7 +138,7 @@ describe("sync dispose with a Promise-valued instance", () => {
     const services = new DiBuilder<"singleton">();
     services.addFactory(T.A, async () => ({ ok: true })).as("singleton");
 
-    const root = services.build();
+    const root = services.build().createScope("singleton");
     root.resolve(T.A); // caches a Promise
 
     expect(() => root.dispose()).toThrow(AsyncDisposalRequiredError);
@@ -154,7 +154,7 @@ describe("sync dispose with a Promise-valued instance", () => {
     const services = new DiBuilder<"singleton">();
     services.addFactory(T.A, async () => new AsyncDisposableThing("late", log)).as("singleton");
 
-    const root = services.build();
+    const root = services.build().createScope("singleton");
     root.resolve(T.A);
     expect(() => root.dispose()).toThrow(AsyncDisposalRequiredError);
 
@@ -184,7 +184,7 @@ describe("native using / await using", () => {
 
   test("await using calls Symbol.asyncDispose on block exit", async () => {
     const log = new DisposeLog();
-    const services = new DiBuilder<"singleton", "request">();
+    const services = new DiBuilder<"singleton" | "request">();
     services.addFactory(T.A, () => new AsyncDisposableThing("req", log)).as("request");
     const root = services.build();
 

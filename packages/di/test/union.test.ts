@@ -292,12 +292,16 @@ describe("single-member union", () => {
 // ── Union member composability (ported from #34 anyof gaps) ──────────────────
 
 describe("union member composability", () => {
-  test("GAP2: captive MissingScopeError on one member falls through to the next", () => {
-    // T.A registered as "request" (a scope absent from the resolving chain), T.B
-    // as transient. union(A, B) resolved from the root: A throws MissingScopeError
-    // → the union catches it and falls through to B.
-    class ScopedA {
-      public readonly kind = "scoped-a";
+  test("GAP2: a member that THROWS at build time falls through to the next", () => {
+    // T.A is registered (so it passes the static resolvability check) but its
+    // own ctor needs an UNREGISTERED dep, so building it throws. The union
+    // catches that and falls through to T.B (transient — always resolvable).
+    // (Note: under the uniform-tag model a tagged member with no open frame does
+    // NOT throw — it resolves transiently — so a genuine build failure is needed
+    // to exercise fallthrough; an unsatisfiable ctor dep is one such failure.)
+    class NeedsMissing {
+      public readonly kind = "needs-missing";
+      public constructor(public readonly missing: unknown) {}
     }
     class TransientB {
       public readonly kind = "transient-b";
@@ -305,14 +309,16 @@ describe("union member composability", () => {
     class Svc {
       public constructor(public readonly dep: unknown) {}
     }
+    defineDeps(NeedsMissing, [["union:unregistered-dep"]]);
     defineDeps(Svc, [[union(T.A, T.B)]]);
 
-    const services = new DiBuilder<"singleton", "request">();
-    services.add(T.A, ScopedA).as("request"); // needs a "request" ancestor
+    const services = new DiBuilder<"singleton" | "request">();
+    services.add(T.A, NeedsMissing); // registered, but its ctor dep is not
     services.add(T.B, TransientB); // transient — always resolvable
     services.add(T.Service, Svc);
 
-    // root is the "singleton" scope — no "request" ancestor for A.
+    // T.A is statically resolvable (registered) so the union tries it; building
+    // it throws (its "union:unregistered-dep" ctor dep is absent) → fall through to B.
     const svc = services.build().resolve<Svc>(T.Service);
     expect((svc.dep as TransientB).kind).toBe("transient-b");
   });
@@ -494,7 +500,7 @@ describe("ServiceProvider.resolveFactory(type, params)", () => {
     services.add(T.Logger, LoggerImpl).as("singleton");
     services.add(T.Service, Target).as("singleton");
 
-    const root = services.build();
+    const root = services.build().createScope("singleton");
     // resolveFactory with NO params → zero-arg factory.
     const make = root.resolveFactory(T.Service) as () => Target;
     expect(typeof make).toBe("function");

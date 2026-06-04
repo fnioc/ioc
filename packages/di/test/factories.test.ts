@@ -58,7 +58,7 @@ describe("bare zero-arg factory", () => {
     services.add(T.Service, Foo).as("singleton"); // Foo is a singleton
     services.add(T.Repo, Holder).as("singleton");
 
-    const holder = services.build().resolve<Holder>(T.Repo);
+    const holder = services.build().createScope("singleton").resolve<Holder>(T.Repo);
 
     const a = holder.makeFoo();
     const b = holder.makeFoo();
@@ -256,28 +256,36 @@ describe("transformer-emitted params: declared named-service param → caller wi
 });
 
 describe("§5.4 — owning-scope rule holds for factory targets", () => {
-  test("a singleton-held factory of a request-scoped target throws at call time", () => {
+  test("a singleton-held factory of a request-scoped target builds a fresh transient (no enclosing request frame)", () => {
     // Foo is request-scoped. Holder is a singleton, so it OWNS its factory; the
     // factory builds Foo relative to the singleton's chain, which has no
-    // request ancestor ⇒ MissingScopeError when the factory is called.
+    // ENCLOSING request frame ⇒ Foo resolves transiently (fresh each call). The
+    // singleton never cache-captures a request's Foo — the construct-relative-to-
+    // owner rule still protects against capture; the fallback is transient, not a throw.
     Foo.built = 0;
     class Holder {
       public constructor(public readonly makeFoo: () => Foo) {}
     }
     defineDeps(Holder, [[factoryOf(T.Service)]]);
 
-    const services = new DiBuilder<"singleton", "request">();
+    const services = new DiBuilder<"singleton" | "request">();
     services.add(T.Service, Foo).as("request"); // request-scoped target
     services.add(T.Repo, Holder).as("singleton"); // singleton holds the factory
 
-    const root = services.build();
+    const root = services.build().createScope("singleton");
     const req = root.createScope("request");
 
     // Resolve the holder FROM a request scope — but the holder is a singleton,
-    // owned by root. Its factory captures the singleton scope. Calling it tries
-    // to build a request-scoped Foo with no request ancestor ⇒ throw.
+    // owned by the singleton frame. Its factory captures the singleton scope,
+    // whose chain has no enclosing request frame ⇒ each call builds a fresh
+    // transient Foo (never captured), and resolving from the request scope is
+    // a distinct request-owned instance.
     const holder = req.resolve<Holder>(T.Repo);
-    expect(() => holder.makeFoo()).toThrow(/lifetime is tagged "request"/);
+    const a = holder.makeFoo();
+    const b = holder.makeFoo();
+    expect(a).toBeInstanceOf(Foo);
+    expect(a).not.toBe(b); // transient — no enclosing request frame to cache in
+    expect(a).not.toBe(req.resolve(T.Service)); // not the request's cached instance
   });
 
   test("a request-held factory of a request-scoped target resolves fine", () => {
@@ -287,7 +295,7 @@ describe("§5.4 — owning-scope rule holds for factory targets", () => {
     }
     defineDeps(Holder, [[factoryOf(T.Service)]]);
 
-    const services = new DiBuilder<"singleton", "request">();
+    const services = new DiBuilder<"singleton" | "request">();
     services.add(T.Service, Foo).as("request");
     services.add(T.Repo, Holder).as("request"); // holder is request-scoped now
 

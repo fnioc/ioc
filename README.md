@@ -38,9 +38,17 @@ The lowered form is the ABI. Libraries compile once with the transformer and pub
 
 ---
 
+## Design philosophy — scopes are uniform tags
+
+**Scopes are uniform tags — there is no root.** `"singleton"` is literally just a tag you happen to open once at the top. You can run the container without ever opening a scope at all; with no matching frame open, resolution is transient.
+
+`build()` returns a frameless provider — nothing is pre-opened. A lifetime tag caches its instance in the nearest enclosing **open** frame carrying that tag; with no such frame open it resolves transiently (fresh, no cache, no error). Open a frame with `createScope(name)` when you want a tag to cache — `"singleton"` included. This is the central organizing principle of the runtime.
+
+---
+
 ## Captive-dependency protection
 
-A singleton that depends on a request-scoped service fails **loudly at resolve time**, not silently at runtime after it has captured stale state.
+A singleton can never **cache-capture** a shorter-lived service. Its dependencies resolve relative to the frame that *owns* it, so when a request-scoped dependency has no enclosing request frame, it resolves to a **fresh transient** — never a stale request instance bound for the singleton's whole life.
 
 ```ts
 const services = new DiBuilder<"singleton" | "request">();
@@ -51,16 +59,17 @@ services.add<IUserContext>(HttpUserContext).as<"request">();
 // UserService depends on IUserContext — a request-scoped service
 services.add<IUserService>(UserService).as<"singleton">();
 
-const root = services.build();
-const req  = root.createScope("request");
+const app = services.build().createScope("singleton");
+const req = app.createScope("request");
 
 req.resolve<IUserService>("pkg:IUserService");
-// ^ Throws: IUserService is singleton-owned; its deps are resolved relative
-//   to the singleton scope. That scope has no "request" ancestor — it throws
-//   instead of silently binding one request's IUserContext to every future call.
+// ^ UserService is singleton-owned; its deps resolve relative to the singleton
+//   frame, which has no ENCLOSING "request" frame (request is a descendant). So
+//   IUserContext resolves to a FRESH transient — never one request's instance
+//   bound to every future call.
 ```
 
-The throw is the feature. Misconfiguration is detected at the first resolve, not discovered weeks later when stale state starts producing wrong results.
+The fresh transient is the safe outcome. The construct-relative-to-owner rule makes cache-capture structurally impossible, with no misconfiguration to discover weeks later.
 
 ---
 
@@ -157,7 +166,8 @@ services.add<IGreeter>(Greeter).as<"singleton">();
 ### Create scopes and resolve
 
 ```ts
-const root = services.build();
+// build() is frameless — open the "singleton" scope so singletons cache.
+const root = services.build().createScope("singleton");
 
 const greeter = root.resolve<IGreeter>("pkg:IGreeter");
 greeter.greet("world"); // Hello, world!
@@ -173,7 +183,7 @@ await using _ = root; // uses native Symbol.asyncDispose (TypeScript 5.2+)
 | Package | Responsibility |
 |---|---|
 | [`@fnioc/core`](packages/core) | Immutable substrate: `Token`, `DepSlot`, `FactoryRef`, `ScopeRef`, `Union`, `union`, `Inject`, `ABI_VERSION`, `defineDeps`, `@signature`, `forCtor`. The ABI both `di` and `transformer` build on. |
-| [`@fnioc/di`](packages/di) | Runtime engine: `DiBuilder<Scopes>`, scope chain, resolution, captive-dependency protection, disposal, `useFactory`/`useValue`. Re-exports the `@fnioc/core` authoring surfaces. |
+| [`@fnioc/di`](packages/di) | Runtime engine: `DiBuilder<Scopes>`, uniform scope tags, frameless `build()`, resolution with transient fallback, captive-dependency protection, disposal, `useFactory`/`useValue`. Re-exports the `@fnioc/core` authoring surfaces. |
 | [`@fnioc/transformer`](packages/transformer) | Build-time ts-patch plugin: token derivation, dep extraction, `defineDeps` emission, registration lowering, factory-signature diagnostics. Re-exports `Inject`. |
 
 ```

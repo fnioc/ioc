@@ -51,7 +51,7 @@ let handFedConfigRuns = 0;
 const theThunk = () => "thunk-result";
 
 /** Build the identical graph WITHOUT the transformer — the plugin-less path. */
-function buildHandFed(): DiBuilder<"singleton", "request"> {
+function buildHandFed(): DiBuilder<"singleton" | "request"> {
   handFedConfigRuns = 0;
 
   // Path 2: hand-feed each class's ctor signature (forCtor / signature). These
@@ -67,7 +67,7 @@ function buildHandFed(): DiBuilder<"singleton", "request"> {
   // The transformer emits `{ type: IReport-token, params: [ILogger-token] }`.
   forCtor(ReportFactory).signature({ type: T.report, params: [T.logger] });
 
-  const services = new DiBuilder<"singleton", "request">();
+  const services = new DiBuilder<"singleton" | "request">();
   services.add(T.logger, ConsoleLogger).as("singleton");
   services.add(T.db, SqlDb).as("singleton");
   services.add(T.repo, SqlUserRepo).as("request");
@@ -93,11 +93,11 @@ function buildHandFed(): DiBuilder<"singleton", "request"> {
 describe("progressive-enhancement parity — hand-fed graph (no transformer)", () => {
   test("the hand-fed graph resolves the same wiring + scoping as the compiled one", () => {
     const services = buildHandFed();
-    const root = services.build();
+    const root = services.build().createScope("singleton");
     const reqA = root.createScope("request");
     const reqB = root.createScope("request");
 
-    // Singleton chain: repo holds the root-owned logger + db.
+    // Singleton chain: repo holds the singleton-frame-owned logger + db.
     const repo = reqA.resolve<{ logger: object; db: object; find: (n: number) => string }>(T.repo);
     expect(root.resolve<object>(T.logger)).toBe(repo.logger);
     expect(root.resolve<object>(T.db)).toBe(repo.db);
@@ -128,7 +128,7 @@ describe("progressive-enhancement parity — hand-fed graph (no transformer)", (
 
   test("async config parity: singleton caches the Promise; factory runs once", async () => {
     const services = buildHandFed();
-    const root = services.build();
+    const root = services.build().createScope("singleton");
 
     const p1 = root.resolve<Promise<{ endpoint: string }>>(T.config);
     const p2 = root.resolve<Promise<{ endpoint: string }>>(T.config);

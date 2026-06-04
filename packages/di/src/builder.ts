@@ -1,5 +1,5 @@
 // The registration builder. Holds the base token → registration list map and
-// mints the root ServiceProvider. Three registration surfaces:
+// builds the ServiceProvider. Three registration surfaces:
 //   - `add`        — a class (its ctor deps are injected),
 //   - `addFactory` — a factory function (its call-param deps are injected),
 //   - `addValue`   — an already-built instance (no deps, no lifetime).
@@ -13,7 +13,7 @@
 import type { Token } from "@fnioc/core";
 import type { Func } from "@rhombus-toolkit/func";
 
-import { Scope, ServiceProvider } from "./scope.js";
+import { ServiceProvider } from "./scope.js";
 import type {
   ClassRegistration,
   Ctor,
@@ -29,7 +29,7 @@ import type {
  * trailing `.as()` leaves the registration scopeless ⇒ transient.
  *
  * `Scopes` is threaded so `.as()` only accepts a declared scope name —
- * compile-time captive-misconfiguration guard at the registration site.
+ * compile-time guard at the registration site.
  */
 export interface AddBuilder<Scopes extends string> {
   /**
@@ -49,24 +49,24 @@ export interface AddBuilder<Scopes extends string> {
 /**
  * The registration builder.
  *
- * `Root` is the root scope's name (the app-lifetime tag singletons bind to);
- * `Children` is the union of declarable child-scope names. The scopes
- * `.as()`/`.createScope` accept are `Root | Children`. `"transient"` is NOT a
- * member — transient is the absence of a scope, not a scope.
+ * `Scopes` is the union of declarable scope names — the tags `.as()` and
+ * `.createScope()` accept (default `"singleton"`). There is no root: scopes are
+ * uniform tags, and `"singleton"` is just a tag you happen to open once at the
+ * top. `"transient"` is NOT a member — transient is the absence of a scope, not
+ * a scope. A registration whose tagged scope is not open at resolution time
+ * resolves transiently (fresh instance, no cache).
  *
  * @example
  * ```ts
- * const services = new DiBuilder<"singleton", "request">();
+ * const services = new DiBuilder<"singleton" | "request">();
  * services.add("pkg:ILogger", ConsoleLogger).as("singleton"); // lowered form
- * const root = services.build();                  // mints the "singleton" root
- * const logger = root.resolve<ILogger>("pkg:ILogger");
- * const req = root.createScope("request");        // nested child scope
+ * const provider = services.build();              // no frame pre-opened
+ * const app = provider.createScope("singleton");  // open the singleton frame
+ * const logger = app.resolve<ILogger>("pkg:ILogger");
+ * const req = app.createScope("request");         // nested child scope
  * ```
  */
-export class DiBuilder<
-  Root extends string = "singleton",
-  Children extends string = never,
-> {
+export class DiBuilder<Scopes extends string = "singleton"> {
   /**
    * The service collection: each token maps to a LIST of registrations in
    * registration order. Registering a token appends; resolution picks the
@@ -75,17 +75,7 @@ export class DiBuilder<
    */
   readonly #registrations = new Map<Token, Registration[]>();
 
-  /**
-   * The root scope's runtime name. `Root` is erased at runtime, so the name is
-   * captured at construction (defaulting to `"singleton"`, matching the `Root`
-   * default). Most callers never set it — the default covers the common
-   * `DiBuilder<"singleton", …>` case; pass it only when `Root` is non-default.
-   */
-  readonly #rootName: Root | "singleton";
-
-  public constructor(rootName?: Root) {
-    this.#rootName = rootName ?? "singleton";
-  }
+  public constructor() {}
 
   /** Appends a registration to `token`'s list, creating the list on first use. */
   #append(token: Token, registration: Registration): void {
@@ -106,11 +96,11 @@ export class DiBuilder<
   #appendScoped(
     token: Token,
     base: ClassRegistration | FactoryRegistration,
-  ): AddBuilder<Root | Children> {
+  ): AddBuilder<Scopes> {
     this.#append(token, base);
     const append = (next: Registration): void => this.#append(token, next);
     return {
-      as<S extends Root | Children>(scope?: S): void {
+      as<S extends Scopes>(scope?: S): void {
         // The lowered form always passes a value arg; the authored type-arg-only
         // form never executes (the transformer rewrites it first). A no-arg call
         // at runtime would leave the registration transient — guard so it is a
@@ -126,13 +116,13 @@ export class DiBuilder<
    * runtime form: what the transformer emits for a class, and what a
    * plugin-less caller writes directly. Returns the `.as(scope?)` continuation.
    */
-  public add(token: Token, ctor: Ctor): AddBuilder<Root | Children>;
+  public add(token: Token, ctor: Ctor): AddBuilder<Scopes>;
   public add(
     ...args:
       | [ctor: Ctor<any[], unknown>]
       | [factory: Func<any[], unknown>]
       | [token: Token, ctor: Ctor]
-  ): AddBuilder<Root | Children> {
+  ): AddBuilder<Scopes> {
     // Only the two-arg string-token form reaches the engine at runtime. The
     // single-arg authoring overloads never run post-transform; guard defensively
     // so a hand-written type-form call fails loud rather than registering junk.
@@ -166,11 +156,11 @@ export class DiBuilder<
   public addFactory(
     token: Token,
     factory: Func<[Resolver], unknown>,
-  ): AddBuilder<Root | Children>;
+  ): AddBuilder<Scopes>;
   public addFactory(
     token: Token,
     factory: Factory,
-  ): AddBuilder<Root | Children> {
+  ): AddBuilder<Scopes> {
     return this.#appendScoped(token, {
       kind: "factory",
       factory,
@@ -201,12 +191,19 @@ export class DiBuilder<
   }
 
   /**
-   * Mints the root ServiceProvider with a SEALED copy of the registration map.
+   * Builds the ServiceProvider with a SEALED copy of the registration map.
    * Sealing (deep-freezing the map and each per-token list) ensures that any
-   * `.add()` call on the builder after `build()` cannot mutate what the root
-   * and its descendants see — the container's view is fixed at construction time.
+   * `.add()` call on the builder after `build()` cannot mutate what the
+   * provider and its descendants see — the container's view is fixed at
+   * construction time.
+   *
+   * NO frame is pre-opened: the returned provider is frameless. There is no
+   * root scope — resolving a tagged registration with no matching frame open
+   * yields a transient instance, and an untagged registration is transient as
+   * always. Open a scope explicitly with `createScope(name)` when you want a
+   * tagged registration to cache.
    */
-  public build(): ServiceProvider<Root | Children> {
+  public build(): ServiceProvider<Scopes> {
     // Deep-copy the registrations so post-build builder mutations can't affect
     // the sealed map. Each per-token list is frozen independently.
     const sealed = new Map<Token, Registration[]>();
@@ -215,10 +212,8 @@ export class DiBuilder<
     }
     Object.freeze(sealed);
 
-    const rootFrame = new Scope(this.#rootName as string);
-    return new ServiceProvider<Root | Children>(
+    return new ServiceProvider<Scopes>(
       sealed as ReadonlyMap<Token, Registration[]>,
-      rootFrame,
     );
   }
 }

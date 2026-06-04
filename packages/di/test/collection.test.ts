@@ -4,8 +4,8 @@ import { T } from "./fixtures.js";
 
 // The redesigned registration surface: the service collection
 // (Map<Token, Registration[]>) with last-wins resolution, the three `add`
-// shapes (class / useFactory / useValue), and `build()` minting the root with
-// nested `createScope` children.
+// shapes (class / useFactory / useValue), and `build()` returning a frameless
+// provider from which scopes are opened with `createScope`.
 
 describe("service collection — last-wins over a retained list", () => {
   test("the most-recent class registration wins", () => {
@@ -53,7 +53,7 @@ describe("service collection — last-wins over a retained list", () => {
   });
 
   test("multiple builder registrations for the same token — last-wins", () => {
-    const services = new DiBuilder<"singleton", "request">();
+    const services = new DiBuilder<"singleton" | "request">();
     services.addValue(T.Config, "v1");
     services.addValue(T.Config, "v2");
     services.addValue(T.Config, "v3");
@@ -75,7 +75,7 @@ describe("the three add shapes", () => {
     const services = new DiBuilder<"singleton">();
     services.add(T.Service, Svc).as("singleton");
 
-    const root = services.build();
+    const root = services.build().createScope("singleton");
     expect(root.resolve<Svc>(T.Service)).toBe(root.resolve<Svc>(T.Service));
   });
 
@@ -87,10 +87,10 @@ describe("the three add shapes", () => {
     services.add(T.Db, Dep).as("singleton");
     services.addFactory(T.Service, (s) => ({ dep: s.resolve<Dep>(T.Db) })).as("singleton");
 
-    const root = services.build();
+    const root = services.build().createScope("singleton");
     const a = root.resolve<{ dep: Dep }>(T.Service);
     const b = root.resolve<{ dep: Dep }>(T.Service);
-    expect(a).toBe(b); // .as("singleton") caches the result
+    expect(a).toBe(b); // .as("singleton") caches the result in the open singleton frame
     expect(a.dep).toBeInstanceOf(Dep);
   });
 
@@ -114,34 +114,36 @@ describe("the three add shapes", () => {
   });
 });
 
-describe("build() root + nested createScope", () => {
-  test("build() mints the root named by Root (default 'singleton')", () => {
+describe("build() frameless provider + opened scopes", () => {
+  test("build() returns a frameless provider — .name throws until a scope is opened", () => {
     const services = new DiBuilder<"singleton">();
     services.add(T.Logger, class L {}).as("singleton");
-    const root = services.build();
-    expect(root.name).toBe("singleton");
+    const provider = services.build();
+    expect(() => provider.name).toThrow();
+    // Opening a scope gives the frame a name.
+    expect(provider.createScope("singleton").name).toBe("singleton");
   });
 
-  test("build() honours an explicit non-default Root name at runtime", () => {
+  test("a scope opened from build() takes the name it was created with", () => {
     class App {
       public readonly kind = "app";
     }
-    const services = new DiBuilder<"app", "request">("app");
+    const services = new DiBuilder<"app" | "request">();
     services.add(T.Service, App).as("app");
 
-    const root = services.build();
-    expect(root.name).toBe("app");
-    expect(root.resolve<App>(T.Service)).toBeInstanceOf(App);
+    const app = services.build().createScope("app");
+    expect(app.name).toBe("app");
+    expect(app.resolve<App>(T.Service)).toBeInstanceOf(App);
   });
 
-  test("child scopes nest from the root via createScope", () => {
+  test("child scopes nest from an opened scope via createScope", () => {
     class Req {
       public readonly id = Math.random();
     }
-    const services = new DiBuilder<"singleton", "request">();
+    const services = new DiBuilder<"singleton" | "request">();
     services.add(T.Service, Req).as("request");
 
-    const root = services.build();
+    const root = services.build().createScope("singleton");
     const reqA = root.createScope("request");
     const reqB = root.createScope("request");
 
@@ -151,18 +153,53 @@ describe("build() root + nested createScope", () => {
     );
   });
 
-  test("the root name is a usable .as() target (singletons bind to it)", () => {
+  test("an opened 'singleton' scope is a usable .as() target (singletons bind to it)", () => {
     class Shared {
       public readonly id = Math.random();
     }
-    const services = new DiBuilder<"singleton", "request">();
+    const services = new DiBuilder<"singleton" | "request">();
     services.add(T.Service, Shared).as("singleton");
 
-    const root = services.build();
+    const root = services.build().createScope("singleton");
     const deep = root.createScope("request").createScope("request");
-    // Owned by the root "singleton" scope, shared across the whole subtree.
+    // Owned by the open "singleton" scope, shared across the whole subtree.
     expect(deep.resolve<Shared>(T.Service)).toBe(
       root.resolve<Shared>(T.Service),
     );
+  });
+
+  test("a 'singleton'-tagged registration resolved off the FRAMELESS provider is transient", () => {
+    class Shared {
+      public readonly id = Math.random();
+    }
+    const services = new DiBuilder<"singleton">();
+    services.add(T.Service, Shared).as("singleton");
+
+    const provider = services.build(); // no scope opened
+    // No "singleton" frame is open ⇒ fresh instance per resolve, never cached.
+    expect(provider.resolve<Shared>(T.Service)).not.toBe(
+      provider.resolve<Shared>(T.Service),
+    );
+  });
+});
+
+describe("DiBuilder type + construction surface", () => {
+  test("(d) the DiBuilder constructor takes no arguments", () => {
+    // Zero-arg ctor: there is no rootName param — scopes are just tags.
+    expect(new DiBuilder().build).toBeInstanceOf(Function);
+    expect(DiBuilder.length).toBe(0); // declared ctor arity is 0
+  });
+
+  test("(e) a single scope-union generic governs .as() and createScope() tags", () => {
+    // One generic param `Scopes`; both `.as(...)` and `createScope(...)` accept
+    // exactly its members. This compiles only because the surface is single-param.
+    const services = new DiBuilder<"singleton" | "request">();
+    services.add(T.Service, class S { public readonly id = Math.random(); }).as("request");
+
+    const provider = services.build();
+    const req = provider.createScope("request");
+    const a = req.resolve<{ id: number }>(T.Service);
+    const b = req.resolve<{ id: number }>(T.Service);
+    expect(a).toBe(b); // request tag cached in the open request frame
   });
 });

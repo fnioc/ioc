@@ -1,46 +1,42 @@
 import { test, expect, describe } from "bun:test";
 import {
   DiBuilder,
-  MissingScopeError,
   CircularDependencyError,
   defineDeps,
   signature,
 } from "@fnioc/di";
 
-// Coverage 4 (captive dependency / §5.4), 5 (cycle detection), 9 (greedy
-// overload selection). Each drives the engine through the ABI the transformer
-// would emit, hand-fed so the rule under test is isolated from the compile step.
+// Coverage 4 (uniform-tag transient fallback / §5.4 owning-scope rule), 5 (cycle
+// detection), 9 (greedy overload selection). Each drives the engine through the
+// ABI the transformer would emit, hand-fed so the rule under test is isolated
+// from the compile step.
 
-// ── Coverage 4: captive dependency (§5.4 owning-scope rule) ───────────────────
+// ── Coverage 4: a singleton can't CACHE-CAPTURE a request-scoped service ──────
 
-describe("captive dependency — a singleton may not depend on a request-scoped service", () => {
-  test("resolving the singleton throws MissingScopeError with an informative message", () => {
-    class RequestThing {}
+describe("uniform-tag fallback — a singleton holding a request-scoped dep gets a fresh transient", () => {
+  test("the singleton caches in its open frame; its request-tagged dep (no enclosing request frame) is transient, never captured", () => {
+    class RequestThing {
+      public readonly id = Math.random();
+    }
     class SingletonService {
       public constructor(public readonly thing: RequestThing) {}
     }
     defineDeps(RequestThing, [[]]);
     defineDeps(SingletonService, [["req:thing"]]);
 
-    const services = new DiBuilder<"singleton", "request">();
+    const services = new DiBuilder<"singleton" | "request">();
     services.add("req:thing", RequestThing).as("request");
     services.add("app:service", SingletonService).as("singleton");
 
-    const root = services.build();
-    // The singleton's deps resolve relative to the OWNING (root) scope, where no
-    // "request" ancestor exists — so the request-scoped dep cannot be captured.
-    let caught: unknown;
-    try {
-      root.resolve("app:service");
-    } catch (e) {
-      caught = e;
-    }
-    expect(caught).toBeInstanceOf(MissingScopeError);
-    const message = (caught as Error).message;
-    expect(message).toContain("req:thing");
-    expect(message).toContain('"request"');
-    // The message explains the captive-dependency cause.
-    expect(message).toMatch(/longer-lived service depends on a .*shorter-lived/);
+    const app = services.build().createScope("singleton");
+    // SingletonService is owned by the singleton frame; its "request"-tagged dep
+    // has no ENCLOSING request frame there, so the dep resolves TRANSIENTLY — a
+    // fresh instance, never a cached request instance. No throw: scopes are
+    // uniform tags, and an absent frame is simply transient.
+    const a = app.resolve<SingletonService>("app:service");
+    const b = app.resolve<SingletonService>("app:service");
+    expect(a).toBe(b); // the singleton itself caches in the open singleton frame
+    expect(a.thing).toBeInstanceOf(RequestThing);
   });
 
   test("the SAME service resolves cleanly when its dependency shares the singleton lifetime", () => {
@@ -55,7 +51,7 @@ describe("captive dependency — a singleton may not depend on a request-scoped 
     services.add("app:dep", Dep).as("singleton");
     services.add("app:service", Service).as("singleton");
 
-    const svc = services.build().resolve<Service>("app:service");
+    const svc = services.build().createScope("singleton").resolve<Service>("app:service");
     expect(svc.dep).toBeInstanceOf(Dep);
   });
 });
