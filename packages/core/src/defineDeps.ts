@@ -108,7 +108,7 @@ function signaturesEqual(a: readonly DepSlot[], b: readonly DepSlot[]): boolean 
 }
 
 /**
- * The single write path into the global WeakMap.
+ * The single write path into the global-symbol Map.
  *
  * Both the transformer-emitted code and `@signature` / `forCtor` funnel through
  * this function. No other code writes to the store.
@@ -144,7 +144,7 @@ export function defineDeps(
 
 /**
  * Reads the dependency metadata for a constructor or factory function from the
- * global WeakMap.
+ * global-symbol Map.
  *
  * Returns `undefined` when no metadata has been registered for `target`.
  * Keyed by the exact target — a subclass does NOT inherit the parent's

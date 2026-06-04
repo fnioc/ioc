@@ -21,16 +21,6 @@ export type Token = string;
 
 ---
 
-## `ABI_VERSION`
-
-```ts
-export const ABI_VERSION = 1;
-```
-
-A coarse integer compatibility guard for the global WeakMap. Bumped only on an actual wire-format break — rarer than a `@fnioc/core` semver major. Different `ABI_VERSION` values produce different global keys and therefore isolated WeakMaps; `core@1` and a hypothetical `core@2` coexist without interference.
-
----
-
 ## `FactoryRef`
 
 Marks a constructor parameter to be injected as a factory rather than a resolved instance.
@@ -133,11 +123,10 @@ There is no hole sentinel. An unregistered token slot is caller-supplied by defi
 
 ## `DepRecord`
 
-Per-constructor metadata stored in the global WeakMap.
+Per-constructor metadata stored in the global-symbol Map.
 
 ```ts
 export interface DepRecord {
-  readonly abi: number;
   readonly signatures: readonly (readonly DepSlot[])[];
 }
 ```
@@ -175,7 +164,7 @@ Used by `@fnioc/di` during resolution. Returns `undefined` if no record has been
 
 ## `@signature` decorator
 
-A TC39 class decorator (not legacy `experimentalDecorators`). Writes one signature into the WeakMap by calling `defineDeps`.
+A TC39 class decorator (not legacy `experimentalDecorators`). Writes one signature into the global-symbol Map by calling `defineDeps`.
 
 ```ts
 export function signature(
@@ -228,27 +217,29 @@ For a third-party class where you need to override specific positions without re
 
 ---
 
-## Global-symbol WeakMap
+## Global-symbol Map
 
-The dep-metadata store is a `WeakMap<Function, DepRecord>` anchored on `globalThis` under a version-suffixed `Symbol.for` key:
+The dep-metadata store is a plain `Map<DepTarget, DepRecord>` anchored on `globalThis` under a fixed `Symbol.for` key:
 
 ```ts
-const KEY = Symbol.for(`@fnioc/core:deps@${ABI_VERSION}`);
-const deps: WeakMap<Function, DepRecord> =
-  (globalThis as any)[KEY] ??= new WeakMap();
+const KEY: unique symbol = Symbol.for("fnioc:deps");
+const store: Map<DepTarget, DepRecord> =
+  (globalThis as any)[KEY] ??= new Map();
 ```
 
-**Why `Symbol.for`, never `Symbol()`:** a unique symbol would create separate maps if two copies of `@fnioc/core` end up in the same runtime (the dual-package hazard — deduplication failures, monorepos, certain bundler configurations). `Symbol.for` keys are global-registry entries; two copies of `@fnioc/core@1` at the same `ABI_VERSION` will find the same symbol and the same WeakMap, so metadata written through either copy is visible to both.
+**Why a regular Map and not a WeakMap:** every key is a constructor or factory function that is pinned for the module's lifetime — a class is a module binding, an `@signature`/`forCtor` target is a named declaration, and a transformer-lowered factory is hoisted into a module-level `const`. No key ever becomes unreachable, so a WeakMap could never collect an entry — its weakness would be pure ceremony. DI metadata is registered once at startup and lives for the process by design, so a plain Map's non-collection is correct, not a leak.
+
+**Why `Symbol.for`, never `Symbol()`:** a unique symbol would create separate maps if two copies of `@fnioc/core` end up in the same runtime (the dual-package hazard — deduplication failures, monorepos, certain bundler configurations). `Symbol.for` keys are global-registry entries; two copies of `@fnioc/core` will find the same symbol and the same Map, so metadata written through either copy is visible to both.
 
 **What is globalized:** only the immutable, app-agnostic dep-metadata (the `DepRecord` entries keyed by constructor function). The container itself (`DiBuilder`, scope instances) is per-instance — not globalized.
 
-**`@fnioc/core` as a peer dependency:** declare it as a peer dep (not a regular dep) in packages that depend on it. This keeps deduplication predictable and prevents version skew from silently fragmenting the WeakMap.
+**`@fnioc/core` as a peer dependency:** declare it as a peer dep (not a regular dep) in packages that depend on it. This keeps deduplication predictable and prevents version skew from silently fragmenting the Map.
 
 ---
 
 ## Versioning
 
-`@fnioc/core` is versioned independently via release-please (semver). `ABI_VERSION` is a separate integer bumped only on an actual wire-format break — it is not tied to the semver major. A semver patch that fixes a bug in `defineDeps` does not bump `ABI_VERSION`. A change that alters the `DepRecord` shape or the WeakMap key format does.
+`@fnioc/core` is versioned independently via release-please (semver). The global-symbol key (`Symbol.for("fnioc:deps")`) is fixed — it does not change between versions. The dep-metadata format (`DepRecord`) is kept backward-compatible across `core` semver minors; a breaking change to the wire format would require a coordinated update across all packages.
 
 ---
 
@@ -257,16 +248,15 @@ const deps: WeakMap<Function, DepRecord> =
 | Export | Kind | Description |
 |---|---|---|
 | `Token` | Type alias | `string` — the DI key type. |
-| `ABI_VERSION` | Constant | Integer compatibility guard for the global WeakMap. |
 | `FactoryRef` | Interface | `{ type: Token; params?: readonly Token[] }` — factory-injected parameter slot. |
 | `ScopeRef` | Interface | `{ scope: true }` — live resolution scope slot. |
 | `Union` | Interface | `{ union: readonly DepSlot[] }` — member-level alternatives. |
 | `union` | Function | Construct a `Union` slot from variadic `DepSlot` args. |
 | `Inject` | Type alias | Phantom brand — pins a token for one param without changing the value type. |
 | `DepSlot` | Type alias | `Token \| FactoryRef \| ScopeRef \| Union` — one positional slot in a signature. |
-| `DepRecord` | Interface | `{ abi, signatures }` — per-constructor metadata shape. |
-| `defineDeps` | Function | Write dep metadata into the global WeakMap. |
-| `getDeps` | Function | Read dep metadata from the global WeakMap. |
+| `DepRecord` | Interface | `{ signatures }` — per-constructor metadata shape. |
+| `defineDeps` | Function | Write dep metadata into the global-symbol Map. |
+| `getDeps` | Function | Read dep metadata from the global-symbol Map. |
 | `signature` | Decorator | TC39 class decorator — hand-annotate a class's signature. |
 | `forCtor` | Function | Fluent alternative to `@signature` for classes you don't own. |
 | `ForCtorBuilder` | Interface | Return type of `forCtor`. |

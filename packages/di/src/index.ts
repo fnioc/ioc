@@ -3,7 +3,7 @@
 // Consumes the plain-data ABI emitted by @fnioc/transformer (or hand-fed via
 // @fnioc/core's authoring surfaces) and resolves the dependency graph. Never
 // touches a TypeScript type — works purely on string tokens and the positional
-// DepRecord signatures in the global WeakMap.
+// DepRecord signatures in the global-symbol Map.
 //
 // Phase 2A scope: registration, the scope chain + scoped lifetimes, resolution
 // (a tag whose frame is not open resolves transiently), greedy signature

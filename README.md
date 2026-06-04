@@ -182,7 +182,7 @@ await using _ = root; // uses native Symbol.asyncDispose (TypeScript 5.2+)
 
 | Package | Responsibility |
 |---|---|
-| [`@fnioc/core`](packages/core) | Immutable substrate: `Token`, `DepSlot`, `FactoryRef`, `ScopeRef`, `Union`, `union`, `Inject`, `ABI_VERSION`, `defineDeps`, `@signature`, `forCtor`. The ABI both `di` and `transformer` build on. |
+| [`@fnioc/core`](packages/core) | Immutable substrate: `Token`, `DepSlot`, `FactoryRef`, `ScopeRef`, `Union`, `union`, `Inject`, `defineDeps`, `@signature`, `forCtor`. The ABI both `di` and `transformer` build on. |
 | [`@fnioc/di`](packages/di) | Runtime engine: `DiBuilder<Scopes>`, uniform scope tags, frameless `build()`, resolution with transient fallback, captive-dependency protection, disposal, `useFactory`/`useValue`. Re-exports the `@fnioc/core` authoring surfaces. |
 | [`@fnioc/transformer`](packages/transformer) | Build-time ts-patch plugin: token derivation, dep extraction, `defineDeps` emission, registration lowering, factory-signature diagnostics. Re-exports `Inject`. |
 
