@@ -8,7 +8,7 @@
 // the plugin in the ABI / factory / overload tests; its behaviour is reproduced
 // WITHOUT the plugin (hand-fed tokens) in the parity test.
 
-import { DiBuilder } from "@fnioc/di";
+import { ServiceManifest } from "@fnioc/di";
 import type {
   IConfig,
   IConfigConsumer,
@@ -34,7 +34,7 @@ import {
   ThunkConsumer,
 } from "./services.js";
 
-/** The declarable scope tags — the single `Scopes` type arg to `DiBuilder`. */
+/** The declarable scope tags — the single `Scopes` type arg to `ServiceManifest`. */
 export type SampleScopes = "singleton" | "request";
 
 /** The token the di engine uses for the async config registration. */
@@ -60,7 +60,7 @@ export function makeConfig(): Promise<IConfig> {
   return Promise.resolve({ endpoint: "https://db.example/api" });
 }
 
-export const services = new DiBuilder<SampleScopes>();
+export const services = new ServiceManifest<SampleScopes>();
 
 // Type-driven registrations — TOP-LEVEL so the transformer lowers each type arg
 // to a string token and injects a `defineDeps(C, [...])` prelude per class.

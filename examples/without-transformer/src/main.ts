@@ -16,7 +16,7 @@
 //   4. `forCtor(ThirdParty).signature(...)` — complete manual signature for a
 //      class you do not own (no @signature decorator, no transformer).
 
-import { DiBuilder, forCtor, union } from "@fnioc/di";
+import { ServiceManifest, forCtor, union } from "@fnioc/di";
 
 import {
   ConsoleLogger,
@@ -57,7 +57,7 @@ forCtor(ThirdPartyFormatter).signature(LOGGER, CLOCK);
 // `singleton` and `request` are the two scope tags this app opens. There is no
 // root: scopes are uniform tags, and `singleton` is just the one we open once at
 // the top (below, via `createScope("singleton")`) for app-lifetime instances.
-const services = new DiBuilder<"singleton" | "request">();
+const services = new ServiceManifest<"singleton" | "request">();
 
 services.add(LOGGER, ConsoleLogger).as("singleton");
 services.add(CLOCK, SystemClock).as("singleton");

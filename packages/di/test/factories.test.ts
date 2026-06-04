@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { DiBuilder, FactoryTargetError } from "@fnioc/di";
+import { ServiceManifest, FactoryTargetError } from "@fnioc/di";
 import { defineDeps } from "@fnioc/core";
 import type { FactoryRef } from "@fnioc/core";
 import { T } from "./fixtures.js";
@@ -54,7 +54,7 @@ describe("bare zero-arg factory", () => {
     }
     defineDeps(Holder, [[factoryOf(T.Service)]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Service, Foo).as("singleton"); // Foo is a singleton
     services.add(T.Repo, Holder).as("singleton");
 
@@ -74,7 +74,7 @@ describe("bare zero-arg factory", () => {
     }
     defineDeps(Holder, [[factoryOf(T.Service)]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Service, Foo); // untagged ⇒ transient
     services.add(T.Repo, Holder).as("singleton");
 
@@ -108,7 +108,7 @@ describe("parameterized factory", () => {
     // FactoryRef with params — the factory exposes T_NAME as its single arg.
     defineDeps(Holder, [[factoryOf(T.Service, [T_NAME])]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.A, Dep).as("singleton");
     services.add(T.Service, Greeter).as("singleton"); // tag irrelevant — parameterized bypasses cache
     // T_NAME deliberately NOT registered; it is caller-supplied.
@@ -146,7 +146,7 @@ describe("parameterized factory", () => {
     // Factory params list = [T_B2, T_D4] — authored order is the call arg order.
     defineDeps(Holder, [[factoryOf(T.Service, [T_B2, T_D4])]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.A, class A {}).as("singleton");
     services.add(T.B, class B {}).as("singleton");
     services.add(T.C, class C {}).as("singleton");
@@ -181,7 +181,7 @@ describe("parameterized factory", () => {
     // Both T.A and T_EXTRA are listed as caller params.
     defineDeps(Holder, [[factoryOf(T.Service, [T.A, T_EXTRA])]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.A, Dep).as("singleton"); // registered, but params claim it
     services.add(T.Service, Pair).as("singleton");
     // T_EXTRA NOT registered.
@@ -235,7 +235,7 @@ describe("transformer-emitted params: declared named-service param → caller wi
     defineDeps(Holder, [[factoryOf(T_REPO, [T_LOGGER])]]);
 
     const registeredLogger = new Logger("registered");
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.addValue(T_LOGGER, registeredLogger); // registered, but params claim it
     services.add(T_REPO, Repo).as("singleton");
     services.add(T_HOLDER, Holder).as("singleton");
@@ -268,7 +268,7 @@ describe("§5.4 — owning-scope rule holds for factory targets", () => {
     }
     defineDeps(Holder, [[factoryOf(T.Service)]]);
 
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new ServiceManifest<"singleton" | "request">();
     services.add(T.Service, Foo).as("request"); // request-scoped target
     services.add(T.Repo, Holder).as("singleton"); // singleton holds the factory
 
@@ -295,7 +295,7 @@ describe("§5.4 — owning-scope rule holds for factory targets", () => {
     }
     defineDeps(Holder, [[factoryOf(T.Service)]]);
 
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new ServiceManifest<"singleton" | "request">();
     services.add(T.Service, Foo).as("request");
     services.add(T.Repo, Holder).as("request"); // holder is request-scoped now
 
@@ -314,7 +314,7 @@ describe("factory target errors", () => {
     }
     defineDeps(Holder, [[factoryOf(T.Service)]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     // T.Service (the factory target) deliberately NOT registered.
     services.add(T.Repo, Holder).as("singleton");
 
@@ -339,7 +339,7 @@ describe("factory target errors", () => {
     }
     defineDeps(Holder, [[factoryOf(T.Service)]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.addValue(T.Service, storedFoo);
     services.add(T.Repo, Holder).as("singleton");
 

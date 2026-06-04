@@ -18,10 +18,10 @@
 // link), and `ServiceProvider` is the public container surface implementing
 // `Resolver` + `ScopeFactory` + Disposable.
 
-export { DiBuilder, DiBuilderClass } from "./builder.js";
+export { ServiceManifest, ServiceManifestClass } from "./builder.js";
 export type {
   AddBuilder,
-  DiBuilderCtor,
+  ServiceManifestCtor,
   ProperCase,
   ScopeAddAuthoring,
   ScopeAddMethods,

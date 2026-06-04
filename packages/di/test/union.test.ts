@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { DiBuilder, NoSatisfiableUnionError, NoSatisfiableSignatureError } from "@fnioc/di";
+import { ServiceManifest, NoSatisfiableUnionError, NoSatisfiableSignatureError } from "@fnioc/di";
 import { defineDeps, union } from "@fnioc/core";
 import type { FactoryRef } from "@fnioc/core";
 import { T } from "./fixtures.js";
@@ -34,7 +34,7 @@ describe("FactoryRef.type field (T0 rename)", () => {
     const ref: FactoryRef = { type: T.Service };
     defineDeps(Holder, [[ref]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Service, Target).as("singleton");
     services.add(T.Repo, Holder).as("singleton");
 
@@ -52,7 +52,7 @@ describe("resolveUnion — first registered member wins", () => {
     }
     defineDeps(Consumer, [[union(T.A, T.B)]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.A, RedisImpl).as("singleton");
     services.add(T.B, MemoryCacheImpl).as("singleton");
     services.add(T.Service, Consumer).as("singleton");
@@ -67,7 +67,7 @@ describe("resolveUnion — first registered member wins", () => {
     }
     defineDeps(Consumer, [[union(T.A, T.B)]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     // T.A deliberately NOT registered — fallthrough to T.B.
     services.add(T.B, MemoryCacheImpl).as("singleton");
     services.add(T.Service, Consumer).as("singleton");
@@ -85,7 +85,7 @@ describe("resolveUnion — first registered member wins", () => {
     }
     defineDeps(Consumer, [[union(T.A, T.B)]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     // Neither T.A nor T.B registered.
     services.add(T.Service, Consumer).as("singleton");
 
@@ -118,7 +118,7 @@ describe("resolveUnion — first registered member wins", () => {
     const ref: FactoryRef = { type: T.Service, params: [T_CALLER] };
     defineDeps(Holder, [[ref]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     // Neither T_UNION_A nor T_UNION_B registered — union is exhausted at call time.
     services.add(T.Service, Target).as("singleton");
     services.add(T.Repo, Holder).as("singleton");
@@ -146,7 +146,7 @@ describe("resolveUnion — first registered member wins", () => {
     const ref: FactoryRef = { type: T.Service, params: [T_CALLER] };
     defineDeps(Holder, [[ref]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Service, Target).as("singleton");
     services.add(T.Repo, Holder).as("singleton");
 
@@ -172,7 +172,7 @@ describe("resolveUnion — first registered member wins", () => {
     // First slot: union of T.A / T.B; second slot: T.Logger (plain token).
     defineDeps(Consumer, [[union(T.A, T.B), T.Logger]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.A, RedisImpl).as("singleton");
     services.add(T.Logger, LoggerImpl).as("singleton");
     services.add(T.Service, Consumer).as("singleton");
@@ -200,7 +200,7 @@ describe("Union satisfiability in selectSignature", () => {
       [T.Logger],
     ]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.B, MemoryCacheImpl).as("singleton");
     services.add(T.Logger, LoggerImpl).as("singleton");
     services.add(T.Service, Svc).as("singleton");
@@ -226,7 +226,7 @@ describe("Union satisfiability in selectSignature", () => {
       [T.Logger],
     ]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     // Neither T.A nor T.B registered.
     services.add(T.Logger, LoggerImpl).as("singleton");
     services.add(T.Service, Svc).as("singleton");
@@ -242,7 +242,7 @@ describe("Union satisfiability in selectSignature", () => {
     }
     defineDeps(Svc, [[union(T.A, T.B)]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     // Neither registered.
     services.add(T.Service, Svc).as("singleton");
 
@@ -262,7 +262,7 @@ describe("single-member union", () => {
     }
     defineDeps(Svc, [[union(T.A)]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Service, Svc).as("singleton");
 
     expect(() => services.build().resolve(T.Service)).toThrow(
@@ -279,7 +279,7 @@ describe("single-member union", () => {
     }
     defineDeps(Svc, [[union(T.A)]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.A, ImplA).as("singleton");
     services.add(T.Service, Svc).as("singleton");
 
@@ -312,7 +312,7 @@ describe("union member composability", () => {
     defineDeps(NeedsMissing, [["union:unregistered-dep"]]);
     defineDeps(Svc, [[union(T.A, T.B)]]);
 
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new ServiceManifest<"singleton" | "request">();
     services.add(T.A, NeedsMissing); // registered, but its ctor dep is not
     services.add(T.B, TransientB); // transient — always resolvable
     services.add(T.Service, Svc);
@@ -333,7 +333,7 @@ describe("union member composability", () => {
     // union({ type: T.A }, T.B): factory-target registered → factory callable wins.
     defineDeps(Svc, [[union({ type: T.A }, T.B)]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.A, TargetClass).as("singleton");
     // T.B NOT registered — the FactoryRef member is always satisfiable, wins.
     services.add(T.Service, Svc).as("singleton");
@@ -354,7 +354,7 @@ describe("union member composability", () => {
     }
     defineDeps(Svc, [[union({ type: T.A }, T.B)]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     // T.A NOT registered → FactoryRef member not resolvable.
     services.add(T.B, FallbackB).as("singleton");
     services.add(T.Service, Svc).as("singleton");
@@ -373,7 +373,7 @@ describe("union member composability", () => {
     // union({ scope: true }, T.B): ScopeRef is always resolvable → wins.
     defineDeps(Svc, [[union({ scope: true }, T.B)]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.B, FallbackB).as("singleton");
     services.add(T.Service, Svc).as("singleton");
 
@@ -392,7 +392,7 @@ describe("union member composability", () => {
     // union(union(T.A), T.B): inner union has T.A registered → resolves.
     defineDeps(Svc, [[union(union(T.A), T.B)]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.A, ImplA).as("singleton");
     services.add(T.Service, Svc).as("singleton");
 
@@ -408,7 +408,7 @@ describe("union member composability", () => {
     }
     defineDeps(Svc, [[union(T.A, T.B)]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Service, Svc).as("singleton");
 
     let caught: NoSatisfiableSignatureError | undefined;
@@ -435,7 +435,7 @@ describe("union runtime regression pins", () => {
     // One overload: [union(T.A, T.B)].
     defineDeps(Consumer, [[union(T.A, T.B)]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.A, RedisImpl).as("singleton");
     // T.B NOT registered.
     services.add(T.Service, Consumer).as("singleton");
@@ -456,7 +456,7 @@ describe("union runtime regression pins", () => {
     }
     defineDeps(Consumer, [[union(T.A, T.B), T.Logger]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     // T.A NOT registered — fallthrough to T.B.
     services.add(T.B, MemoryCacheImpl).as("singleton");
     services.add(T.Logger, LoggerImpl).as("singleton");
@@ -475,7 +475,7 @@ describe("union runtime regression pins", () => {
     }
     defineDeps(Consumer, [[union(T.A, { value: "fallback" })]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     // T.A NOT registered — falls through to the LiteralRef.
     services.add(T.Service, Consumer).as("singleton");
 
@@ -496,7 +496,7 @@ describe("ServiceProvider.resolveFactory(type, params)", () => {
     Target.built = 0;
     defineDeps(Target, [[T.Logger]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Logger, LoggerImpl).as("singleton");
     services.add(T.Service, Target).as("singleton");
 
@@ -527,7 +527,7 @@ describe("ServiceProvider.resolveFactory(type, params)", () => {
     Greeter.built = 0;
     defineDeps(Greeter, [[T.Logger, T_NAME]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Logger, LoggerImpl).as("singleton");
     services.add(T.Service, Greeter).as("singleton");
     // T_NAME NOT registered — caller-supplied.
@@ -556,7 +556,7 @@ describe("ServiceProvider.resolveFactory(type, params)", () => {
     }
     defineDeps(Target, [[T.Logger]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Logger, LoggerImpl).as("singleton"); // registered
     services.add(T.Service, Target).as("singleton");
 
@@ -580,7 +580,7 @@ describe("ServiceProvider.resolveFactory(type, params)", () => {
     }
     defineDeps(Target, [[T.Logger, T_MISSING]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Logger, LoggerImpl).as("singleton");
     services.add(T.Service, Target).as("singleton");
     // T_MISSING NOT registered and NOT in params.
@@ -606,7 +606,7 @@ describe("ServiceProvider.resolveFactory(type, params)", () => {
     // Signature: [T.A, T_B, T.B, T_D, T.C].
     defineDeps(Wide, [[T.A, T_B, T.B, T_D, T.C]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.A, class A {}).as("singleton");
     services.add(T.B, class B {}).as("singleton");
     services.add(T.C, class C {}).as("singleton");

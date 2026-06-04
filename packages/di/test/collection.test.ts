@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { DiBuilder } from "@fnioc/di";
+import { ServiceManifest } from "@fnioc/di";
 import { T } from "./fixtures.js";
 
 // The redesigned registration surface: the service collection
@@ -18,7 +18,7 @@ describe("service collection — last-wins over a retained list", () => {
     class Third {
       public readonly which = "third";
     }
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Service, First).as("singleton");
     services.add(T.Service, Second).as("singleton");
     services.add(T.Service, Third).as("singleton");
@@ -32,7 +32,7 @@ describe("service collection — last-wins over a retained list", () => {
       public readonly which = "real";
     }
     const fake = { which: "fake" };
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Service, Real).as("singleton");
     services.addValue(T.Service, fake);
 
@@ -43,7 +43,7 @@ describe("service collection — last-wins over a retained list", () => {
     class Winner {
       public readonly which = "winner";
     }
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.addFactory(T.Service, () => ({ which: "factory" })).as("singleton");
     services.add(T.Service, Winner).as("singleton");
 
@@ -53,7 +53,7 @@ describe("service collection — last-wins over a retained list", () => {
   });
 
   test("multiple builder registrations for the same token — last-wins", () => {
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new ServiceManifest<"singleton" | "request">();
     services.addValue(T.Config, "v1");
     services.addValue(T.Config, "v2");
     services.addValue(T.Config, "v3");
@@ -72,7 +72,7 @@ describe("the three add shapes", () => {
     class Svc {
       public readonly id = Math.random();
     }
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Service, Svc).as("singleton");
 
     const root = services.build().createScope("singleton");
@@ -83,7 +83,7 @@ describe("the three add shapes", () => {
     class Dep {
       public readonly kind = "dep";
     }
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Db, Dep).as("singleton");
     services.addFactory(T.Service, (s) => ({ dep: s.resolve<Dep>(T.Db) })).as("singleton");
 
@@ -96,7 +96,7 @@ describe("the three add shapes", () => {
 
   test("value — addValue(token, value) returns the instance verbatim", () => {
     const value = { v: 1 };
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.addValue(T.Config, value);
 
     expect(services.build().resolve<typeof value>(T.Config)).toBe(value);
@@ -106,7 +106,7 @@ describe("the three add shapes", () => {
     // addValue returns void (no chaining); addFactory returns an AddBuilder.
     // Semantic change: old add(token, { useValue }) returned the builder;
     // addValue(token, value) is void by design — values have no lifetime to tag.
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     const factoryBuilder = services.addFactory(T.B, () => 2);
     expect(typeof factoryBuilder.as).toBe("function");
     // addValue is fire-and-forget: just assert it does not throw.
@@ -116,7 +116,7 @@ describe("the three add shapes", () => {
 
 describe("build() frameless provider + opened scopes", () => {
   test("build() returns a frameless provider — .name throws until a scope is opened", () => {
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Logger, class L {}).as("singleton");
     const provider = services.build();
     expect(() => provider.name).toThrow();
@@ -128,7 +128,7 @@ describe("build() frameless provider + opened scopes", () => {
     class App {
       public readonly kind = "app";
     }
-    const services = new DiBuilder<"app" | "request">();
+    const services = new ServiceManifest<"app" | "request">();
     services.add(T.Service, App).as("app");
 
     const app = services.build().createScope("app");
@@ -140,7 +140,7 @@ describe("build() frameless provider + opened scopes", () => {
     class Req {
       public readonly id = Math.random();
     }
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new ServiceManifest<"singleton" | "request">();
     services.add(T.Service, Req).as("request");
 
     const root = services.build().createScope("singleton");
@@ -157,7 +157,7 @@ describe("build() frameless provider + opened scopes", () => {
     class Shared {
       public readonly id = Math.random();
     }
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new ServiceManifest<"singleton" | "request">();
     services.add(T.Service, Shared).as("singleton");
 
     const root = services.build().createScope("singleton");
@@ -172,7 +172,7 @@ describe("build() frameless provider + opened scopes", () => {
     class Shared {
       public readonly id = Math.random();
     }
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Service, Shared).as("singleton");
 
     const provider = services.build(); // no scope opened
@@ -183,17 +183,17 @@ describe("build() frameless provider + opened scopes", () => {
   });
 });
 
-describe("DiBuilder type + construction surface", () => {
-  test("(d) the DiBuilder constructor takes no arguments", () => {
+describe("ServiceManifest type + construction surface", () => {
+  test("(d) the ServiceManifest constructor takes no arguments", () => {
     // Zero-arg ctor: there is no rootName param — scopes are just tags.
-    expect(new DiBuilder().build).toBeInstanceOf(Function);
-    expect(DiBuilder.length).toBe(0); // declared ctor arity is 0
+    expect(new ServiceManifest().build).toBeInstanceOf(Function);
+    expect(ServiceManifest.length).toBe(0); // declared ctor arity is 0
   });
 
   test("(e) a single scope-union generic governs .as() and createScope() tags", () => {
     // One generic param `Scopes`; both `.as(...)` and `createScope(...)` accept
     // exactly its members. This compiles only because the surface is single-param.
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new ServiceManifest<"singleton" | "request">();
     services.add(T.Service, class S { public readonly id = Math.random(); }).as("request");
 
     const provider = services.build();

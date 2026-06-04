@@ -30,4 +30,4 @@ before/after table.
 The transformer removes the two pieces of boilerplate the manual example writes
 by hand: the string token (derived from the interface type) and the
 constructor-dependency metadata (injected as `defineDeps(...)`). Everything
-downstream — the `DiBuilder`, scopes, lifetimes, resolution — is identical.
+downstream — the `ServiceManifest`, scopes, lifetimes, resolution — is identical.

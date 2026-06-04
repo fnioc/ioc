@@ -26,11 +26,11 @@ import type {} from "@fnioc/di";
 export type { Inject } from "@fnioc/core";
 
 declare module "@fnioc/di" {
-  // The authoring forms merge onto the IMPLEMENTATION class `DiBuilderClass`
-  // (the public `DiBuilder` is now a type alias `DiBuilderClass<S> &
+  // The authoring forms merge onto the IMPLEMENTATION class `ServiceManifestClass`
+  // (the public `ServiceManifest` is now a type alias `ServiceManifestClass<S> &
   // ScopeAddMethods<S>`, which an interface cannot merge into). The alias picks
-  // these up through its `DiBuilderClass<S>` arm.
-  interface DiBuilderClass<Scopes extends string = "singleton"> {
+  // these up through its `ServiceManifestClass<S>` arm.
+  interface ServiceManifestClass<Scopes extends string = "singleton"> {
     /**
      * Type-driven class authoring — lowers to `add("token", C)`. The ctor is
      * typed `Ctor<any[], I>` (a plain construct signature, so an abstract class

@@ -1,6 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import {
-  DiBuilder,
+  ServiceManifest,
   CircularDependencyError,
   defineDeps,
   signature,
@@ -24,7 +24,7 @@ describe("uniform-tag fallback — a singleton holding a request-scoped dep gets
     defineDeps(RequestThing, [[]]);
     defineDeps(SingletonService, [["req:thing"]]);
 
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new ServiceManifest<"singleton" | "request">();
     services.add("req:thing", RequestThing).as("request");
     services.add("app:service", SingletonService).as("singleton");
 
@@ -47,7 +47,7 @@ describe("uniform-tag fallback — a singleton holding a request-scoped dep gets
     defineDeps(Dep, [[]]);
     defineDeps(Service, [["app:dep"]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add("app:dep", Dep).as("singleton");
     services.add("app:service", Service).as("singleton");
 
@@ -69,7 +69,7 @@ describe("cycle detection — A → B → A throws with the full resolution path
     defineDeps(A, [["cy:B"]]);
     defineDeps(B, [["cy:A"]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add("cy:A", A).as("singleton");
     services.add("cy:B", B).as("singleton");
 
@@ -105,7 +105,7 @@ describe("cycle detection — A → B → A throws with the full resolution path
     defineDeps(B, [["cy3:C"]]);
     defineDeps(C, [["cy3:A"]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add("cy3:A", A).as("singleton");
     services.add("cy3:B", B).as("singleton");
     services.add("cy3:C", C).as("singleton");
@@ -135,7 +135,7 @@ describe("greedy overload selection — longest satisfiable signature wins", () 
     defineDeps(Logger, [[]]);
     defineDeps(Db, [[]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add("ov:logger", Logger).as("singleton");
     services.add("ov:db", Db).as("singleton");
     services.add("ov:multi", Multi).as("singleton");
@@ -156,7 +156,7 @@ describe("greedy overload selection — longest satisfiable signature wins", () 
     class Logger {}
     defineDeps(Logger, [[]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add("fb:logger", Logger).as("singleton");
     // fb:db is NOT registered → the 2-arg form is unsatisfiable.
     services.add("fb:multi", Multi).as("singleton");
@@ -184,7 +184,7 @@ describe("greedy overload selection — longest satisfiable signature wins", () 
     defineDeps(First, [[]]);
     defineDeps(Second, [[]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add("tie:first", First).as("singleton");
     services.add("tie:second", Second).as("singleton");
     services.add("tie:pick", Pick).as("singleton");
@@ -205,7 +205,7 @@ describe("greedy overload selection — longest satisfiable signature wins", () 
     class Logger {}
     defineDeps(Logger, [[]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add("dec:logger", Logger).as("singleton");
     // dec:db unregistered → falls back to the 1-arg overload.
     services.add("dec:decorated", Decorated).as("singleton");

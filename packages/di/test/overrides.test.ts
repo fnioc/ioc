@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { DiBuilder } from "@fnioc/di";
+import { ServiceManifest } from "@fnioc/di";
 import { T } from "./fixtures.js";
 
 // The override paths: addFactory / addValue (plugin-less mechanism). Plus
@@ -13,7 +13,7 @@ class Bar {
 describe("useValue", () => {
   test("returns the registered value verbatim, always the same reference", () => {
     const cached = { id: 42 };
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.addValue(T.Config, cached);
 
     const root = services.build();
@@ -22,7 +22,7 @@ describe("useValue", () => {
   });
 
   test("useValue resolves without any scope (no lifetime, no caching dance)", () => {
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new ServiceManifest<"singleton" | "request">();
     services.addValue(T.Config, "literal-value");
 
     const req = services.build().createScope("request");
@@ -35,7 +35,7 @@ describe("useFactory", () => {
     class Foo {
       public constructor(public readonly bar: Bar) {}
     }
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.B, Bar).as("singleton");
     services.addFactory(T.A, (c) => new Foo(c.resolve<Bar>(T.B)));
 
@@ -47,7 +47,7 @@ describe("useFactory", () => {
 
   test("an untagged factory runs on every resolve (transient)", () => {
     let calls = 0;
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.addFactory(T.Service, () => {
       calls += 1;
       return { n: calls };
@@ -62,7 +62,7 @@ describe("useFactory", () => {
 
   test("a singleton-scoped factory runs once and caches its result", () => {
     let calls = 0;
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.addFactory(T.Service, () => {
       calls += 1;
       return { n: calls };
@@ -77,7 +77,7 @@ describe("useFactory", () => {
 
   test("a request-scoped factory caches per request scope", () => {
     let calls = 0;
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new ServiceManifest<"singleton" | "request">();
     services.addFactory(T.Service, () => ({ n: ++calls })).as("request");
 
     const root = services.build();
@@ -96,7 +96,7 @@ describe("useFactory", () => {
 
 describe("async as values", () => {
   test("resolve() returns the factory's Promise synchronously (no await)", () => {
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.addFactory(T.Db, async () => ({ connected: true })).as("singleton");
 
     const root = services.build();
@@ -107,7 +107,7 @@ describe("async as values", () => {
 
   test("a singleton async factory runs once; both awaits see the same value", async () => {
     let calls = 0;
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.addFactory(T.Db, async () => {
       calls += 1;
       return { id: calls };
@@ -126,7 +126,7 @@ describe("async as values", () => {
   });
 
   test("a consumer can await an injected Promise<T> dependency", async () => {
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.addFactory(T.Db, async () => ({ query: () => "rows" })).as("singleton");
 
     const root = services.build();

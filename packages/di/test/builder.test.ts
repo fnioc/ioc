@@ -1,14 +1,14 @@
 import { test, expect, describe } from "bun:test";
-import { DiBuilder, signature, forCtor, union } from "@fnioc/di";
+import { ServiceManifest, signature, forCtor, union } from "@fnioc/di";
 import { getDeps } from "@fnioc/core";
 import { T } from "./fixtures.js";
 
 // Builder edge cases + the one-import re-export ergonomics.
 
-describe("DiBuilder.add runtime guard", () => {
+describe("ServiceManifest.add runtime guard", () => {
   test("the type-only add<I>(ctor) form throws if invoked directly at runtime", () => {
     class Foo {}
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     // The transformer lowers add<I>(ctor) → add(token, ctor). Calling the
     // single-arg form at runtime (no transform) is a misuse — fail loud.
     expect(() =>
@@ -23,7 +23,7 @@ describe("DiBuilder.add runtime guard", () => {
     class Second {
       public readonly which = "second";
     }
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Service, First).as("singleton");
     services.add(T.Service, Second).as("singleton");
 
@@ -68,7 +68,7 @@ describe("re-exports from @fnioc/core", () => {
     }
     forCtor(Consumer).signature(T.Db);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Db, DbImpl).as("singleton");
     services.add(T.Service, Consumer).as("singleton");
 

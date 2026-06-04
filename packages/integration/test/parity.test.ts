@@ -1,7 +1,7 @@
 import { test, expect, describe, beforeAll, afterAll } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { DiBuilder, forCtor, union, NoSatisfiableSignatureError } from "@fnioc/di";
+import { ServiceManifest, forCtor, union, NoSatisfiableSignatureError } from "@fnioc/di";
 import { compileWithTransformer, type CompiledProject } from "./harness.js";
 
 // Coverage 2: progressive-enhancement parity — THE headline property.
@@ -51,7 +51,7 @@ let handFedConfigRuns = 0;
 const theThunk = () => "thunk-result";
 
 /** Build the identical graph WITHOUT the transformer — the plugin-less path. */
-function buildHandFed(): DiBuilder<"singleton" | "request"> {
+function buildHandFed(): ServiceManifest<"singleton" | "request"> {
   handFedConfigRuns = 0;
 
   // Path 2: hand-feed each class's ctor signature (forCtor / signature). These
@@ -67,7 +67,7 @@ function buildHandFed(): DiBuilder<"singleton" | "request"> {
   // The transformer emits `{ type: IReport-token, params: [ILogger-token] }`.
   forCtor(ReportFactory).signature({ type: T.report, params: [T.logger] });
 
-  const services = new DiBuilder<"singleton" | "request">();
+  const services = new ServiceManifest<"singleton" | "request">();
   services.add(T.logger, ConsoleLogger).as("singleton");
   services.add(T.db, SqlDb).as("singleton");
   services.add(T.repo, SqlUserRepo).as("request");
@@ -167,7 +167,7 @@ describe("Union slot — inline-union semantics (manual token surface)", () => {
 
   test("fallthrough: only second member registered → resolves to second", () => {
     forCtor(Consumer).signature(union(TA, TB));
-    const builder = new DiBuilder();
+    const builder = new ServiceManifest();
     builder.add(TB, ServiceB);
     builder.add(TConsumer, Consumer);
     const root = builder.build();
@@ -177,7 +177,7 @@ describe("Union slot — inline-union semantics (manual token surface)", () => {
 
   test("precedence: both members registered → resolves to first (declaration order)", () => {
     forCtor(Consumer).signature(union(TA, TB));
-    const builder = new DiBuilder();
+    const builder = new ServiceManifest();
     builder.add(TA, ServiceA);
     builder.add(TB, ServiceB);
     builder.add(TConsumer, Consumer);
@@ -195,7 +195,7 @@ describe("Union slot — inline-union semantics (manual token surface)", () => {
     // can arise if a member's own deps are unresolvable. For a pure "no-members-
     // registered" case the error is at the signature-selection level.
     forCtor(Consumer).signature(union(TA, TB));
-    const builder = new DiBuilder();
+    const builder = new ServiceManifest();
     builder.add(TConsumer, Consumer);
     const root = builder.build();
     expect(() => root.resolve(TConsumer)).toThrow(NoSatisfiableSignatureError);
@@ -230,7 +230,7 @@ describe("Named alias — single-token semantics (manual token surface)", () => 
   test("named alias resolves under its own single token, not member alternatives", () => {
     // Signature uses a single string token (the alias), NOT a union slot.
     forCtor(Consumer).signature(TAB);
-    const builder = new DiBuilder();
+    const builder = new ServiceManifest();
     builder.add(TA, ServiceA);     // registering A does nothing for Consumer
     builder.add(TB, ServiceB);     // registering B does nothing for Consumer
     builder.add(TAB, ServiceAB);   // this is the only one that matters
@@ -242,7 +242,7 @@ describe("Named alias — single-token semantics (manual token surface)", () => 
 
   test("named alias: only A+B registered (not AB) → throws (unregistered single token)", () => {
     forCtor(Consumer).signature(TAB);
-    const builder = new DiBuilder();
+    const builder = new ServiceManifest();
     builder.add(TA, ServiceA);
     builder.add(TB, ServiceB);
     builder.add(TConsumer, Consumer);
@@ -266,7 +266,7 @@ describe("Inject brand override — branded token wins (parity matrix §9)", () 
   test("branded token used in signature resolves against its own registration", () => {
     // The manual-surface equivalent of `Inject<ICache, "parity:inject:special-cache">`.
     forCtor(Handler).signature(BRANDED_TOKEN);
-    const builder = new DiBuilder();
+    const builder = new ServiceManifest();
     builder.add(BRANDED_TOKEN, SpecialCache);
     builder.add(THandler, Handler);
     const root = builder.build();
@@ -294,7 +294,7 @@ describe("resolveFactory — mixed registered + caller-supplied params (§2)", (
 
   test("mixed: registered Logger resolved from container; unregistered label is caller-supplied", () => {
     forCtor(Product).signature(TLogger, TLabel);
-    const builder = new DiBuilder();
+    const builder = new ServiceManifest();
     builder.add(TLogger, Logger);
     builder.add(TProduct, Product);
     const root = builder.build();
@@ -312,7 +312,7 @@ describe("resolveFactory — mixed registered + caller-supplied params (§2)", (
     }
     const TZeroArgProduct = "parity:rf:ZeroArgProduct";
     forCtor(ZeroArgProduct).signature(TLogger);
-    const builder = new DiBuilder();
+    const builder = new ServiceManifest();
     builder.add(TLogger, Logger);
     builder.add(TZeroArgProduct, ZeroArgProduct);
     const root = builder.build();
@@ -326,7 +326,7 @@ describe("resolveFactory — mixed registered + caller-supplied params (§2)", (
   test("caller override of a registered slot (params wins over container)", () => {
     // TLogger IS registered, but we name it in params → caller wins.
     forCtor(Product).signature(TLogger, TLabel);
-    const builder = new DiBuilder();
+    const builder = new ServiceManifest();
     builder.add(TLogger, Logger);
     builder.add(TProduct, Product);
     const root = builder.build();
