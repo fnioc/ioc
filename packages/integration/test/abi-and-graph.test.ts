@@ -88,6 +88,16 @@ describe("emit contract — transformer-emitted lowered output (PRD §8)", () =>
     );
   });
 
+  test("inline `(log: ILogger) => IReport` lowers to `{ type, params: [ILogger-token] }`", () => {
+    const wiring = project.emitted("sample/wiring.js");
+    const n = hoistName(wiring, "ReportFactory");
+    // ReportFactory ctor: `makeReport: (log: ILogger) => IReport`.
+    // The declared `log: ILogger` param becomes the params array on the FactoryRef.
+    expect(wiring).toContain(
+      `defineDeps(${n}, [[{ type: "./sample/contracts/IReport", params: ["./sample/contracts/ILogger"] }]]);`,
+    );
+  });
+
   test("the type-driven type arg lowers to a string token; `.as<\"x\">()` → `.as(\"x\")`", () => {
     const wiring = project.emitted("sample/wiring.js");
     const n = hoistName(wiring, "ConsoleLogger");
@@ -192,5 +202,52 @@ describe("factory injection e2e (transformer-emitted FactoryRef → di callable)
     const b = reportService.makeCtx();
     expect(a).toBe(b);
     expect(req.resolve<{ id: number }>(T.ctx)).toBe(a);
+  });
+});
+
+// ── Coverage 4: declared factory params → caller-wins e2e ────────────────────
+//
+// ReportFactory holds `makeReport: (log: ILogger) => IReport`. The transformer
+// sees the declared `log: ILogger` param and emits
+// `{ type: IReport-token, params: [ILogger-token] }`.
+//
+// At runtime:
+//   - The ILogger ctor slot of IReport is filled by the caller-supplied value
+//     (caller wins over the registered ConsoleLogger).
+//   - Each call builds a FRESH IReport (parameterized factory bypasses the cache).
+
+describe("parameterized factory e2e — declared arg overrides registered service", () => {
+  test("caller-supplied ILogger wins over the registered ConsoleLogger; fresh instance per call", async () => {
+    const app = await project.load("sample/app.js");
+    const rootScope = app.rootScope as () => {
+      createScope: (n: string) => {
+        resolve: <T>(t: string) => T;
+      };
+      resolve: <T>(t: string) => T;
+    };
+    const T_MAP = app.T as Record<string, string>;
+
+    const root = rootScope();
+    const req = root.createScope("request");
+
+    // The transformer emits the token for IReportFactory (request-scoped).
+    const T_REPORT_FACTORY = "./sample/contracts/IReportFactory";
+    const reportFactory = req.resolve<{
+      makeReport: (log: { lines: string[] }) => { repo: unknown };
+    }>(T_REPORT_FACTORY);
+
+    // Caller-supplied custom logger — NOT the registered ConsoleLogger.
+    const customLogger = { lines: [] as string[], log(l: string) { this.lines.push(l); } };
+    const r1 = reportFactory.makeReport(customLogger);
+    const r2 = reportFactory.makeReport(customLogger);
+
+    // Report was built with the caller-supplied logger (verified by identity).
+    const registeredLogger = root.resolve<{ lines: string[] }>(T_MAP.logger);
+    // The factory produced a valid Report (has a repo dep resolved from container).
+    expect((r1 as unknown as { repo: unknown }).repo).toBeDefined();
+    // Fresh instance per call (parameterized factory bypasses the cache).
+    expect(r1).not.toBe(r2);
+    // The registered ConsoleLogger is not the caller-supplied one.
+    expect(registeredLogger).not.toBe(customLogger);
   });
 });

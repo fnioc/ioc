@@ -636,11 +636,20 @@ export function extractCtorReferenceSignature(
  * annotation is anything else — including a named function-interface reference
  * (the opt-out) — or when the return type yields no derivable token.
  *
+ * When the inline function type declares parameters, each declared param's type
+ * is resolved to a token (same derivation rules as ctor params via `slotForParam`
+ * / `tokenForType`). Those tokens are emitted as `params` in the returned slot so
+ * the runtime partitioner can route caller-supplied args into the right ctor slots
+ * (caller wins over registration). Zero declared params → bare `{ type: token }`
+ * (strict zero-arg mode, unchanged). A declared param whose type yields no
+ * derivable token (anonymous structure) raises an `UnderivableToken` hard
+ * diagnostic — a caller-supplied param with no matchable token is unusable.
+ *
  * The `.type` field replaces the former `.factory` field (T0 rename).
  */
 function factorySlotFor(
   param: ts.ParameterDeclaration,
-  ctx: TokenContext,
+  ctx: DepContext,
 ): FactorySlot | undefined {
   const typeNode = param.type;
   if (!typeNode || !ts.isFunctionTypeNode(typeNode)) {return undefined;}
@@ -650,7 +659,32 @@ function factorySlotFor(
 
   const token = tokenForReturnType(signature, ctx);
   if (token === undefined) {return undefined;}
-  return { type: token };
+
+  // Zero declared params → strict zero-arg mode; no params field.
+  if (!typeNode.parameters.length) {return { type: token };}
+
+  // One or more declared params → derive a token for each. A declared param
+  // whose type yields no token (anonymous structure) is a hard error: the runtime
+  // cannot match a caller arg with no token to route it to the right ctor slot.
+  const params: string[] = [];
+  for (const p of typeNode.parameters) {
+    const t = slotForParam(p, ctx);
+    if (t === null) {
+      ctx.sink.addDiagnostic(
+        error(
+          ctx.sourceFile,
+          p.type ?? p,
+          DiagnosticCode.UnderivableToken,
+          "cannot derive a token for this factory parameter type — name the type so the runtime can route the caller-supplied argument",
+        ),
+      );
+      // Keep a sentinel so the slot is still well-shaped for downstream processing.
+      params.push("??unresolvable??");
+    } else {
+      params.push(t);
+    }
+  }
+  return { type: token, params };
 }
 
 /**

@@ -41,7 +41,7 @@ describe("factory detection", () => {
     expect(depsArrayFor(output, "Svc")).toBe('[[{ type: "./app/IFoo" }]]');
   });
 
-  test("parameterized (a, b) => IFoo keys on the RETURN type's token", () => {
+  test("declared params are emitted as FactoryRef.params in declared order", () => {
     const src = `
       interface IFoo {}
       interface ISvc {}
@@ -54,8 +54,10 @@ describe("factory detection", () => {
       services.add<ISvc>(Svc).as<"singleton">();
     `;
     const { output } = transform(fixture(src));
-    // The factory ref is keyed on the return type (IFoo), NOT the params.
-    expect(depsArrayFor(output, "Svc")).toBe('[[{ type: "./app/IFoo" }]]');
+    // Declared params become caller-supplied tokens in authored order.
+    expect(depsArrayFor(output, "Svc")).toBe(
+      '[[{ type: "./app/IFoo", params: ["./app/B2", "./app/D4"] }]]',
+    );
   });
 
   test("named function-interface is NOT a factory (the opt-out)", () => {
@@ -190,6 +192,56 @@ describe("factory detection", () => {
     const out = outputs["/proj/src/app.ts"]!;
     expect(depsArrayFor(out, "Svc")).toBe(
       '[[{ type: "your-lib:contracts/IFoo" }]]',
+    );
+  });
+});
+
+describe("declared factory params → caller-supplied params (caller wins over registration)", () => {
+  test("(a: ILogger) => IReport emits { type, params: [ILogger token] }", () => {
+    const src = `
+      interface ILogger {}
+      interface IReport {}
+      interface ISvc {}
+      class Svc implements ISvc {
+        constructor(makeReport: (a: ILogger) => IReport) {}
+      }
+      declare const services: any;
+      services.add<ISvc>(Svc).as<"singleton">();
+    `;
+    const { output } = transform(fixture(src));
+    expect(depsArrayFor(output, "Svc")).toBe(
+      '[[{ type: "./app/IReport", params: ["./app/ILogger"] }]]',
+    );
+  });
+
+  test("zero-arg factory emits bare { type } (strict mode, no params field)", () => {
+    const src = `
+      interface IReport {}
+      interface ISvc {}
+      class Svc implements ISvc {
+        constructor(makeReport: () => IReport) {}
+      }
+      declare const services: any;
+      services.add<ISvc>(Svc).as<"singleton">();
+    `;
+    const { output } = transform(fixture(src));
+    expect(depsArrayFor(output, "Svc")).toBe('[[{ type: "./app/IReport" }]]');
+  });
+
+  test("mixed (table: string, log: ILogger) => IRepo emits params in declared order", () => {
+    const src = `
+      interface ILogger {}
+      interface IRepo {}
+      interface ISvc {}
+      class Svc implements ISvc {
+        constructor(makeRepo: (table: string, log: ILogger) => IRepo) {}
+      }
+      declare const services: any;
+      services.add<ISvc>(Svc).as<"singleton">();
+    `;
+    const { output } = transform(fixture(src));
+    expect(depsArrayFor(output, "Svc")).toBe(
+      '[[{ type: "./app/IRepo", params: ["string", "./app/ILogger"] }]]',
     );
   });
 });

@@ -500,18 +500,30 @@ constructor(thunk: IFooThunk) { ... }
 
 The named-function-interface escape hatch is deliberate. When your function-typed service would otherwise be interpreted as a factory, name its interface.
 
-**Partial / positional factories.** If the concrete behind `IFoo` has a constructor mixing registered services with caller-supplied scalars, the factory's call signature covers only the **caller-supplied** parameters in their relative order. A caller-supplied parameter is a *primitive scalar* — a bare intrinsic keyword (`string`/`number`/…), a singular literal value, or an anonymous structure — never a named interface/class (a real DI service, which the container resolves).
+**Declared factory args become caller-supplied params (caller wins over registration).** The declared parameters of an inline factory type partition the produced constructor's slots into caller-supplied vs. container-resolved. Any slot whose token appears in the declared params list is filled by the caller's argument — even if that token is also registered in the container (caller wins). Slots not named in the declared params are resolved from the container as usual.
 
 ```typescript
-// MyService ctor: (a: IA, b: string, c: IC, d: number, e: IE)
-// IA, IC, IE are registered services; b and d are caller-supplied scalars.
-// Injected factory type: (b: string, d: number) => IService
-// At call time: new MyService(resolve(IA), b, resolve(IC), d, resolve(IE))
+// IUserRepo ctor: (log: ILogger, table: string)
+// ILogger is registered; table is a primitive scalar (unregistered).
+//
+// Option A — cover only the scalar hole (original behavior):
+constructor(makeRepo: (table: string) => IUserRepo) { ... }
+// Emits: { type: IUserRepo-token, params: ["string"] }
+// At call time: new UserRepo(resolve(ILogger), table)
+//
+// Option B — also override the registered ILogger (caller wins):
+constructor(makeRepo: (log: ILogger, table: string) => IUserRepo) { ... }
+// Emits: { type: IUserRepo-token, params: [ILogger-token, "string"] }
+// At call time: new UserRepo(callerLog, table)  — registered ILogger is NOT used
 ```
 
-**Runtime partition (no whole-program analysis).** At instantiation the engine has the per-parameter `DepSlot` array and its live registration map. For each slot: `LiteralRef` → inject its value; `FactoryRef` or `ScopeRef` → resolve accordingly; `Union` → first-resolvable-wins among members; string token in the map → resolve it from the container; string token not in the map → take the next caller-supplied factory argument.
+Declared params are emitted as `FactoryRef.params` in authored order. The runtime engine matches each ctor slot token against the params list left-to-right; the first match claims the corresponding call argument. A slot not claimed by any param entry falls through to the container.
 
-Ramda-style placeholder arguments exposed to callers are rejected — they leak constructor arity/structure. The factory caller sees only the unregistered parameters, in order.
+**Lifetime semantics.** A factory with declared params (parameterized factory) builds a **fresh instance per call** — caller arguments differ per call, so caching is impossible. A bare zero-arg factory (`() => IFoo`, no declared params) routes through the normal resolve path and **respects the registered lifetime** (one shared instance for a singleton, new per scope for request-scoped, etc.).
+
+**Runtime partition (no whole-program analysis).** At instantiation the engine has the per-parameter `DepSlot` array and its live registration map. For each slot: `LiteralRef` → inject its value; `FactoryRef` or `ScopeRef` → resolve accordingly; `Union` → first-resolvable-wins among members; string token named in `params` → take the corresponding caller argument (caller wins, even if registered); string token not in `params` and in the map → resolve from the container.
+
+Ramda-style placeholder arguments exposed to callers are rejected — they leak constructor arity/structure.
 
 ### Override / plugin-less registration — `addFactory` / `addValue`
 
@@ -598,7 +610,14 @@ services.add("pkg:IUserRepo", ɵreg0).as("request");
 
 ### Factory-signature diagnostic (originally §4.5)
 
-The transformer validates factory signatures (and any hand-declared factory parameters in `@signature` / `forCtor`) against the target constructor's **caller-supplied** parameters in order. Under Rule 1 a named interface/class always tokenizes and is container-resolved, so "caller-supplied" no longer means "underivable" — it means a *primitive scalar*: a bare intrinsic keyword token (`string`/`number`/…), a singular literal (Rule 2), or an anonymous structure with no token. This is the primary value-add of using the transformer — it provides compile-time feedback when a factory's declared call signature doesn't match the scalars the container will actually leave for the caller.
+The transformer validates factory signatures (and any hand-declared factory parameters in `@signature` / `forCtor`) against the target constructor's **caller-supplied** parameters. Under Rule 1 a named interface/class always tokenizes and is container-resolved, so "caller-supplied" no longer means "underivable" — it means a *primitive scalar*: a bare intrinsic keyword token (`string`/`number`/…), a singular literal (Rule 2), or an anonymous structure with no token.
+
+The rule is: declared params must **cover** the produced constructor's primitive-scalar holes (the container cannot supply these), but **may additionally include** named-interface/class params from the constructor's slot list — those are meaningful caller-wins overrides, not mistakes. A warning fires when:
+
+- Declared param count is fewer than the hole count (a hole is left uncovered), **or**
+- Declared param count exceeds the total constructor slot count (phantom params that map to nothing).
+
+This is the primary value-add of using the transformer — it provides compile-time feedback when a factory's declared call signature is mismatched against what the runtime can route.
 
 Additional diagnostics the transformer can emit where statically visible:
 - A consumer declaring `IDb` as a direct dep when the service is async-registered (should be `Promise<IDb>`).

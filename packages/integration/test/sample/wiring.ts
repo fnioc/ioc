@@ -15,6 +15,7 @@ import type {
   IDbConnection,
   ILogger,
   IReport,
+  IReportFactory,
   IReportService,
   IRequestContext,
   IThunk,
@@ -25,6 +26,7 @@ import {
   ConfigConsumer,
   ConsoleLogger,
   Report,
+  ReportFactory,
   ReportService,
   RequestContext,
   SqlDb,
@@ -80,6 +82,15 @@ services.add<IConfigConsumer>(ConfigConsumer).as<"singleton">();
 // request-scoped target it builds resolves correctly (§5.4 — a singleton holding
 // this factory would fail when invoked, which is the captive rule).
 services.add<IReportService>(ReportService).as<"request">();
+
+// ReportFactory holds a parameterized factory: `(log: ILogger) => IReport`.
+// The transformer sees the declared `log: ILogger` param and emits
+// `{ type: IReport-token, params: [ILogger-token] }`. At runtime the ILogger
+// slot of the IReport ctor is filled by the caller-supplied value (caller wins
+// over the registered ConsoleLogger), and a fresh IReport is built per call.
+// Request-scoped: the factory closure captures the request frame, so the
+// IReport target's IUserRepo dep (request-scoped) resolves correctly.
+services.add<IReportFactory>(ReportFactory).as<"request">();
 
 // Plugin-less path: async config via a Promise-returning factory, cached as a
 // singleton. addFactory with a scope-less factory (no defineDeps record) → called

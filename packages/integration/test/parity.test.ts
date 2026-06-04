@@ -28,6 +28,7 @@ import {
   RequestContext,
   Report,
   ReportService,
+  ReportFactory,
   ConfigConsumer,
   ThunkConsumer,
 } from "./sample/services.js";
@@ -39,6 +40,7 @@ const T = {
   ctx: "./sample/contracts/IRequestContext",
   report: "./sample/contracts/IReport",
   reportService: "./sample/contracts/IReportService",
+  reportFactory: "./sample/contracts/IReportFactory",
   thunkConsumer: "./sample/contracts/IThunkConsumer",
   configConsumer: "./sample/contracts/IConfigConsumer",
   config: "./sample/contracts/IConfig",
@@ -61,6 +63,9 @@ function buildHandFed(): DiBuilder<"singleton", "request"> {
   // ReportService's one inline factory param → FactoryRef slot, by hand:
   // a bare `() => IRequestContext`.
   forCtor(ReportService).signature({ type: T.ctx });
+  // ReportFactory's parameterized factory: `(log: ILogger) => IReport`.
+  // The transformer emits `{ type: IReport-token, params: [ILogger-token] }`.
+  forCtor(ReportFactory).signature({ type: T.report, params: [T.logger] });
 
   const services = new DiBuilder<"singleton", "request">();
   services.add(T.logger, ConsoleLogger).as("singleton");
@@ -69,6 +74,7 @@ function buildHandFed(): DiBuilder<"singleton", "request"> {
   services.add(T.ctx, RequestContext).as("request");
   services.add(T.report, Report).as("request");
   services.add(T.reportService, ReportService).as("request");
+  services.add(T.reportFactory, ReportFactory).as("request");
   services.add(T.thunkConsumer, ThunkConsumer).as("singleton");
   services.add(T.configConsumer, ConfigConsumer).as("singleton");
 

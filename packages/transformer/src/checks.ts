@@ -115,8 +115,17 @@ export function checkOverloads(
 
 /**
  * §4.5: an inline-factory param's declared call signature vs. the produced
- * concrete ctor's unregistered (hole) params, in order. Only fires when the
- * produced type resolves to a concrete class whose constructor we can read.
+ * concrete ctor's caller-supplied (hole) params. Only fires when the produced
+ * type resolves to a concrete class whose constructor we can read.
+ *
+ * Relaxed rule (caller-supplied-as-override): declared params must COVER the
+ * produced ctor's primitive-scalar holes (params that are intrinsic / literal /
+ * anonymous — the container cannot resolve them), but MAY additionally include
+ * named-interface/class params that ARE registered. Those extra declared params
+ * are meaningful overrides: the transformer emits them as `FactoryRef.params` and
+ * the runtime honours "caller wins over registration" for any token named in
+ * params. Only warn when declared params FAIL to cover the holes (i.e. a hole
+ * exists that the caller did not declare and cannot override with a registration).
  */
 function checkFactoryParam(
   param: ts.ParameterDeclaration,
@@ -137,31 +146,40 @@ function checkFactoryParam(
   const producedCtor = findConstructor(producedClass);
   if (!producedCtor) {return;}
 
-  // The produced ctor's caller-supplied params, in order — these are exactly the
-  // params the factory caller must supply. Under Rule 1 every named type derives
-  // a token, so "the caller supplies it" no longer means "underivable"; it means
-  // a PRIMITIVE SCALAR — a bare intrinsic keyword (`string`/`number`/…), a
-  // singular literal value (Rule 2), or an anonymous structure with no token.
-  // A real DI service (a named interface/class token) is container-resolved, not
-  // caller-supplied.
-  const expected = producedCtor.parameters.filter((p) =>
+  // The produced ctor's caller-supplied (hole) params — primitive scalars the
+  // container cannot resolve. Under Rule 1 every named type tokenizes, so a
+  // "hole" is a PRIMITIVE SCALAR: a bare intrinsic keyword (`string`/`number`/…),
+  // a singular literal value (Rule 2), or an anonymous structure with no token.
+  // A real DI service (named interface/class) is container-resolved, not a hole.
+  const holes = producedCtor.parameters.filter((p) =>
     isCallerSuppliedParam(p, ctx),
   );
 
   // The factory's own declared params.
   const declared = typeNode.parameters;
 
-  if (declared.length !== expected.length) {
+  // Warn only when declared params don't cover the holes. Extra declared params
+  // beyond the hole count are fine: they name named-service overrides (caller
+  // wins). But the number of declared params must be AT LEAST the number of holes
+  // (every hole must be covered), and total declared count must not EXCEED the
+  // total ctor param count (can't invent slots).
+  const holeCount = holes.length;
+  const declaredCount = declared.length;
+  const ctorParamCount = producedCtor.parameters.length;
+
+  const bad = declaredCount < holeCount || declaredCount > ctorParamCount;
+  if (bad) {
     const name = param.name.getText();
     ctx.sink.addDiagnostic(
       warning(
         ctx.sourceFile,
         typeNode,
         DiagnosticCode.FactorySignatureMismatch,
-        `Factory parameter "${name}" takes ${declared.length} argument(s), but ` +
-          `the factory caller must supply ${expected.length} — the unregistered ` +
-          `parameter(s) of the produced type's constructor. List exactly those, ` +
-          `in order.`,
+        `Factory parameter "${name}" declares ${declaredCount} argument(s), but ` +
+          `the produced constructor has ${holeCount} caller-supplied hole(s) and ` +
+          `${ctorParamCount} total slot(s). Declared params must cover all holes ` +
+          `and may additionally name registered-service overrides (caller wins), ` +
+          `but cannot exceed the total slot count.`,
       ),
     );
   }
