@@ -250,6 +250,94 @@ describe("declared constructor overloads → one signature each (impl ignored)",
   });
 });
 
+// ── Fix 1: wide-boolean optional emits "boolean" not "false | true" ──────────
+
+describe("optional wide-boolean emits the 'boolean' token (Fix 1)", () => {
+  test("`flag?: boolean` → union('boolean', { value: undefined })", () => {
+    // TS models `boolean` as `false | true` internally. After stripping
+    // `| undefined`, both BooleanLiteral survivors form the wide boolean scalar —
+    // they must NOT be rendered as the literal-union token "false | true".
+    expect(emitFor(`constructor(flag?: boolean) {}`)).toBe(
+      '[[{ union: ["boolean", { value: void 0 }] }]]',
+    );
+  });
+
+  test("`flag: boolean | undefined` → identical union fallback", () => {
+    expect(emitFor(`constructor(flag: boolean | undefined) {}`)).toBe(
+      '[[{ union: ["boolean", { value: void 0 }] }]]',
+    );
+  });
+
+  test("`flag?: true` (single literal) still emits { value: true } fallback", () => {
+    // A SINGLE boolean literal must not be treated as the wide boolean — only
+    // the case where BOTH true and false survive the nullish strip is excluded.
+    expect(emitFor(`constructor(flag?: true) {}`)).toBe(
+      "[[{ union: [{ value: true }, { value: void 0 }] }]]",
+    );
+  });
+
+  test("`true | false | undefined` in an inline union → 'boolean' token", () => {
+    // Explicit `true | false | undefined` annotation is an inline UnionTypeNode;
+    // the non-nullish members `true` and `false` together are the wide boolean.
+    expect(emitFor(`constructor(flag: true | false | undefined) {}`)).toBe(
+      '[[{ union: ["boolean", { value: void 0 }] }]]',
+    );
+  });
+});
+
+// ── WP extended: wide primitive in a union ────────────────────────────────────
+
+describe("wide primitive in a required union", () => {
+  test("`boolean | IFoo` → union(['boolean', './app/IFoo'])", () => {
+    // A required (non-optional) union that contains the wide boolean: the
+    // `boolean` member must survive as the bare keyword token, not be broken
+    // into false/true literal members.
+    expect(
+      emitFor(`constructor(a: boolean | IFoo) {}`, "interface IFoo {}"),
+    ).toBe('[[{ union: ["boolean", "./app/IFoo"] }]]');
+  });
+});
+
+// ── Regression pins: index-access types + unique symbol ───────────────────────
+
+describe("index-access types and unique symbol (regression pins)", () => {
+  test("index-access `Shape['bar']` resolves to the named type token", () => {
+    // An indexed-access type whose resolved type is a named interface derives the
+    // interface's token, not the index expression text.
+    expect(
+      emitFor(
+        `constructor(dep: Shape["bar"]) {}`,
+        "interface IBar {} type Shape = { bar: IBar; mode: \"dev\" }",
+      ),
+    ).toBe('[["./app/IBar"]]');
+  });
+
+  test("index-access `Shape['mode']` resolves to a LiteralRef (Rule 2)", () => {
+    // The indexed member is the string literal `"dev"` — a singular value.
+    expect(
+      emitFor(
+        `constructor(dep: Shape["mode"]) {}`,
+        "type Shape = { mode: \"dev\" }",
+      ),
+    ).toBe('[[{ value: "dev" }]]');
+  });
+
+  test("wide `symbol` tokenizes by keyword (WP-8 extension)", () => {
+    expect(emitFor(`constructor(a: symbol) {}`)).toBe('[["symbol"]]');
+  });
+
+  test("`unique symbol` tokenizes by its declared name, not the keyword", () => {
+    // A `unique symbol` carries its own identity via its declaration symbol —
+    // it is NOT the same as the wide `symbol` scalar.
+    expect(
+      emitFor(
+        `constructor(a: MySym) {}`,
+        "declare const MySym: unique symbol; type MySym = typeof MySym;",
+      ),
+    ).toBe('[["./app/MySym"]]');
+  });
+});
+
 // ── resolve<T>() lowering (Rule 2) ───────────────────────────────────────────
 
 describe("resolve<T>() singular-literal lowering (Rule 2)", () => {

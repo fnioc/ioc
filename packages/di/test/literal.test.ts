@@ -175,4 +175,33 @@ describe("optional param fallback — union(token, LiteralRef(undefined))", () =
       NoSatisfiableSignatureError,
     );
   });
+
+  test("registered 'boolean' token injects into optional boolean param (Fix 1)", () => {
+    // Transformer emits union("boolean", { value: undefined }) for `flag?: boolean`.
+    // The registered value under "boolean" must win over the LiteralRef fallback.
+    class Consumer {
+      public constructor(public readonly flag: unknown) {}
+    }
+    // Shape the transformer emits for `flag?: boolean` after the fix.
+    defineDeps(Consumer, [[union("boolean", { value: undefined })]]);
+
+    const services = new DiBuilder<"singleton">();
+    services.addValue("boolean", true); // register a boolean value
+    services.add(T.Service, Consumer).as("singleton");
+
+    expect(services.build().resolve<Consumer>(T.Service).flag).toBe(true);
+  });
+
+  test("optional boolean falls through to undefined when 'boolean' is unregistered", () => {
+    class Consumer {
+      public constructor(public readonly flag: unknown) {}
+    }
+    defineDeps(Consumer, [[union("boolean", { value: undefined })]]);
+
+    const services = new DiBuilder<"singleton">();
+    // "boolean" NOT registered — union falls through to the LiteralRef.
+    services.add(T.Service, Consumer).as("singleton");
+
+    expect(services.build().resolve<Consumer>(T.Service).flag).toBeUndefined();
+  });
 });
