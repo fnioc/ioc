@@ -1,5 +1,19 @@
 # Changelog
 
+## [3.1.0](https://github.com/fnioc/ioc/compare/transformer-v3.0.1...transformer-v3.1.0) (2026-06-04)
+
+
+### Features
+
+* tokenize all named types + literal value supply (LiteralRef) ([#51](https://github.com/fnioc/ioc/issues/51)) ([52a70e7](https://github.com/fnioc/ioc/commit/52a70e7ad34d88899c61a85480800260897689ee))
+* **transformer:** declared inline-factory args become caller-supplied params ([#59](https://github.com/fnioc/ioc/issues/59)) ([b8f63fb](https://github.com/fnioc/ioc/commit/b8f63fbbd94373404348c5be7b541203f01d2e92))
+
+
+### Bug Fixes
+
+* **transformer:** preserve Inject brand on optional + union-member params ([#54](https://github.com/fnioc/ioc/issues/54)) ([3ed3878](https://github.com/fnioc/ioc/commit/3ed3878eaa0e3424410efa562f2da65c892f25bd))
+* **transformer:** wide-boolean optional + honor all construct overloads on reference paths ([#58](https://github.com/fnioc/ioc/issues/58)) ([648a44e](https://github.com/fnioc/ioc/commit/648a44e5e164770fd11fea831b58ca86d93eb958))
+
 ## [3.0.1](https://github.com/fnioc/ioc/compare/transformer-v3.0.0...transformer-v3.0.1) (2026-06-03)
 
 
