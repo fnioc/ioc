@@ -417,6 +417,66 @@ describe("union member composability", () => {
   });
 });
 
+// ── Runtime regression pins ──────────────────────────────────────────────────
+
+describe("union runtime regression pins", () => {
+  test("single declared overload — union(A,B) with only first member registered resolves via A", () => {
+    // Mirrors: a class with one declared overload whose parameter is a union(A,B),
+    // only T.A registered. The union resolves to A (first member wins).
+    class Consumer {
+      public constructor(public readonly dep: unknown) {}
+    }
+    // One overload: [union(T.A, T.B)].
+    defineDeps(Consumer, [[union(T.A, T.B)]]);
+
+    const services = new DiBuilder<"singleton">();
+    services.add(T.A, RedisImpl).as("singleton");
+    // T.B NOT registered.
+    services.add(T.Service, Consumer).as("singleton");
+
+    const c = services.build().resolve<Consumer>(T.Service);
+    expect(c.dep).toBeInstanceOf(RedisImpl);
+  });
+
+  test("union falls through to 2nd member; adjacent plain token slot resolves normally", () => {
+    // A signature with two slots: [union(T.A, T.B), T.Logger]. T.A is NOT
+    // registered — union falls through to T.B. T.Logger (plain token, adjacent
+    // slot) resolves independently and normally.
+    class Consumer {
+      public constructor(
+        public readonly cache: unknown,
+        public readonly log: unknown,
+      ) {}
+    }
+    defineDeps(Consumer, [[union(T.A, T.B), T.Logger]]);
+
+    const services = new DiBuilder<"singleton">();
+    // T.A NOT registered — fallthrough to T.B.
+    services.add(T.B, MemoryCacheImpl).as("singleton");
+    services.add(T.Logger, LoggerImpl).as("singleton");
+    services.add(T.Service, Consumer).as("singleton");
+
+    const c = services.build().resolve<Consumer>(T.Service);
+    expect(c.cache).toBeInstanceOf(MemoryCacheImpl);
+    expect(c.log).toBeInstanceOf(LoggerImpl);
+  });
+
+  test("`IFoo | 'fallback'` — IFoo unregistered → string literal injected", () => {
+    // A union whose first member is a token (T.A) and second is a LiteralRef
+    // string value. With T.A unregistered, the LiteralRef wins.
+    class Consumer {
+      public constructor(public readonly dep: unknown) {}
+    }
+    defineDeps(Consumer, [[union(T.A, { value: "fallback" })]]);
+
+    const services = new DiBuilder<"singleton">();
+    // T.A NOT registered — falls through to the LiteralRef.
+    services.add(T.Service, Consumer).as("singleton");
+
+    expect(services.build().resolve<Consumer>(T.Service).dep).toBe("fallback");
+  });
+});
+
 // ── resolveFactory(type, params) ─────────────────────────────────────────────
 
 describe("ServiceProvider.resolveFactory(type, params)", () => {
