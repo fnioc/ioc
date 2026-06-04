@@ -8,6 +8,7 @@ import type {
   IDbConnection,
   ILogger,
   IReport,
+  IReportFactory,
   IReportService,
   IRequestContext,
   IThunk,
@@ -111,4 +112,19 @@ export class ThunkConsumer {
 /** Consumes the async config; declares the dep as `Promise<IConfig>`. */
 export class ConfigConsumer {
   public constructor(public readonly config: Promise<IConfig>) {}
+}
+
+/**
+ * Holds a parameterized factory: `(log: ILogger) => IReport`.
+ *
+ * The declared `log` parameter means the transformer emits `params: [ILogger token]`
+ * on the FactoryRef. At runtime the engine routes the caller-supplied ILogger into
+ * the IReport ctor's ILogger slot — even when ILogger is registered — and builds a
+ * fresh IReport per call. This proves the declared-factory-args → caller-wins path
+ * end-to-end through the real transformer and di engine.
+ */
+export class ReportFactory implements IReportFactory {
+  public constructor(
+    public readonly makeReport: (log: ILogger) => IReport,
+  ) {}
 }

@@ -66,3 +66,13 @@ export interface IThunkConsumer {
 export interface IConfigConsumer {
   readonly config: Promise<IConfig>;
 }
+
+/**
+ * A service that holds a parameterized factory: `makeReport(log: ILogger) => IReport`.
+ * The declared `log` param means the transformer emits `params: [ILogger token]`
+ * on the FactoryRef, enabling caller-supplied override of the registered ILogger.
+ * This is the integration sample for the declared-factory-args feature.
+ */
+export interface IReportFactory {
+  readonly makeReport: (log: ILogger) => IReport;
+}
