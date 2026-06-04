@@ -26,21 +26,18 @@ import type {} from "@fnioc/di";
 export type { Inject } from "@fnioc/core";
 
 declare module "@fnioc/di" {
-  interface DiBuilder<
-    Root extends string = "singleton",
-    Children extends string = never,
-  > {
+  interface DiBuilder<Scopes extends string = "singleton"> {
     /**
      * Type-driven class authoring — lowers to `add("token", C)`. The ctor is
      * typed `Ctor<any[], I>` (a plain construct signature, so an abstract class
      * is rejected). Never runs post-transform.
      */
-    add<I>(ctor: Ctor<any[], I>): AddBuilder<Root | Children>;
+    add<I>(ctor: Ctor<any[], I>): AddBuilder<Scopes>;
     /**
      * Type-driven factory authoring — lowers to `addFactory("token", fn)` (the
      * transformer knows the arg is a function). Never runs post-transform.
      */
-    add<I>(factory: Func<any[], I>): AddBuilder<Root | Children>;
+    add<I>(factory: Func<any[], I>): AddBuilder<Scopes>;
     /**
      * Type-driven value authoring — lowers to `addValue("token", v)`. Never runs
      * post-transform.
