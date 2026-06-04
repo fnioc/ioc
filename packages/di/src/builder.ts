@@ -24,6 +24,61 @@ import type {
 } from "./types.js";
 
 /**
+ * Capitalize the first character of a string literal type, leaving the rest
+ * untouched (`"request"` → `"Request"`). Used to mint a per-scope method name
+ * `add${ProperCase<K>}` from a scope tag `K`. Because every scope tag is
+ * guarded lowercase-first (`ValidScopes`), this map is INJECTIVE — two distinct
+ * tags never collide on one minted name.
+ */
+export type ProperCase<T extends string> = T extends `${infer H}${infer R}`
+  ? `${Uppercase<H>}${R}`
+  : T;
+
+/**
+ * EMPTY carrier interface the `@fnioc/transformer` augments with the AUTHORED
+ * single-arg call signatures for a per-scope `add${ProperCase<K>}` method
+ * (`addRequest(C)` / `addRequest(fn)`). Like the other authoring forms, those
+ * signatures are PURE TYPINGS contributed only when the transformer is in the
+ * program — without it, a per-scope method exposes just the runtime two-arg
+ * `(token, ctor) => void` shape. `S` is the full scope union, `K` the specific
+ * scope this method tags with.
+ */
+export interface ScopeAddAuthoring<S extends string, K extends S> {}
+
+/**
+ * The per-scope registration methods minted from the scope union `S`. For each
+ * tag `K`, a method named `add${ProperCase<K>}` whose runtime shape is
+ * `(token, ctor) => void` (≡ `add(token, ctor).as(K)`), intersected with the
+ * transformer-contributed `ScopeAddAuthoring<S, K>` authored single-arg forms.
+ * The scope is baked into the name, so there is no `.as()` continuation — the
+ * methods return `void`.
+ */
+export type ScopeAddMethods<S extends string> = {
+  [K in S as `add${ProperCase<K>}`]: ((token: Token, ctor: Ctor) => void) &
+    ScopeAddAuthoring<S, K>;
+};
+
+/**
+ * The scope-union guard. A `DiBuilder<S>` is only well-formed when every member
+ * of `S` can mint a usable, non-colliding `add${ProperCase<K>}` method. `S`
+ * resolves to itself when valid, else to `never` — which makes
+ * `new DiBuilder<S>()` a compile error at the construction site.
+ *
+ * Two rules, both checked NON-distributively (`[S] extends [...]`) so a union is
+ * judged as a whole rather than member-by-member:
+ *   - lowercase-first: every member must satisfy `K extends Uncapitalize<K>`.
+ *     This makes `ProperCase` injective (no two tags collapse onto one method
+ *     name) and keeps the transformer's uncapitalize-first scope recovery exact.
+ *   - no collision: a member may not be `""` | `"factory"` | `"value"`, which
+ *     would mint `add` / `addFactory` / `addValue` — the existing methods.
+ */
+export type ValidScopes<S extends string> = [S] extends [Uncapitalize<S>]
+  ? [S & ("" | "factory" | "value")] extends [never]
+    ? S
+    : never
+  : never;
+
+/**
  * The continuation returned by a class `DiBuilder.add`. Carries the just-added
  * registration so `.as()` can attach its lifetime in place. An `.add()` with no
  * trailing `.as()` leaves the registration scopeless ⇒ transient.
@@ -65,8 +120,14 @@ export interface AddBuilder<Scopes extends string> {
  * const logger = app.resolve<ILogger>("pkg:ILogger");
  * const req = app.createScope("request");         // nested child scope
  * ```
+ *
+ * NOTE: this is the IMPLEMENTATION class. The public `DiBuilder` value + type
+ * (exported below) wrap it so the per-scope `add${ProperCase<K>}` methods —
+ * which a class declaration cannot express as mapped members — surface on the
+ * type. The class stays exported so the `@fnioc/transformer` `declare module`
+ * augmentation can merge its authored typings onto `interface DiBuilderClass`.
  */
-export class DiBuilder<Scopes extends string = "singleton"> {
+export class DiBuilderClass<Scopes extends string = "singleton"> {
   /**
    * The service collection: each token maps to a LIST of registrations in
    * registration order. Registering a token appends; resolution picks the
@@ -217,3 +278,93 @@ export class DiBuilder<Scopes extends string = "singleton"> {
     );
   }
 }
+
+/**
+ * Install the per-scope `add${ProperCase<K>}` runtime dispatch ONCE at module
+ * load, at the END of `DiBuilderClass`'s prototype chain. A `Proxy` placed there
+ * (its target is `Object.prototype`, the chain's real terminus) only ever sees a
+ * `get`/`has` that MISSED the class's own prototype — so `add`, `addFactory`,
+ * `addValue`, `build`, and any inherited `Object.prototype` member are untouched.
+ * Only a genuinely-absent `add<Capital…>` lookup reaches the trap.
+ *
+ * Receiver fidelity: the `get` trap's `receiver` and the returned method's `this`
+ * are the genuine `DiBuilderClass` instance (not the proxy), so `#private` fields
+ * resolve with zero gymnastics — the method just calls `this.add(...)`.
+ */
+const SCOPE_ADD = /^add[A-Z]/;
+
+Reflect.setPrototypeOf(
+  DiBuilderClass.prototype,
+  new Proxy(Object.prototype, {
+    get(_target, prop, receiver) {
+      if (typeof prop === "string" && SCOPE_ADD.test(prop)) {
+        const scope = prop[3]!.toLowerCase() + prop.slice(4);
+        return function (this: DiBuilderClass<string>, ...args: unknown[]): void {
+          // Mirror `add()`'s guard: only the two-arg `(token, ctor)` runtime form
+          // executes. A single-arg authored call (`addRequest(C)`) only exists
+          // post-transform; hand-writing it without @fnioc/transformer is a misuse.
+          if (args.length !== 2 || typeof args[0] !== "string") {
+            throw new TypeError(
+              `${prop}<I>(ctor) / ${prop}<I>(factory) require the @fnioc/transformer ` +
+                `plugin. Without it, register with an explicit token: ` +
+                `${prop}("my:token", MyClass).`,
+            );
+          }
+          this.add(args[0], args[1] as Ctor).as(scope);
+        };
+      }
+      return Reflect.get(Object.prototype, prop, receiver);
+    },
+    has(_target, prop) {
+      return (
+        (typeof prop === "string" && SCOPE_ADD.test(prop)) ||
+        Reflect.has(Object.prototype, prop)
+      );
+    },
+  }),
+);
+
+/**
+ * The public registration-builder TYPE: the implementation class intersected
+ * with the per-scope methods minted from `S`. A type alias (not an interface)
+ * because an interface cannot extend a generic MAPPED type, and `ScopeAddMethods`
+ * is one.
+ */
+export type DiBuilder<S extends string = "singleton"> = DiBuilderClass<S> &
+  ScopeAddMethods<S>;
+
+/**
+ * A construction-site guard parameter that carries the `ValidScopes` verdict.
+ * When `S` is a valid scope union, `ValidScopes<S>` resolves to `S` (not
+ * `never`), so the guard is an EMPTY rest tuple — `new DiBuilder<S>()` takes no
+ * args. When `S` is invalid, `ValidScopes<S>` collapses to `never`, and the
+ * guard becomes a REQUIRED arg whose name spells out the error, so the no-arg
+ * `new DiBuilder<S>()` fails to type-check at the construction site.
+ *
+ * This expresses the same intent as a self-referential `S extends ValidScopes<S>`
+ * constraint, which TypeScript rejects as circular (TS2313) and which silently
+ * stops validating — the guard-param form is the working equivalent.
+ */
+export type ScopeGuard<S extends string> = [ValidScopes<S>] extends [never]
+  ? [
+      error: "invalid DiBuilder scope tag: every member must be lowercase-first and not \"\" / \"factory\" / \"value\"",
+    ]
+  : [];
+
+/**
+ * The static / constructor side of the public `DiBuilder`. Extracted as an
+ * interface so the value export can carry the `ValidScopes` guard on its type
+ * parameter: `new DiBuilder<S>()` only type-checks when `S` is a valid scope
+ * union (lowercase-first, no collision with `add`/`addFactory`/`addValue`).
+ */
+export interface DiBuilderCtor {
+  new <S extends string = "singleton">(...guard: ScopeGuard<S>): DiBuilder<S>;
+}
+
+/**
+ * The public registration-builder VALUE. It IS `DiBuilderClass` at runtime (the
+ * cast only re-types its construct signature to carry the `ValidScopes` guard
+ * and the per-scope method surface). `new DiBuilder<...>()` behaves identically;
+ * the wrapper exists purely so the mapped per-scope methods type-check.
+ */
+export const DiBuilder: DiBuilderCtor = DiBuilderClass as unknown as DiBuilderCtor;
