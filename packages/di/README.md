@@ -14,14 +14,14 @@ No decorators. No `reflect-metadata`. No runtime type introspection. Feed it str
 
 ---
 
-## `DiBuilder<Scopes>`
+## `ServiceManifest<Scopes>`
 
 The entry point. `Scopes` is the union of declarable scope-name tags (default `"singleton"`). The tags `.as()` and `createScope()` accept are exactly its members. Transient (no cache, fresh instance on every resolve) is the default — there is no `"transient"` scope; the absence of `.as()`, or the absence of an open frame for a tag, is what makes a registration transient.
 
 ```ts
-import { DiBuilder } from "@fnioc/di";
+import { ServiceManifest } from "@fnioc/di";
 
-const services = new DiBuilder<"singleton" | "request">();
+const services = new ServiceManifest<"singleton" | "request">();
 ```
 
 Registration is append-only: each token holds a **list** of registrations in registration order, and resolution picks the most-recent (last) one. A later `add` for the same token therefore overrides an earlier one without deleting it.
@@ -77,7 +77,7 @@ services.add("pkg:ICache", {
 
 A `useFactory` with `scope: "singleton"` runs once and caches the result; without a `scope` it runs on every resolve (transient). `useValue` is always the same reference.
 
-To override a registration for a specific context (e.g. a test double), register a later spec for the same token on the `DiBuilder` before calling `build()`. The registration map is append-only and last-registration-wins. The map seals at `build()` — no post-build mutation is possible.
+To override a registration for a specific context (e.g. a test double), register a later spec for the same token on the `ServiceManifest` before calling `build()`. The registration map is append-only and last-registration-wins. The map seals at `build()` — no post-build mutation is possible.
 
 ---
 
@@ -107,7 +107,7 @@ const req = app.createScope("request");         // per HTTP request
 The critical correctness rule: deps are resolved **relative to the frame that will own the instance**, not the frame that triggered the resolve. This is what keeps a longer-lived service from cache-capturing a shorter-lived one.
 
 ```ts
-const services = new DiBuilder<"singleton" | "request">();
+const services = new ServiceManifest<"singleton" | "request">();
 services.add<ICache>(RedisCache).as<"singleton">();
 services.add<IUserContext>(HttpUserContext).as<"request">();
 services.add<IUserService>(UserService).as<"singleton">();
@@ -314,7 +314,7 @@ Token users construct `Union` slots with `union(...)`. Transformer users write a
 
 ## API reference
 
-### `DiBuilder<Scopes>`
+### `ServiceManifest<Scopes>`
 
 Zero-argument constructor — there is no `rootName`; scopes are just tags.
 

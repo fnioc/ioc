@@ -59,10 +59,10 @@ export type ScopeAddMethods<S extends string> = {
 };
 
 /**
- * The scope-union guard. A `DiBuilder<S>` is only well-formed when every member
+ * The scope-union guard. A `ServiceManifest<S>` is only well-formed when every member
  * of `S` can mint a usable, non-colliding `add${ProperCase<K>}` method. `S`
  * resolves to itself when valid, else to `never` — which makes
- * `new DiBuilder<S>()` a compile error at the construction site.
+ * `new ServiceManifest<S>()` a compile error at the construction site.
  *
  * Two rules, both checked NON-distributively (`[S] extends [...]`) so a union is
  * judged as a whole rather than member-by-member:
@@ -79,7 +79,7 @@ export type ValidScopes<S extends string> = [S] extends [Uncapitalize<S>]
   : never;
 
 /**
- * The continuation returned by a class `DiBuilder.add`. Carries the just-added
+ * The continuation returned by a class `ServiceManifest.add`. Carries the just-added
  * registration so `.as()` can attach its lifetime in place. An `.add()` with no
  * trailing `.as()` leaves the registration scopeless ⇒ transient.
  *
@@ -113,7 +113,7 @@ export interface AddBuilder<Scopes extends string> {
  *
  * @example
  * ```ts
- * const services = new DiBuilder<"singleton" | "request">();
+ * const services = new ServiceManifest<"singleton" | "request">();
  * services.add("pkg:ILogger", ConsoleLogger).as("singleton"); // lowered form
  * const provider = services.build();              // no frame pre-opened
  * const app = provider.createScope("singleton");  // open the singleton frame
@@ -121,13 +121,13 @@ export interface AddBuilder<Scopes extends string> {
  * const req = app.createScope("request");         // nested child scope
  * ```
  *
- * NOTE: this is the IMPLEMENTATION class. The public `DiBuilder` value + type
+ * NOTE: this is the IMPLEMENTATION class. The public `ServiceManifest` value + type
  * (exported below) wrap it so the per-scope `add${ProperCase<K>}` methods —
  * which a class declaration cannot express as mapped members — surface on the
  * type. The class stays exported so the `@fnioc/transformer` `declare module`
- * augmentation can merge its authored typings onto `interface DiBuilderClass`.
+ * augmentation can merge its authored typings onto `interface ServiceManifestClass`.
  */
-export class DiBuilderClass<Scopes extends string = "singleton"> {
+export class ServiceManifestClass<Scopes extends string = "singleton"> {
   /**
    * The service collection: each token maps to a LIST of registrations in
    * registration order. Registering a token appends; resolution picks the
@@ -281,25 +281,25 @@ export class DiBuilderClass<Scopes extends string = "singleton"> {
 
 /**
  * Install the per-scope `add${ProperCase<K>}` runtime dispatch ONCE at module
- * load, at the END of `DiBuilderClass`'s prototype chain. A `Proxy` placed there
+ * load, at the END of `ServiceManifestClass`'s prototype chain. A `Proxy` placed there
  * (its target is `Object.prototype`, the chain's real terminus) only ever sees a
  * `get`/`has` that MISSED the class's own prototype — so `add`, `addFactory`,
  * `addValue`, `build`, and any inherited `Object.prototype` member are untouched.
  * Only a genuinely-absent `add<Capital…>` lookup reaches the trap.
  *
  * Receiver fidelity: the `get` trap's `receiver` and the returned method's `this`
- * are the genuine `DiBuilderClass` instance (not the proxy), so `#private` fields
+ * are the genuine `ServiceManifestClass` instance (not the proxy), so `#private` fields
  * resolve with zero gymnastics — the method just calls `this.add(...)`.
  */
 const SCOPE_ADD = /^add[A-Z]/;
 
 Reflect.setPrototypeOf(
-  DiBuilderClass.prototype,
+  ServiceManifestClass.prototype,
   new Proxy(Object.prototype, {
     get(_target, prop, receiver) {
       if (typeof prop === "string" && SCOPE_ADD.test(prop)) {
         const scope = prop[3]!.toLowerCase() + prop.slice(4);
-        return function (this: DiBuilderClass<string>, ...args: unknown[]): void {
+        return function (this: ServiceManifestClass<string>, ...args: unknown[]): void {
           // Mirror `add()`'s guard: only the two-arg `(token, ctor)` runtime form
           // executes. A single-arg authored call (`addRequest(C)`) only exists
           // post-transform; hand-writing it without @fnioc/transformer is a misuse.
@@ -330,16 +330,16 @@ Reflect.setPrototypeOf(
  * because an interface cannot extend a generic MAPPED type, and `ScopeAddMethods`
  * is one.
  */
-export type DiBuilder<S extends string = "singleton"> = DiBuilderClass<S> &
+export type ServiceManifest<S extends string = "singleton"> = ServiceManifestClass<S> &
   ScopeAddMethods<S>;
 
 /**
  * A construction-site guard parameter that carries the `ValidScopes` verdict.
  * When `S` is a valid scope union, `ValidScopes<S>` resolves to `S` (not
- * `never`), so the guard is an EMPTY rest tuple — `new DiBuilder<S>()` takes no
+ * `never`), so the guard is an EMPTY rest tuple — `new ServiceManifest<S>()` takes no
  * args. When `S` is invalid, `ValidScopes<S>` collapses to `never`, and the
  * guard becomes a REQUIRED arg whose name spells out the error, so the no-arg
- * `new DiBuilder<S>()` fails to type-check at the construction site.
+ * `new ServiceManifest<S>()` fails to type-check at the construction site.
  *
  * This expresses the same intent as a self-referential `S extends ValidScopes<S>`
  * constraint, which TypeScript rejects as circular (TS2313) and which silently
@@ -347,24 +347,24 @@ export type DiBuilder<S extends string = "singleton"> = DiBuilderClass<S> &
  */
 export type ScopeGuard<S extends string> = [ValidScopes<S>] extends [never]
   ? [
-      error: "invalid DiBuilder scope tag: every member must be lowercase-first and not \"\" / \"factory\" / \"value\"",
+      error: "invalid ServiceManifest scope tag: every member must be lowercase-first and not \"\" / \"factory\" / \"value\"",
     ]
   : [];
 
 /**
- * The static / constructor side of the public `DiBuilder`. Extracted as an
+ * The static / constructor side of the public `ServiceManifest`. Extracted as an
  * interface so the value export can carry the `ValidScopes` guard on its type
- * parameter: `new DiBuilder<S>()` only type-checks when `S` is a valid scope
+ * parameter: `new ServiceManifest<S>()` only type-checks when `S` is a valid scope
  * union (lowercase-first, no collision with `add`/`addFactory`/`addValue`).
  */
-export interface DiBuilderCtor {
-  new <S extends string = "singleton">(...guard: ScopeGuard<S>): DiBuilder<S>;
+export interface ServiceManifestCtor {
+  new <S extends string = "singleton">(...guard: ScopeGuard<S>): ServiceManifest<S>;
 }
 
 /**
- * The public registration-builder VALUE. It IS `DiBuilderClass` at runtime (the
+ * The public registration-builder VALUE. It IS `ServiceManifestClass` at runtime (the
  * cast only re-types its construct signature to carry the `ValidScopes` guard
- * and the per-scope method surface). `new DiBuilder<...>()` behaves identically;
+ * and the per-scope method surface). `new ServiceManifest<...>()` behaves identically;
  * the wrapper exists purely so the mapped per-scope methods type-check.
  */
-export const DiBuilder: DiBuilderCtor = DiBuilderClass as unknown as DiBuilderCtor;
+export const ServiceManifest: ServiceManifestCtor = ServiceManifestClass as unknown as ServiceManifestCtor;

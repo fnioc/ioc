@@ -1,9 +1,9 @@
 import { test, expect, describe } from "bun:test";
-import { DiBuilder, DiBuilderClass } from "@fnioc/di";
+import { ServiceManifest, ServiceManifestClass } from "@fnioc/di";
 import { T } from "./fixtures.js";
 
 // Per-scope `add${ProperCase<K>}` runtime dispatch. The methods are minted by a
-// Proxy at the END of `DiBuilderClass`'s prototype chain, so they never shadow
+// Proxy at the END of `ServiceManifestClass`'s prototype chain, so they never shadow
 // the real `add` / `addFactory` / `addValue` / `build` members, and unknown
 // non-add lookups fall through to `Object.prototype` exactly as before.
 //
@@ -28,7 +28,7 @@ class Logger {
 
 describe("per-scope addSingleton runtime", () => {
   test("addSingleton(token, C) registers + caches in an open singleton frame", () => {
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     runtime(services).addSingleton(T.Logger, Logger);
 
     const app = services.build().createScope("singleton");
@@ -39,7 +39,7 @@ describe("per-scope addSingleton runtime", () => {
   });
 
   test("no matching frame open → transient (fresh instance, no cache, NO error)", () => {
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     runtime(services).addSingleton(T.Logger, Logger);
 
     // Build a frameless provider — the singleton frame is never opened.
@@ -52,7 +52,7 @@ describe("per-scope addSingleton runtime", () => {
   });
 
   test("addRequest tags the request scope (caches only when request is open)", () => {
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new ServiceManifest<"singleton" | "request">();
     runtime(services).addRequest(T.Logger, Logger);
 
     const root = services.build().createScope("singleton");
@@ -70,7 +70,7 @@ describe("per-scope addSingleton runtime", () => {
 
 describe("the proxy does not disturb existing surfaces", () => {
   test("add / addFactory / addValue / build are unaffected (own methods, not trapped)", () => {
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Logger, Logger).as("singleton");
     services.addFactory(T.Service, () => new Logger()).as("singleton");
     services.addValue(T.Db, { kind: "db" });
@@ -81,14 +81,14 @@ describe("the proxy does not disturb existing surfaces", () => {
   });
 
   test("an unknown non-add property resolves normally (undefined, not trapped)", () => {
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     // `address` starts with "add" but the 4th char is lowercase → NOT /^add[A-Z]/.
     expect((services as unknown as Record<string, unknown>).address).toBeUndefined();
     expect((services as unknown as Record<string, unknown>).additional).toBeUndefined();
   });
 
   test("awaiting the builder does not hang on a synthetic `then` trap", async () => {
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     // A bogus `then` would make `await` treat the builder as a thenable and hang.
     // `then` is lowercase-`t` → not a scope-add method, so the proxy returns the
     // Object.prototype miss (undefined), and await resolves with the value.
@@ -96,14 +96,14 @@ describe("the proxy does not disturb existing surfaces", () => {
     expect(resolved).toBe(services);
   });
 
-  test("instanceof DiBuilderClass holds (prototype identity preserved)", () => {
-    expect(new DiBuilder<"singleton">()).toBeInstanceOf(DiBuilderClass);
+  test("instanceof ServiceManifestClass holds (prototype identity preserved)", () => {
+    expect(new ServiceManifest<"singleton">()).toBeInstanceOf(ServiceManifestClass);
   });
 });
 
 describe("plugin-less misuse fails loud", () => {
   test("a single-arg authored call throws TypeError naming the transformer", () => {
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     expect(() =>
       (services as unknown as { addSingleton(c: unknown): void }).addSingleton(
         Logger,
@@ -112,7 +112,7 @@ describe("plugin-less misuse fails loud", () => {
   });
 
   test("a non-string first arg throws TypeError (same guard as add())", () => {
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     expect(() =>
       (
         services as unknown as { addSingleton(a: unknown, b: unknown): void }

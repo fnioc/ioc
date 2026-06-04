@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { DiBuilder, AsyncDisposalRequiredError, defineDeps } from "@fnioc/di";
+import { ServiceManifest, AsyncDisposalRequiredError, defineDeps } from "@fnioc/di";
 
 // Coverage 6 (disposal — sync), 7 (disposal — async), 8 (async-as-values).
 //
@@ -31,7 +31,7 @@ describe("sync disposal — reverse construction order", () => {
     defineDeps(First, [[]]);
     defineDeps(Second, [["d:first"]]);
 
-    const services = new DiBuilder<"app">();
+    const services = new ServiceManifest<"app">();
     services.add("d:first", First).as("app");
     services.add("d:second", Second).as("app");
 
@@ -44,7 +44,7 @@ describe("sync disposal — reverse construction order", () => {
   });
 
   test("sync dispose() throws AsyncDisposalRequiredError when the scope owns a Promise", () => {
-    const services = new DiBuilder<"app">();
+    const services = new ServiceManifest<"app">();
     // addFactory (no defineDeps record) → engine calls factory(scope); returns a
     // Promise which is cached on the "app" scope and triggers the async-disposal guard.
     services.addFactory("async:value", () => Promise.resolve({ ready: true })).as("app");
@@ -71,7 +71,7 @@ describe("sync disposal — reverse construction order", () => {
     }
     defineDeps(Thing, [[]]);
 
-    const services = new DiBuilder<"app">();
+    const services = new ServiceManifest<"app">();
     services.add("d:thing", Thing).as("app");
     const root = services.build().createScope("app");
     root.resolve("d:thing");
@@ -103,7 +103,7 @@ describe("async disposal — awaits Promise-valued instances, reverse order", ()
     defineDeps(AsyncFirst, [[]]);
     defineDeps(SyncSecond, [["a:first"]]);
 
-    const services = new DiBuilder<"app">();
+    const services = new ServiceManifest<"app">();
     services.add("a:first", AsyncFirst).as("app");
     services.add("a:second", SyncSecond).as("app");
 
@@ -124,7 +124,7 @@ describe("async disposal — awaits Promise-valued instances, reverse order", ()
       }
     }
 
-    const services = new DiBuilder<"app">();
+    const services = new ServiceManifest<"app">();
     // addFactory (no defineDeps record) → called with the live scope; returns a
     // Promise<Resource> cached on "app" — disposeAsync awaits it then disposes.
     services.addFactory("a:resource", () => Promise.resolve(new Resource())).as("app");
@@ -152,7 +152,7 @@ describe("async as values — Promise<T> useFactory cached as a singleton Promis
       public static counter = 0;
     }
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     // addFactory (no defineDeps record) → called with scope; factory ignores it
     // and returns the Promise. Cached as a singleton Promise (runs once).
     services.addFactory("av:db", () => {
@@ -185,7 +185,7 @@ describe("async as values — Promise<T> useFactory cached as a singleton Promis
     // Promise straight through as a value (never awaits it).
     defineDeps(Consumer, [["av:db2"]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     let runs = 0;
     services.addFactory("av:db2", () => {
       runs += 1;

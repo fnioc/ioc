@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { DiBuilder, NoSatisfiableSignatureError } from "@fnioc/di";
+import { ServiceManifest, NoSatisfiableSignatureError } from "@fnioc/di";
 import { defineDeps, union, isLiteralRef } from "@fnioc/core";
 import type { LiteralRef } from "@fnioc/core";
 import { T } from "./fixtures.js";
@@ -41,7 +41,7 @@ describe("LiteralRef — ctor argument value supply", () => {
       [{ value: "dev" }, { value: 42 }, { value: true }, { value: 7n }],
     ]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Service, Holder).as("singleton");
 
     const h = services.build().resolve<Holder>(T.Service);
@@ -62,7 +62,7 @@ describe("LiteralRef — ctor argument value supply", () => {
     const nul: LiteralRef = { value: null };
     defineDeps(Holder, [[undef, nul]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Service, Holder).as("singleton");
 
     const h = services.build().resolve<Holder>(T.Service);
@@ -79,7 +79,7 @@ describe("LiteralRef — ctor argument value supply", () => {
     }
     defineDeps(Holder, [[{ value: -5 }, { value: -9n }]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Service, Holder).as("singleton");
 
     const h = services.build().resolve<Holder>(T.Service);
@@ -95,7 +95,7 @@ describe("LiteralRef — ctor argument value supply", () => {
     }
     defineDeps(Holder, [[{ value: "prod" }]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Service, Holder).as("singleton");
 
     expect(services.build().resolve<Holder>(T.Service).mode).toBe("prod");
@@ -110,7 +110,7 @@ describe("LiteralRef — factory argument value supply", () => {
     });
     defineDeps(factory, [[{ value: "dev" }, T.Logger]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Logger, LoggerImpl).as("singleton");
     services.addFactory(T.Service, factory).as("singleton");
 
@@ -128,7 +128,7 @@ describe("optional param fallback — union(token, LiteralRef(undefined))", () =
     }
     defineDeps(Consumer, [[union(T.A, { value: undefined })]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     // T.A deliberately NOT registered — the union falls to the LiteralRef.
     services.add(T.Service, Consumer).as("singleton");
 
@@ -141,7 +141,7 @@ describe("optional param fallback — union(token, LiteralRef(undefined))", () =
     }
     defineDeps(Consumer, [[union(T.A, { value: undefined })]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.A, LoggerImpl).as("singleton");
     services.add(T.Service, Consumer).as("singleton");
 
@@ -154,7 +154,7 @@ describe("optional param fallback — union(token, LiteralRef(undefined))", () =
     }
     defineDeps(Consumer, [[union(T.A, { value: null })]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Service, Consumer).as("singleton");
 
     expect(services.build().resolve<Consumer>(T.Service).dep).toBeNull();
@@ -168,7 +168,7 @@ describe("optional param fallback — union(token, LiteralRef(undefined))", () =
     }
     defineDeps(Consumer, [[union(T.A, { value: undefined })]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Service, Consumer).as("singleton");
 
     expect(() => services.build().resolve(T.Service)).not.toThrow(
@@ -185,7 +185,7 @@ describe("optional param fallback — union(token, LiteralRef(undefined))", () =
     // Shape the transformer emits for `flag?: boolean` after the fix.
     defineDeps(Consumer, [[union("boolean", { value: undefined })]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.addValue("boolean", true); // register a boolean value
     services.add(T.Service, Consumer).as("singleton");
 
@@ -198,7 +198,7 @@ describe("optional param fallback — union(token, LiteralRef(undefined))", () =
     }
     defineDeps(Consumer, [[union("boolean", { value: undefined })]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     // "boolean" NOT registered — union falls through to the LiteralRef.
     services.add(T.Service, Consumer).as("singleton");
 

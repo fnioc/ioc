@@ -1,6 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import {
-  DiBuilder,
+  ServiceManifest,
   UnregisteredTokenError,
 } from "@fnioc/di";
 import { defineDeps } from "@fnioc/core";
@@ -9,7 +9,7 @@ import { T } from "./fixtures.js";
 // ServiceProvider / Scope chain + hierarchical lookup, transient fallback when
 // no matching frame is open, and THE critical rule (§"construct relative to the
 // owning scope"). Scope-local registration was removed in the container
-// redesign — all registrations are sealed on DiBuilder.build().
+// redesign — all registrations are sealed on ServiceManifest.build().
 
 class RealDb {
   public readonly kind = "real";
@@ -20,7 +20,7 @@ class FakeDb {
 
 describe("scope chain + sealed registration lookup", () => {
   test("a later builder registration shadows the earlier one (last-wins)", () => {
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new ServiceManifest<"singleton" | "request">();
     services.add(T.Db, RealDb).as("request");
     services.addValue(T.Db, new FakeDb());
 
@@ -33,7 +33,7 @@ describe("scope chain + sealed registration lookup", () => {
   });
 
   test("lookup falls through to the builder base map when no override", () => {
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new ServiceManifest<"singleton" | "request">();
     services.add(T.Db, RealDb).as("singleton");
 
     const root = services.build().createScope("singleton");
@@ -48,13 +48,13 @@ describe("scope chain + sealed registration lookup", () => {
   });
 
   test("resolving an unregistered token throws UnregisteredTokenError", () => {
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     const root = services.build();
     expect(() => root.resolve(T.Db)).toThrow(UnregisteredTokenError);
   });
 
   test("SEAL-ON-BUILD: builder mutations after build() do not affect the root", () => {
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Db, RealDb).as("singleton");
     const root = services.build();
 
@@ -81,7 +81,7 @@ describe("no open frame ⇒ transient (uniform-tag fallback)", () => {
   }
 
   test("(a) provider-level resolve with no scope open ⇒ fresh instance per call, even for 'singleton'-tagged", () => {
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Service, RequestScoped).as("singleton");
 
     const provider = services.build(); // frameless
@@ -91,7 +91,7 @@ describe("no open frame ⇒ transient (uniform-tag fallback)", () => {
   });
 
   test("(b) a 'singleton'-tagged dep resolved inside only a 'request' frame ⇒ transient", () => {
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new ServiceManifest<"singleton" | "request">();
     defineDeps(SingletonNeedingRequest, [[T.Service]]);
     services.add(T.Service, RequestScoped).as("request");
     services.add(T.Repo, SingletonNeedingRequest).as("singleton");
@@ -117,7 +117,7 @@ describe("no open frame ⇒ transient (uniform-tag fallback)", () => {
     class SingletonHolder {
       public constructor(public readonly reqDep: RequestScoped) {}
     }
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new ServiceManifest<"singleton" | "request">();
     defineDeps(SingletonHolder, [[T.Service]]);
     services.add(T.Service, RequestScoped).as("request");
     services.add(T.Repo, SingletonHolder).as("singleton");
@@ -134,7 +134,7 @@ describe("no open frame ⇒ transient (uniform-tag fallback)", () => {
   });
 
   test("a tag whose frame is never opened anywhere ⇒ transient (never auto-created)", () => {
-    const services = new DiBuilder<"singleton" | "request" | "transaction">();
+    const services = new ServiceManifest<"singleton" | "request" | "transaction">();
     services.add(T.Db, RealDb).as("transaction"); // never opened
 
     const root = services.build().createScope("singleton");
@@ -158,7 +158,7 @@ describe("THE critical rule — construct relative to the owning scope", () => {
   }
 
   test("(c) nearest-frame caching works when the right frame is open — shared singleton across requests", () => {
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new ServiceManifest<"singleton" | "request">();
     defineDeps(RequestService, [[T.Logger]]);
     services.add(T.Logger, Singleton).as("singleton");
     services.add(T.Service, RequestService).as("request");
@@ -184,7 +184,7 @@ describe("THE critical rule — construct relative to the owning scope", () => {
     class A {
       public constructor(public readonly b: B) {}
     }
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new ServiceManifest<"singleton" | "request">();
     defineDeps(A, [[T.B]]);
     services.add(T.B, B).as("singleton");
     services.add(T.A, A).as("singleton");

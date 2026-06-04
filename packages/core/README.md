@@ -231,7 +231,7 @@ const store: Map<DepTarget, DepRecord> =
 
 **Why `Symbol.for`, never `Symbol()`:** a unique symbol would create separate maps if two copies of `@fnioc/core` end up in the same runtime (the dual-package hazard — deduplication failures, monorepos, certain bundler configurations). `Symbol.for` keys are global-registry entries; two copies of `@fnioc/core` will find the same symbol and the same Map, so metadata written through either copy is visible to both.
 
-**What is globalized:** only the immutable, app-agnostic dep-metadata (the `DepRecord` entries keyed by constructor function). The container itself (`DiBuilder`, scope instances) is per-instance — not globalized.
+**What is globalized:** only the immutable, app-agnostic dep-metadata (the `DepRecord` entries keyed by constructor function). The container itself (`ServiceManifest`, scope instances) is per-instance — not globalized.
 
 **`@fnioc/core` as a peer dependency:** declare it as a peer dep (not a regular dep) in packages that depend on it. This keeps deduplication predictable and prevents version skew from silently fragmenting the Map.
 

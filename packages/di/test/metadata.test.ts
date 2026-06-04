@@ -1,6 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import {
-  DiBuilder,
+  ServiceManifest,
   MissingMetadataError,
   CircularDependencyError,
 } from "@fnioc/di";
@@ -15,7 +15,7 @@ describe("missing metadata", () => {
     class NoDeps {
       public readonly ok = true;
     }
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Service, NoDeps).as("singleton");
 
     const instance = services.build().resolve<NoDeps>(
@@ -29,7 +29,7 @@ describe("missing metadata", () => {
       public constructor(public readonly a: unknown) {}
     }
     // No defineDeps call — the transformer never saw it and it's un-annotated.
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Service, NeedsParams).as("singleton");
 
     const root = services.build();
@@ -40,7 +40,7 @@ describe("missing metadata", () => {
     class WidgetService {
       public constructor(public readonly a: unknown) {}
     }
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Service, WidgetService).as("singleton");
 
     try {
@@ -61,7 +61,7 @@ describe("missing metadata", () => {
       public constructor(public readonly a: unknown) {}
     }
     defineDeps(EdgeCase, []); // record exists but no signatures
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Service, EdgeCase).as("singleton");
 
     expect(() =>
@@ -81,7 +81,7 @@ describe("cycle detection", () => {
     defineDeps(A, [[T.B]]);
     defineDeps(B, [[T.A]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.A, A).as("singleton");
     services.add(T.B, B).as("singleton");
 
@@ -104,7 +104,7 @@ describe("cycle detection", () => {
     }
     defineDeps(SelfRef, [[T.A]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.A, SelfRef).as("singleton");
 
     const root = services.build();
@@ -125,7 +125,7 @@ describe("cycle detection", () => {
     defineDeps(B, [[T.C]]);
     defineDeps(C, [[T.A]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.A, A).as("singleton");
     services.add(T.B, B).as("singleton");
     services.add(T.C, C).as("singleton");
@@ -162,7 +162,7 @@ describe("cycle detection", () => {
     defineDeps(C, [[T.Db]]);
     defineDeps(A, [[T.B, T.C]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Db, D).as("singleton");
     services.add(T.B, B).as("singleton");
     services.add(T.C, C).as("singleton");

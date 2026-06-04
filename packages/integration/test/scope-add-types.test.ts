@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { DiBuilder } from "@fnioc/di";
+import { ServiceManifest } from "@fnioc/di";
 import type { ProperCase, ScopeAddMethods, ValidScopes } from "@fnioc/di";
 
 // TYPE-LEVEL contract for per-scope `add${ProperCase<K>}` methods. This file is
@@ -59,7 +59,7 @@ class SystemClock implements IClock {}
 // it carries the compile-time-only assertions for the authored forms + the
 // construction-site guard. Exported so unused-local lint does not strip it.
 export function _typeOnlyAsserts(): void {
-  const services = new DiBuilder<"singleton" | "request">();
+  const services = new ServiceManifest<"singleton" | "request">();
 
   // The minted methods exist with the expected names and authored single-arg
   // forms (lowered by the transformer at build time).
@@ -74,24 +74,24 @@ export function _typeOnlyAsserts(): void {
 
   // Construction-site guard: invalid scope unions fail to construct.
   // @ts-expect-error "Request" is capitalized-first → invalid scope tag
-  new DiBuilder<"Request">();
+  new ServiceManifest<"Request">();
   // @ts-expect-error "factory" collides with addFactory
-  new DiBuilder<"factory">();
+  new ServiceManifest<"factory">();
   // @ts-expect-error "" would mint a bare `add`
-  new DiBuilder<"">();
+  new ServiceManifest<"">();
   // @ts-expect-error a union with one invalid member is rejected as a whole
-  new DiBuilder<"request" | "Factory">();
+  new ServiceManifest<"request" | "Factory">();
 
   // The default scope still constructs with no args.
-  new DiBuilder();
-  new DiBuilder<"request" | "session">();
+  new ServiceManifest();
+  new ServiceManifest<"request" | "session">();
 }
 
 describe("per-scope method types", () => {
   test("the per-scope method type surface compiles (see file-level asserts)", () => {
     // The real coverage is the integration:lint compile of this file; the runtime
     // build() check just keeps the test non-empty.
-    const services = new DiBuilder<"singleton" | "request">();
+    const services = new ServiceManifest<"singleton" | "request">();
     expect(typeof services.build).toBe("function");
   });
 });

@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { DiBuilder, NoSatisfiableSignatureError } from "@fnioc/di";
+import { ServiceManifest, NoSatisfiableSignatureError } from "@fnioc/di";
 import { defineDeps } from "@fnioc/core";
 import { T } from "./fixtures.js";
 
@@ -37,7 +37,7 @@ describe("greedy signature selection", () => {
       [T.Db],
     ]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Logger, LoggerImpl).as("singleton");
     services.add(T.Db, DbImpl).as("singleton");
     services.add(T.Service, Svc).as("singleton");
@@ -61,7 +61,7 @@ describe("greedy signature selection", () => {
       [T.Logger],
     ]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Logger, LoggerImpl).as("singleton");
     // T.Db deliberately NOT registered.
     services.add(T.Service, Svc).as("singleton");
@@ -87,7 +87,7 @@ describe("greedy signature selection", () => {
       [T.Logger],
     ]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Logger, LoggerImpl).as("singleton");
     // UNREGISTERED deliberately NOT registered.
     services.add(T.Service, Svc).as("singleton");
@@ -110,7 +110,7 @@ describe("greedy signature selection", () => {
     // [Logger] declared first, [Db] second — both arity 1, both registered.
     defineDeps(Svc, [[T.Logger], [T.Db]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Logger, LoggerImpl).as("singleton");
     services.add(T.Db, DbImpl).as("singleton");
     services.add(T.Service, Svc).as("singleton");
@@ -127,7 +127,7 @@ describe("greedy signature selection", () => {
     }
     defineDeps(Svc, [[T.Logger, T.Db]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     // Neither Logger nor Db registered.
     services.add(T.Service, Svc).as("singleton");
 
@@ -157,7 +157,7 @@ describe("greedy signature selection", () => {
     }
     defineDeps(Svc, [[UNREGISTERED]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Service, Svc).as("singleton");
     // UNREGISTERED not registered.
 
@@ -173,7 +173,7 @@ describe("greedy signature selection", () => {
     }
     defineDeps(Svc, [[T.Db, UNREGISTERED]]);
 
-    const services = new DiBuilder<"singleton">();
+    const services = new ServiceManifest<"singleton">();
     services.add(T.Service, Svc).as("singleton"); // T.Db NOT registered
 
     const root = services.build();

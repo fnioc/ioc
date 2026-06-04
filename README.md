@@ -14,7 +14,7 @@ You author in a rich, fully type-checked surface. The transformer lowers it to e
 
 ```ts
 // Author code — type-driven, interface-keyed
-const services = new DiBuilder<"singleton" | "request">();
+const services = new ServiceManifest<"singleton" | "request">();
 
 services.add<ILogger>(ConsoleLogger).as<"singleton">();
 services.add<IUserRepo>(SqlUserRepo).as<"request">();
@@ -25,7 +25,7 @@ services.add<IUserRepo>(SqlUserRepo).as<"request">();
 
 ```ts
 // Lowered output — plain data emitted by the transformer at build time
-const services = new DiBuilder();
+const services = new ServiceManifest();
 
 defineDeps(ConsoleLogger, [[]]);
 services.add("pkg:ILogger", ConsoleLogger).as("singleton");
@@ -51,7 +51,7 @@ The lowered form is the ABI. Libraries compile once with the transformer and pub
 A singleton can never **cache-capture** a shorter-lived service. Its dependencies resolve relative to the frame that *owns* it, so when a request-scoped dependency has no enclosing request frame, it resolves to a **fresh transient** — never a stale request instance bound for the singleton's whole life.
 
 ```ts
-const services = new DiBuilder<"singleton" | "request">();
+const services = new ServiceManifest<"singleton" | "request">();
 
 services.add<ICache>(RedisCache).as<"singleton">();
 services.add<IUserContext>(HttpUserContext).as<"request">();
@@ -141,7 +141,7 @@ Run `ts-patch install` once in your project to patch the TypeScript compiler. Th
 ### Register services
 
 ```ts
-import { DiBuilder } from "@fnioc/di";
+import { ServiceManifest } from "@fnioc/di";
 
 interface ILogger { log(msg: string): void; }
 interface IGreeter { greet(name: string): string; }
@@ -158,7 +158,7 @@ class Greeter implements IGreeter {
   }
 }
 
-const services = new DiBuilder<"singleton">();
+const services = new ServiceManifest<"singleton">();
 services.add<ILogger>(ConsoleLogger).as<"singleton">();
 services.add<IGreeter>(Greeter).as<"singleton">();
 ```
@@ -183,7 +183,7 @@ await using _ = root; // uses native Symbol.asyncDispose (TypeScript 5.2+)
 | Package | Responsibility |
 |---|---|
 | [`@fnioc/core`](packages/core) | Immutable substrate: `Token`, `DepSlot`, `FactoryRef`, `ScopeRef`, `Union`, `union`, `Inject`, `defineDeps`, `@signature`, `forCtor`. The ABI both `di` and `transformer` build on. |
-| [`@fnioc/di`](packages/di) | Runtime engine: `DiBuilder<Scopes>`, uniform scope tags, frameless `build()`, resolution with transient fallback, captive-dependency protection, disposal, `useFactory`/`useValue`. Re-exports the `@fnioc/core` authoring surfaces. |
+| [`@fnioc/di`](packages/di) | Runtime engine: `ServiceManifest<Scopes>`, uniform scope tags, frameless `build()`, resolution with transient fallback, captive-dependency protection, disposal, `useFactory`/`useValue`. Re-exports the `@fnioc/core` authoring surfaces. |
 | [`@fnioc/transformer`](packages/transformer) | Build-time ts-patch plugin: token derivation, dep extraction, `defineDeps` emission, registration lowering, factory-signature diagnostics. Re-exports `Inject`. |
 
 ```

@@ -13,7 +13,7 @@
 // The transformer lowers TOP-LEVEL `.add(...)` registration statements only, so
 // every registration below sits at module scope.
 
-import { DiBuilder } from "@fnioc/di";
+import { ServiceManifest } from "@fnioc/di";
 
 import type {
   IClock,
@@ -36,7 +36,7 @@ import {
 // `singleton` and `request` are the two scope tags this app opens. There is no
 // root: scopes are uniform tags, and `singleton` is just the one we open once at
 // the top (below, via `createScope("singleton")`) for app-lifetime instances.
-const services = new DiBuilder<"singleton" | "request">();
+const services = new ServiceManifest<"singleton" | "request">();
 
 services.add<ILogger>(ConsoleLogger).as<"singleton">();
 services.add<IClock>(SystemClock).as<"singleton">();

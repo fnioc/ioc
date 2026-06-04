@@ -142,7 +142,7 @@ export class Scope {
  * The public container surface. Implements `Resolver` (resolve + resolveFactory)
  * and `ScopeFactory` (createScope), plus native `Disposable`/`AsyncDisposable`.
  *
- * `S` is the user-declared scope-name union. The provider `DiBuilder.build()`
+ * `S` is the user-declared scope-name union. The provider `ServiceManifest.build()`
  * returns is FRAMELESS — there is no root scope. With no frame open, every
  * resolution is transient; opening a scope with `createScope(name)` is what
  * lets a registration tagged with that name cache. "singleton" is not special —
