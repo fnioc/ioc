@@ -12,3 +12,4 @@ bun = "latest"
 # moon's task runner — drives build/test/lint across the workspace.
 "aqua:moonrepo/moon" = "latest"
 dprint = "0.54.0"
+pnpm = "10"

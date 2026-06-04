@@ -242,6 +242,14 @@ Planned additions: `@fnioc/eslint-plugin` (factory-signature diagnostics in-edit
 
 ---
 
+## Workspace development
+
+In the workspace, `@fnioc/core` and `@fnioc/di` resolve to their TypeScript source (`./src/index.ts`) — no build step is needed after editing either package for changes to be visible in dependents. Bun executes TypeScript natively; tsc and IDEs follow the `source`/`bun`/`types` export conditions to the same source file.
+
+`@fnioc/transformer` remains dist-pointing because ts-patch loads it via Node `require()`, which cannot execute TypeScript source.
+
+Published tarballs carry dist-pointing manifests. `pnpm pack` applies the `publishConfig` overrides in each package's `package.json`, rewriting `main`/`types`/`exports` to the built `dist/` values and resolving `workspace:*` deps to concrete semver ranges before the tarball is created.
+
 ## Reference
 
 - [Design document](PRD.md)

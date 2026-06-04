@@ -39,7 +39,6 @@ tasks:
   lint:
     command: 'bun x tsc --noEmit -p tsconfig.json'
     deps:
-      - 'di:build'
       - 'transformer:build'
     inputs:
       - 'src/**/*'
