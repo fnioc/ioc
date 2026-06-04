@@ -6,8 +6,9 @@
 // DepRecord signatures in the global WeakMap.
 //
 // Phase 2A scope: registration, the scope chain + scoped lifetimes, resolution
-// with the captive-dependency rule, greedy signature selection, cycle
-// detection, the useFactory/useValue registration shapes, and native disposal.
+// (a tag whose frame is not open resolves transiently), greedy signature
+// selection, cycle detection, the useFactory/useValue registration shapes, and
+// native disposal.
 //
 // Phase 2D.2 adds factory injection (a ctor param typed `() => IFoo` becomes an
 // injected callable) and caller-supplied parameter support via the FactoryRef
@@ -39,7 +40,6 @@ export type {
 export {
   DiError,
   UnregisteredTokenError,
-  MissingScopeError,
   MissingMetadataError,
   NoSatisfiableSignatureError,
   NoSatisfiableUnionError,

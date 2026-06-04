@@ -29,33 +29,6 @@ export class UnregisteredTokenError extends DiError {
 }
 
 /**
- * A registration carries a lifetime scope, but no ancestor scope in the
- * resolving chain has a matching name. This is the captive-dependency /
- * misconfiguration detector — the engine never auto-creates a scope to satisfy
- * the lifetime.
- */
-export class MissingScopeError extends DiError {
-  public constructor(
-    public readonly token: Token,
-    public readonly scope: string,
-    public readonly availableScopes: readonly string[],
-  ) {
-    super(
-      `Cannot resolve "${token}": its lifetime is tagged "${scope}", but no ` +
-        `ancestor scope with that name exists in the resolving chain ` +
-        `(available: ${
-          availableScopes.length
-            ? availableScopes.map((s) => `"${s}"`).join(" → ")
-            : "none"
-        }). ` +
-        `This usually means a longer-lived service depends on a ` +
-        `shorter-lived one (e.g. a "singleton" needing a "request"). Never ` +
-        `auto-created — fix the registration's lifetime or create the scope.`,
-    );
-  }
-}
-
-/**
  * A constructor with parameters has no DepRecord in the WeakMap — the
  * transformer never saw it and it was never hand-annotated.
  */

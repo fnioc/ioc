@@ -4,8 +4,9 @@
 //
 //   `Scope` (frame) — a node in a parent-linked chain. Holds a name, a cache
 //   of owned instances, a list for disposal ordering, and an optional parent
-//   pointer. It does NOT hold registrations. The special "empty slot" (no frame)
-//   on the root ServiceProvider means transient-only / unscoped resolution.
+//   pointer. It does NOT hold registrations. There is no root frame: scopes are
+//   uniform tags, and a `ServiceProvider` with no frame (the one `build()`
+//   returns) resolves everything transiently until a scope is opened.
 //
 //   `ServiceProvider` — the public container surface. Implements `Resolver`
 //   (resolve + resolveFactory) and `ScopeFactory` (createScope), plus native
@@ -14,9 +15,10 @@
 //
 // Resolution (§"The critical correctness rule"): on a cache miss the instance
 // is constructed by resolving ITS constructor dependencies relative to the
-// OWNING scope (the matched ancestor), never the scope that triggered the
-// resolve. That is what makes a long-lived service depending on a shorter-lived
-// one fail loudly instead of silently capturing it.
+// OWNING scope (the matched frame), never the scope that triggered the resolve.
+// That is what keeps a long-lived service from silently capturing a shorter-lived
+// one's cached instance — when no matching frame encloses the owner, the dep
+// resolves transiently (a fresh instance) instead.
 
 import { getDeps, isFactoryRef as coreIsFactoryRef, isLiteralRef as coreIsLiteralRef, isScopeRef as coreIsScopeRef, isUnionSlot } from "@fnioc/core";
 import type { DepSlot, FactoryRef, LiteralRef, ScopeRef, Token, Union } from "@fnioc/core";
@@ -27,7 +29,6 @@ import {
   CircularDependencyError,
   FactoryTargetError,
   MissingMetadataError,
-  MissingScopeError,
   NoSatisfiableSignatureError,
   NoSatisfiableUnionError,
   UnregisteredTokenError,
@@ -117,9 +118,10 @@ function* unionTokenMembers(slot: Union): Generator<Token> {
  * its instance cache, an ordered list for disposal, and an optional parent.
  * It does NOT hold registrations (those live sealed on the ServiceProvider).
  *
- * The special "no frame" on the root ServiceProvider means transient-only /
- * unscoped resolution — attempting to resolve a scoped registration from the
- * root will throw MissingScopeError.
+ * A `ServiceProvider` with "no frame" resolves everything transiently — a
+ * tagged registration whose frame is not open resolves to a fresh instance,
+ * exactly like an untagged (transient) one. Frames are opened with
+ * `createScope(name)`, never auto-created.
  */
 export class Scope {
   /** Instances this scope owns and caches, keyed by token. */
@@ -140,12 +142,12 @@ export class Scope {
  * The public container surface. Implements `Resolver` (resolve + resolveFactory)
  * and `ScopeFactory` (createScope), plus native `Disposable`/`AsyncDisposable`.
  *
- * `S` is the user-declared scope-name union. The root (`DiBuilder.build()`)
- * has an EMPTY scope slot — it acts as the unscoped root that owns singletons
- * when the root name is "singleton", reached by the first `createScope("singleton")`.
- * Wait — actually the root SP from build() DOES have a scope frame (named after
- * the builder's rootName), exactly as before: `build()` creates a root SP
- * with `new Scope(rootName)` as its frame.
+ * `S` is the user-declared scope-name union. The provider `DiBuilder.build()`
+ * returns is FRAMELESS — there is no root scope. With no frame open, every
+ * resolution is transient; opening a scope with `createScope(name)` is what
+ * lets a registration tagged with that name cache. "singleton" is not special —
+ * it is just a tag you typically open once at the top via
+ * `createScope("singleton")`.
  */
 export class ServiceProvider<S extends string = string>
   implements Resolver, ScopeFactory<S>, Disposable, AsyncDisposable
@@ -153,9 +155,9 @@ export class ServiceProvider<S extends string = string>
   #disposed = false;
 
   /**
-   * The scope frame for this provider. `undefined` means this is the "unscoped"
-   * root — a sentinel that exists only for transient-only trees (no build()
-   * call sets this to undefined in normal usage; build() always sets a root name).
+   * The scope frame for this provider. `undefined` means this provider has no
+   * open scope — the frameless provider `build()` returns, where every
+   * resolution is transient until a scope is opened with `createScope`.
    */
   readonly #frame: Scope | undefined;
 
@@ -172,13 +174,12 @@ export class ServiceProvider<S extends string = string>
   }
 
   /**
-   * The name of this provider's scope frame. Throws if the provider has no
-   * frame (unscoped root). Kept for backwards-compatibility with tests that
-   * inspect `root.name`.
+   * The name of this provider's open scope frame. Throws if the provider is
+   * frameless (no scope open — e.g. the provider straight from `build()`).
    */
   public get name(): S {
     if (this.#frame === undefined) {
-      throw new TypeError("This ServiceProvider has no scope frame (unscoped root).");
+      throw new TypeError("This ServiceProvider has no scope frame open.");
     }
     return this.#frame.name as S;
   }
@@ -260,17 +261,6 @@ export class ServiceProvider<S extends string = string>
     return undefined;
   }
 
-  /** The chain of scope names from `vantage` up to the root, for diagnostics. */
-  static #chainNames(vantage: Scope | undefined): string[] {
-    const names: string[] = [];
-    let node = vantage;
-    while (node !== undefined) {
-      names.push(node.name);
-      node = node.parent;
-    }
-    return names;
-  }
-
   // ── Resolution ──────────────────────────────────────────────────────────────
 
   /**
@@ -308,15 +298,21 @@ export class ServiceProvider<S extends string = string>
       }
     }
 
-    // Scoped: find the owning ancestor scope. No match ⇒ throw (never
-    // auto-create — that is the captive-dependency detector).
+    // Scoped: find the nearest enclosing OPEN frame tagged with this scope.
+    // No match ⇒ resolve TRANSIENTLY — fresh instance, no cache, no error.
+    // Scopes are uniform tags; a tag whose frame is not open is simply absent,
+    // and absence of a scope is transient (the same as an untagged registration).
+    // The construct-relative-to-owner rule still holds: a longer-lived service
+    // resolving a shorter-lived dep whose frame is not an ancestor gets a fresh
+    // transient, never a captured cached instance.
     const owner = ServiceProvider.#findOwner(vantage, registration.scope);
     if (owner === undefined) {
-      throw new MissingScopeError(
-        token,
-        registration.scope,
-        ServiceProvider.#chainNames(vantage),
-      );
+      stack.push(token);
+      try {
+        return this.#instantiate<T>(token, registration, vantage, stack);
+      } finally {
+        stack.pop();
+      }
     }
 
     // Cache hit on the owner ⇒ return the cached instance (or Promise).
@@ -739,7 +735,7 @@ export class ServiceProvider<S extends string = string>
    * the first one that resolves. A member that is statically not resolvable
    * (`#isResolvableSlot` is false — an unregistered token, or a FactoryRef whose
    * target is unregistered) is skipped immediately. A member that IS resolvable
-   * but THROWS at resolution time — a captive `MissingScopeError`, or any other
+   * but THROWS at resolution time — a cycle, a missing nested dep, or any other
    * failure to actually build it — is caught and treated as "did not resolve",
    * so the union falls through to the next member. Only when every member is
    * exhausted does it throw `NoSatisfiableUnionError`.
@@ -754,8 +750,8 @@ export class ServiceProvider<S extends string = string>
       try {
         return this.#resolveSlot<T>(member as DepSlot, owningFrame, stack);
       } catch {
-        // Member resolvable in principle but failed to build (captive scope, …) —
-        // fall through to the next candidate.
+        // Member resolvable in principle but failed to build (cycle, missing
+        // nested dep, …) — fall through to the next candidate.
         continue;
       }
     }
