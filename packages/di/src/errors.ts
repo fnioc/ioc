@@ -127,6 +127,45 @@ export class NoSatisfiableUnionError extends DiError {
 }
 
 /**
+ * A token that still contains holes (`$N`) was resolved. An open template is
+ * not a resolvable token — it names a FAMILY of tokens, one per closing. The
+ * caller must close it first (substitute every hole with a concrete arg token).
+ */
+export class OpenTokenResolutionError extends DiError {
+  public constructor(public readonly token: Token) {
+    super(
+      `Cannot resolve open template "${token}": it still contains holes ` +
+        `($N). Close the template first — resolve a concrete closing like ` +
+        `"base<arg>" (see closeToken / substituteToken), not the template ` +
+        `itself.`,
+    );
+  }
+}
+
+/**
+ * An open template token was passed to a registration method that cannot
+ * accept one: `addValue`/`addFactory` (open registrations are class-only), or
+ * `add` with a template whose type arguments are not ALL holes (v1 forbids
+ * mixing concrete args and holes in the service token).
+ */
+export class OpenTokenRegistrationError extends DiError {
+  public constructor(
+    public readonly token: Token,
+    public readonly method: "add" | "addFactory" | "addValue",
+  ) {
+    super(
+      method === "add"
+        ? `Cannot register open template "${token}": every type argument of ` +
+            `an open service token must be a hole ($N). Make every argument ` +
+            `a hole, or close the token fully.`
+        : `Cannot register open template "${token}" with ${method}(): open ` +
+            `registrations are class-only. Register a class with ` +
+            `add("${token}", MyClass), or close the token first.`,
+    );
+  }
+}
+
+/**
  * Sync `dispose()` was called on a scope that owns a Promise-valued (thenable)
  * cached instance. A pending Promise cannot be disposed synchronously — the
  * caller must use `disposeAsync()`.

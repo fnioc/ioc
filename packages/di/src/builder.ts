@@ -10,18 +10,24 @@
 // statically knows the arg is a function, so the runtime never has to guess
 // class-vs-factory.
 
-import type { Token } from "@fnioc/core";
+import { isOpenToken, parseToken } from "@fnioc/core";
+import type { DepSlot, Token } from "@fnioc/core";
 import type { Func } from "@rhombus-toolkit/func";
 
+import { OpenTokenRegistrationError } from "./errors.js";
 import { ServiceProvider } from "./scope.js";
 import type {
   ClassRegistration,
   Ctor,
   FactoryRegistration,
   Factory,
+  OpenRegistration,
   Registration,
   Resolver,
 } from "./types.js";
+
+/** A token node that is exactly a hole: `$N`, decimal N ≥ 1. */
+const HOLE_NODE = /^\$[1-9][0-9]*$/;
 
 /**
  * Capitalize the first character of a string literal type, leaving the rest
@@ -136,6 +142,14 @@ export class ServiceManifestClass<Scopes extends string = "singleton"> {
    */
   readonly #registrations = new Map<Token, Registration[]>();
 
+  /**
+   * The OPEN registration table: template base → open registrations in
+   * registration order. Resolution matches against it on an exact-map miss
+   * (base + arity + repeated-hole equality), most-recent match winning —
+   * mirroring the exact map's last-wins list semantics.
+   */
+  readonly #openRegistrations = new Map<Token, OpenRegistration[]>();
+
   public constructor() {}
 
   /** Appends a registration to `token`'s list, creating the list on first use. */
@@ -143,6 +157,16 @@ export class ServiceManifestClass<Scopes extends string = "singleton"> {
     const existing = this.#registrations.get(token);
     if (existing === undefined) {
       this.#registrations.set(token, [registration]);
+    } else {
+      existing.push(registration);
+    }
+  }
+
+  /** Appends an open registration to `base`'s list, mirroring `#append`. */
+  #appendOpen(base: Token, registration: OpenRegistration): void {
+    const existing = this.#openRegistrations.get(base);
+    if (existing === undefined) {
+      this.#openRegistrations.set(base, [registration]);
     } else {
       existing.push(registration);
     }
@@ -173,20 +197,73 @@ export class ServiceManifestClass<Scopes extends string = "singleton"> {
   }
 
   /**
+   * Appends an OPEN class registration for a template token and returns the
+   * `.as(scope?)` continuation — same scoped-copy semantics as `#appendScoped`,
+   * against the open table. Enforces the v1 all-holes rule: every top-level
+   * type argument of the service template must be exactly a hole (`$N`);
+   * repeats (`IFoo<$<1>,$<1>>`) are allowed and constrain a match to equal args.
+   */
+  #appendOpenScoped(
+    token: Token,
+    ctor: Ctor,
+    signatures: readonly (readonly DepSlot[])[] | undefined,
+  ): AddBuilder<Scopes> {
+    const parsed = parseToken(token);
+    if (parsed === undefined || !parsed.args.every((arg) => HOLE_NODE.test(arg))) {
+      throw new OpenTokenRegistrationError(token, "add");
+    }
+    const base: OpenRegistration = {
+      template: token,
+      base: parsed.base,
+      pattern: parsed.args,
+      ctor,
+      scope: undefined,
+      signatures,
+    };
+    this.#appendOpen(parsed.base, base);
+    const append = (next: OpenRegistration): void => this.#appendOpen(parsed.base, next);
+    return {
+      as<S extends Scopes>(scope?: S): void {
+        if (scope === undefined) {return;}
+        append({ ...base, scope });
+      },
+    };
+  }
+
+  /**
    * Class registration — a string token bound to a concrete constructor. The
    * runtime form: what the transformer emits for a class, and what a
    * plugin-less caller writes directly. Returns the `.as(scope?)` continuation.
+   *
+   * The optional third `signatures` param carries the dep signatures ON the
+   * registration record, where they win over the ctor-keyed `defineDeps` store
+   * at resolve time. The scoping invariant behind that split: the global
+   * `defineDeps` store holds CLASS-INTRINSIC facts — derivable from the
+   * declaration alone, and so safely process-global. A generic impl's
+   * signature-under-a-binding is instead REGISTRATION-INTRINSIC: the same JS
+   * class closes differently per registration, so keying it on the ctor object
+   * globally would merely relocate the collision cross-manifest. Carrying it on
+   * the registration is the only key that scopes with the binding.
+   *
+   * An OPEN template token (`pkg:IRepo<$1>` — every type arg a hole) routes
+   * into the open-registration table instead of the exact map; resolution
+   * closes it per requested token. Mixing concrete args and holes in the
+   * service token throws (v1 all-holes rule).
    */
-  public add(token: Token, ctor: Ctor): AddBuilder<Scopes>;
+  public add(
+    token: Token,
+    ctor: Ctor,
+    signatures?: readonly (readonly DepSlot[])[],
+  ): AddBuilder<Scopes>;
   public add(
     ...args:
       | [ctor: Ctor<any[], unknown>]
       | [factory: Func<any[], unknown>]
-      | [token: Token, ctor: Ctor]
+      | [token: Token, ctor: Ctor, signatures?: readonly (readonly DepSlot[])[]]
   ): AddBuilder<Scopes> {
-    // Only the two-arg string-token form reaches the engine at runtime. The
-    // single-arg authoring overloads never run post-transform; guard defensively
-    // so a hand-written type-form call fails loud rather than registering junk.
+    // Only the string-token forms reach the engine at runtime. The single-arg
+    // authoring overloads never run post-transform; guard defensively so a
+    // hand-written type-form call fails loud rather than registering junk.
     if (args.length === 1 || typeof args[0] !== "string") {
       throw new TypeError(
         "add<I>(ctor) / add<I>(factory) require the @fnioc/transformer plugin. " +
@@ -194,11 +271,15 @@ export class ServiceManifestClass<Scopes extends string = "singleton"> {
           "or addFactory(\"my:token\", (scope) => ...).",
       );
     }
-    const [token, ctor] = args;
+    const [token, ctor, signatures] = args;
+    if (isOpenToken(token)) {
+      return this.#appendOpenScoped(token, ctor as Ctor, signatures);
+    }
     return this.#appendScoped(token, {
       kind: "class",
       ctor: ctor as Ctor,
       scope: undefined,
+      signatures,
     });
   }
 
@@ -222,6 +303,11 @@ export class ServiceManifestClass<Scopes extends string = "singleton"> {
     token: Token,
     factory: Factory,
   ): AddBuilder<Scopes> {
+    // Open registrations are class-only: a template must synthesize per-closing
+    // class registrations, which a factory/value shape cannot express in v1.
+    if (isOpenToken(token)) {
+      throw new OpenTokenRegistrationError(token, "addFactory");
+    }
     return this.#appendScoped(token, {
       kind: "factory",
       factory,
@@ -248,6 +334,9 @@ export class ServiceManifestClass<Scopes extends string = "singleton"> {
       );
     }
     const [token, value] = args;
+    if (isOpenToken(token)) {
+      throw new OpenTokenRegistrationError(token, "addValue");
+    }
     this.#append(token, { kind: "value", useValue: value });
   }
 
@@ -273,8 +362,21 @@ export class ServiceManifestClass<Scopes extends string = "singleton"> {
     }
     Object.freeze(sealed);
 
+    // The open table is sealed the same way. The closed-registration memo is
+    // deliberately MUTABLE and starts empty: registrations synthesized from
+    // open matches land there (never in the sealed maps), and it is created
+    // here — not per provider — so every scope frame of this provider tree
+    // shares one memo.
+    const sealedOpen = new Map<Token, OpenRegistration[]>();
+    for (const [base, list] of this.#openRegistrations) {
+      sealedOpen.set(base, Object.freeze([...list]) as OpenRegistration[]);
+    }
+    Object.freeze(sealedOpen);
+
     return new ServiceProvider<Scopes>(
       sealed as ReadonlyMap<Token, Registration[]>,
+      sealedOpen as ReadonlyMap<Token, readonly OpenRegistration[]>,
+      new Map<Token, Registration>(),
     );
   }
 }
@@ -300,17 +402,25 @@ Reflect.setPrototypeOf(
       if (typeof prop === "string" && SCOPE_ADD.test(prop)) {
         const scope = prop[3]!.toLowerCase() + prop.slice(4);
         return function (this: ServiceManifestClass<string>, ...args: unknown[]): void {
-          // Mirror `add()`'s guard: only the two-arg `(token, ctor)` runtime form
-          // executes. A single-arg authored call (`addRequest(C)`) only exists
-          // post-transform; hand-writing it without @fnioc/transformer is a misuse.
-          if (args.length !== 2 || typeof args[0] !== "string") {
+          // Mirror `add()`'s guard: only the `(token, ctor)` / `(token, ctor,
+          // signatures)` runtime forms execute. A single-arg authored call
+          // (`addRequest(C)`) only exists post-transform; hand-writing it
+          // without @fnioc/transformer is a misuse.
+          if (
+            (args.length !== 2 && args.length !== 3) ||
+            typeof args[0] !== "string"
+          ) {
             throw new TypeError(
               `${prop}<I>(ctor) / ${prop}<I>(factory) require the @fnioc/transformer ` +
                 `plugin. Without it, register with an explicit token: ` +
                 `${prop}("my:token", MyClass).`,
             );
           }
-          this.add(args[0], args[1] as Ctor).as(scope);
+          this.add(
+            args[0],
+            args[1] as Ctor,
+            args[2] as readonly (readonly DepSlot[])[] | undefined,
+          ).as(scope);
         };
       }
       return Reflect.get(Object.prototype, prop, receiver);

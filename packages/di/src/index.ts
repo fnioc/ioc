@@ -38,6 +38,7 @@ export type {
   ClassRegistration,
   FactoryRegistration,
   ValueRegistration,
+  OpenRegistration,
   Resolver,
   ScopeFactory,
   Lifetime,
@@ -54,11 +55,40 @@ export {
   FactoryTargetError,
   CircularDependencyError,
   AsyncDisposalRequiredError,
+  OpenTokenResolutionError,
+  OpenTokenRegistrationError,
 } from "./errors.js";
 
-// Re-exported from @fnioc/core for one-import authoring ergonomics. These are
-// pure metadata writers with zero resolution dependency; living in `core` keeps
-// the ABI self-contained, but consumers writing both registrations and manual
-// annotations get them from a single import here.
-export { signature, forCtor, defineDeps, union } from "@fnioc/core";
-export type { Token, DepRecord, ForCtorBuilder, Union } from "@fnioc/core";
+// Re-exported from @fnioc/core for one-import authoring ergonomics — AND
+// because core is private (source-only, inlined at build): di is the public
+// gateway to the ABI surface. The metadata writers are pure functions with
+// zero resolution dependency; the token-grammar helpers (closeToken/parseToken
+// /isOpenToken/substituteToken/substituteSignatures) and the open-generics
+// authoring types (Hole/$/Typeof/TypeArgRef) live in core to keep the
+// ABI self-contained, but users reach them from here.
+export {
+  signature,
+  forCtor,
+  defineDeps,
+  union,
+  typeArg,
+  isTypeArgRef,
+  closeToken,
+  parseToken,
+  isOpenToken,
+  substituteToken,
+  substituteSignatures,
+} from "@fnioc/core";
+export type {
+  Token,
+  DepRecord,
+  DepSlot,
+  ForCtorBuilder,
+  Union,
+  ParsedToken,
+  Inject,
+  Hole,
+  $,
+  Typeof,
+  TypeArgRef,
+} from "@fnioc/core";
