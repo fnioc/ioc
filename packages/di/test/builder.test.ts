@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { ServiceManifest, signature, forCtor, union } from "@fnioc/di";
+import { ServiceManifest, forCtor, union } from "@fnioc/di";
 import { getDeps } from "@fnioc/core";
 import { T } from "./fixtures.js";
 
@@ -36,18 +36,6 @@ describe("re-exports from @fnioc/core", () => {
   test("union() constructs a Union slot with the given members", () => {
     const slot = union("pkg:IA", "pkg:IB");
     expect(slot).toEqual({ union: ["pkg:IA", "pkg:IB"] });
-  });
-
-  test("signature writes a DepRecord readable via core's getDeps", () => {
-    @signature(T.Logger, T.Db)
-    class Decorated {
-      public constructor(
-        public readonly log: unknown,
-        public readonly db: unknown,
-      ) {}
-    }
-    const rec = getDeps(Decorated);
-    expect(rec?.signatures).toContainEqual([T.Logger, T.Db]);
   });
 
   test("forCtor writes a DepRecord for a class you don't own", () => {

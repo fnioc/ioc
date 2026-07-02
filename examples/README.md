@@ -10,7 +10,7 @@ and everything but the authoring mechanism is the same.
 | Example | Authoring | Build |
 | --- | --- | --- |
 | [`with-transformer`](./with-transformer) | type-driven: `add<IGreeter>(Greeter)`, tokenless `resolve<IGreeter>()`, `$<N>` / `Typeof<T>` placeholders | `tspc` (the [`@fnioc/transformer`](../packages/transformer) ts-patch plugin) |
-| [`without-transformer`](./without-transformer) | plugin-less: explicit tokens, `forCtor` / `@signature`, manual `closeToken` / `typeArg` | plain `tsc` |
+| [`without-transformer`](./without-transformer) | plugin-less: explicit tokens, `forCtor`, manual `closeToken` / `typeArg` | plain `tsc` |
 
 ## The shared package
 

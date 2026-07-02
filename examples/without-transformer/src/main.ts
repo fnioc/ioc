@@ -6,9 +6,8 @@
 // `dist`). Diff this file against the with-transformer main.ts and the ONLY
 // difference is the WIRING STYLE: without the transformer there is no type-driven
 // authoring — every registration names an explicit string token, every class
-// with ctor dependencies has its metadata written by hand (`forCtor` /
-// `@signature`), and open generics are closed manually with `closeToken` /
-// `typeArg`.
+// with ctor dependencies has its metadata written by hand (`forCtor`), and open
+// generics are closed manually with `closeToken` / `typeArg`.
 
 import { closeToken, forCtor, ServiceManifest, typeArg, union } from "@fnioc/di";
 

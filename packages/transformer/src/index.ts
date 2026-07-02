@@ -42,7 +42,6 @@ export {
   extractSignatureFromClass,
   extractFromExpression,
   extractInstantiatedSignature,
-  hasSignatureDecorator,
   isFactorySlot,
   isScopeSlot,
   isUnionSlot,

@@ -67,7 +67,6 @@ export {
 // authoring types (Hole/$/Typeof/TypeArgRef) live in core to keep the
 // ABI self-contained, but users reach them from here.
 export {
-  signature,
   forCtor,
   defineDeps,
   union,

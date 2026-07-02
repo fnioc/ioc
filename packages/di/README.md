@@ -215,15 +215,17 @@ services.add("app:IRepository<$1>", SqlRepository);
 
 ## Greedy overload selection
 
-When a constructor has multiple registered signatures (stacked `@signature` decorators or chained `forCtor.signature()` calls), the engine selects by scanning **longest → shortest** and picking the first signature where every resolvable parameter token is satisfiable (registered in the container). Equal-arity ties break by registration order.
+When a constructor has multiple registered signatures (chained `forCtor(...).signature()` calls), the engine selects by scanning **longest → shortest** and picking the first signature where every resolvable parameter token is satisfiable (registered in the container). Equal-arity ties break by registration order.
 
 ```ts
 // Two overloads: prefer the one with ILogger if available
-@signature("pkg:ILogger", "pkg:IDb")
-@signature("pkg:IDb")
 class MyService {
   constructor(logOrDb: ILogger | IDb, db?: IDb) { ... }
 }
+
+forCtor(MyService)
+  .signature("pkg:IDb")
+  .signature("pkg:ILogger", "pkg:IDb");
 ```
 
 If ILogger is registered, the two-parameter signature wins. If not, the one-parameter signature is used.

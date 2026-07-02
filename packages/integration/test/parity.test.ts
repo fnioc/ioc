@@ -6,11 +6,10 @@ import { compileWithTransformer, type CompiledProject } from "./harness.js";
 
 // Coverage 2: progressive-enhancement parity — THE headline property.
 //
-// The SAME sample graph, registered WITHOUT the transformer using the three
+// The SAME sample graph, registered WITHOUT the transformer using the
 // plugin-less paths (PRD §9):
 //   1. `useValue` / `useFactory`              (the async config + the IThunk value)
 //   2. `forCtor(C).signature(...)`            (hand-fed tokens for classes you own)
-//   3. (`@signature` — the third path — is exercised in engine-rules.test.ts)
 //
 // Tokens are hand-authored to the EXACT strings the transformer emits, and the
 // hand-fed metadata mirrors the lowered `defineDeps` arrays. We then assert the

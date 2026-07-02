@@ -2,7 +2,6 @@ import { test, expect, describe } from "bun:test";
 import {
   defineDeps,
   getDeps,
-  signature,
   forCtor,
   union,
   typeArg,
@@ -185,47 +184,6 @@ describe("getDeps", () => {
   });
 });
 
-// ── @signature decorator ──────────────────────────────────────────────────────
-
-describe("signature decorator", () => {
-  test("single decorator writes one signature readable via getDeps", () => {
-    @signature("dec:IFoo", "dec:IBar")
-    class SingleDecorated {}
-
-    const rec = getDeps(SingleDecorated);
-    expect(rec).toBeDefined();
-    expect(rec!.signatures).toHaveLength(1);
-    expect(rec!.signatures[0]).toEqual(["dec:IFoo", "dec:IBar"]);
-  });
-
-  test("stacked decorators register two signatures (both present)", () => {
-    // TC39 decorators evaluate bottom-up, so @signature("dec:IDb") runs first,
-    // then @signature("dec:ILogger", "dec:IDb"). Both should be present.
-    @signature("dec:ILogger", "dec:IDb")
-    @signature("dec:IDb")
-    class StackedDecorated {}
-
-    const rec = getDeps(StackedDecorated);
-    expect(rec).toBeDefined();
-    expect(rec!.signatures).toHaveLength(2);
-
-    const sigs = rec!.signatures.map((s) => [...s]);
-    expect(sigs).toContainEqual(["dec:IDb"]);
-    expect(sigs).toContainEqual(["dec:ILogger", "dec:IDb"]);
-  });
-
-  test("decorator does not replace the class (returns void)", () => {
-    @signature("dec:IFoo")
-    class NotReplaced {
-      readonly tag = "original";
-    }
-
-    // The class constructor itself must still be the original one.
-    const instance = new NotReplaced();
-    expect(instance.tag).toBe("original");
-  });
-});
-
 // ── forCtor ───────────────────────────────────────────────────────────────────
 
 describe("forCtor", () => {
@@ -347,18 +305,6 @@ describe("FactoryRef dep slot", () => {
       const rec = getDeps(FactoryVsStringCtor);
       expect(rec!.signatures).toHaveLength(2);
     });
-  });
-
-  test("authoring a factory slot via @signature writes the expected record", () => {
-    @signature("dec:ILogger", { type: "dec:IFoo" })
-    class DecoratedFactory {}
-
-    const rec = getDeps(DecoratedFactory);
-    expect(rec!.signatures).toHaveLength(1);
-    expect(rec!.signatures[0]).toEqual([
-      "dec:ILogger",
-      { type: "dec:IFoo" },
-    ]);
   });
 
   test("authoring a factory slot via forCtor writes the expected record", () => {

@@ -3,7 +3,7 @@ import {
   ServiceManifest,
   CircularDependencyError,
   defineDeps,
-  signature,
+  forCtor,
 } from "@fnioc/di";
 
 // Coverage 4 (uniform-tag transient fallback / §5.4 owning-scope rule), 5 (cycle
@@ -127,7 +127,7 @@ describe("greedy overload selection — longest satisfiable signature wins", () 
         this.via = args.length === 2 ? "long" : "short";
       }
     }
-    // Two overloads (stacked @signature equivalent): a 1-arg and a 2-arg form.
+    // Two overloads (chained forCtor .signature() equivalent): a 1-arg and a 2-arg form.
     defineDeps(Multi, [["ov:logger"], ["ov:logger", "ov:db"]]);
 
     class Logger {}
@@ -193,24 +193,26 @@ describe("greedy overload selection — longest satisfiable signature wins", () 
     expect(p.token).toBe("first"); // registration-order tie-break
   });
 
-  test("a @signature-decorated multi-overload class selects greedily (decorator path)", () => {
-    @signature("dec:logger", "dec:db")
-    @signature("dec:logger")
-    class Decorated {
+  test("a forCtor multi-overload class selects greedily (manual authoring path)", () => {
+    class Annotated {
       public readonly arity: number;
       public constructor(...args: unknown[]) {
         this.arity = args.length;
       }
     }
+    forCtor(Annotated)
+      .signature("dec:logger")
+      .signature("dec:logger", "dec:db");
+
     class Logger {}
     defineDeps(Logger, [[]]);
 
     const services = new ServiceManifest<"singleton">();
     services.add("dec:logger", Logger).as("singleton");
     // dec:db unregistered → falls back to the 1-arg overload.
-    services.add("dec:decorated", Decorated).as("singleton");
+    services.add("dec:annotated", Annotated).as("singleton");
 
-    const d = services.build().resolve<Decorated>("dec:decorated");
+    const d = services.build().resolve<Annotated>("dec:annotated");
     expect(d.arity).toBe(1);
   });
 });

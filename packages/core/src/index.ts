@@ -23,7 +23,6 @@
  *   - `isUnionSlot`    — type guard for Union slots
  *   - `isLiteralRef`   — type guard for LiteralRef slots
  *   - `isTypeArgRef`   — type guard for TypeArgRef slots
- *   - `signature`      — TC39 class decorator factory
  *   - `ForCtorBuilder` — return type of `forCtor`
  *   - `forCtor`        — fluent free-function for third-party classes
  *   - `ParsedToken`    — result shape of `parseToken`
@@ -60,7 +59,6 @@ export {
   isLiteralRef,
   isTypeArgRef,
 } from "./defineDeps.js";
-export { signature } from "./signature.js";
 export type { ForCtorBuilder } from "./forCtor.js";
 export { forCtor } from "./forCtor.js";
 export type { ParsedToken } from "./tokens.js";

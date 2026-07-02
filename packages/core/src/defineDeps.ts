@@ -131,7 +131,7 @@ function signaturesEqual(a: readonly DepSlot[], b: readonly DepSlot[]): boolean 
 /**
  * The single write path into the global-symbol Map.
  *
- * Both the transformer-emitted code and `@signature` / `forCtor` funnel through
+ * Both the transformer-emitted code and `forCtor` funnel through
  * this function. No other code writes to the store.
  *
  * Merge semantics: appends each incoming signature to the ctor's existing

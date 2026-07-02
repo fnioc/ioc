@@ -297,7 +297,7 @@ export function extractSignatureFromClass(
  * union yields `new Ctor(undefined, y)`. JS makes an explicit `undefined`
  * argument equivalent to omission for a default initializer, so `= default`
  * still fires. The multi-signature `Token[][]` ABI is retained for MANUAL
- * `@signature` / `forCtor` overloads.
+ * `forCtor` overloads.
  */
 function paramsToSignatures(
   params: readonly ts.ParameterDeclaration[],
@@ -1019,23 +1019,4 @@ function nonNullish(type: ts.Type): ts.Type {
         (ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void)),
   );
   return kept.length === 1 ? kept[0]! : type;
-}
-
-/** True when the class carries a `@signature` decorator (manual annotation). */
-export function hasSignatureDecorator(classDecl: ts.ClassDeclaration): boolean {
-  const decorators = ts.getDecorators(classDecl);
-  if (!decorators) {return false;}
-  return decorators.some((d) => decoratorName(d) === "signature");
-}
-
-function decoratorName(decorator: ts.Decorator): string | undefined {
-  const expr = decorator.expression;
-  if (ts.isCallExpression(expr)) {
-    const callee = expr.expression;
-    if (ts.isIdentifier(callee)) {return callee.text;}
-    if (ts.isPropertyAccessExpression(callee)) {return callee.name.text;}
-  }
-  if (ts.isIdentifier(expr)) {return expr.text;}
-  if (ts.isPropertyAccessExpression(expr)) {return expr.name.text;}
-  return undefined;
 }

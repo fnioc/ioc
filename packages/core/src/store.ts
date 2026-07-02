@@ -12,7 +12,7 @@ import type { DepRecord, DepTarget } from "./types.js";
 //
 // Why a regular Map and not a WeakMap:
 //   Every key is a ctor or factory function that is pinned for the module's
-//   lifetime — a class is a module binding, an `@signature`/`forCtor` target is
+//   lifetime — a class is a module binding, a `forCtor` target is
 //   a named declaration, and a transformer-lowered factory is hoisted into a
 //   module-level `const`. So no key ever becomes unreachable; a WeakMap could
 //   never collect an entry, making its weakness pure ceremony. DI metadata is

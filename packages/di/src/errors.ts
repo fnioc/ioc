@@ -39,7 +39,7 @@ export class MissingMetadataError extends DiError {
   ) {
     super(
       `No dep metadata found for ${ctorName} (resolving "${token}"). The ` +
-        `constructor has parameters but no @signature, forCtor, or ` +
+        `constructor has parameters but no forCtor or ` +
         `transformer-generated defineDeps call was found. Use ` +
         `forCtor(...).signature(...) or register it with useFactory to wire ` +
         `it manually.`,

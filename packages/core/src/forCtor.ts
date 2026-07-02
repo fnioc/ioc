@@ -12,8 +12,8 @@ export interface ForCtorBuilder {
    * Token | FactoryRef | ScopeRef | Union) to the ctor's dependency metadata.
    * Returns `this` for chaining.
    *
-   * Each `.signature(...)` call is one overload. Chaining two calls is
-   * equivalent to stacking two `@signature` decorators.
+   * Each `.signature(...)` call is one overload. Chaining two calls
+   * registers two overloads.
    */
   signature(...tokens: readonly DepSlot[]): ForCtorBuilder;
 }

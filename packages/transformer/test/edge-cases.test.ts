@@ -5,34 +5,6 @@ import { DiagnosticCode } from "../src/index.js";
 // Basic edge-case behaviour (PRD §8) — NOT the Phase-2D factory diagnostic.
 
 describe("already-annotated classes", () => {
-  test("@signature-decorated class: skip defineDeps + info diagnostic", () => {
-    const src = `
-      import { signature } from "@fnioc/core";
-      interface ILogger {}
-      interface IUserRepo {}
-      @signature("manual:ILogger")
-      class SqlUserRepo implements IUserRepo {
-        constructor(log: ILogger) {}
-      }
-      declare const services: any;
-      services.add<IUserRepo>(SqlUserRepo).as<"request">();
-    `;
-    const { output, diagnostics } = transform(fixture(src));
-
-    // The registration is STILL lowered (token + .as), but NO defineDeps is
-    // emitted for the annotated class — the manual annotation is authoritative.
-    expect(output).toContain('services.add("./app/IUserRepo", SqlUserRepo).as("request")');
-    expect(output).not.toContain("defineDeps(SqlUserRepo");
-
-    // An info diagnostic is raised (never silent).
-    const info = diagnostics.find(
-      (d) => d.code === DiagnosticCode.AlreadyAnnotated,
-    );
-    expect(info).toBeDefined();
-    expect(info!.category).toBe(3 /* ts.DiagnosticCategory.Message */);
-    expect(String(info!.messageText)).toContain("SqlUserRepo");
-  });
-
   test("forCtor-annotated class: skip defineDeps + info diagnostic", () => {
     const src = `
       import { forCtor } from "@fnioc/core";
