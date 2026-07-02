@@ -1,5 +1,16 @@
 # Changelog
 
+## [7.0.0](https://github.com/fnioc/ioc/compare/di-v6.0.0...di-v7.0.0) (2026-07-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* closed-generic tokens change token derivation for any generic type reference. Code recompiled with the new transformer re-lowers cleanly; lowered JS published by an older transformer will not unify with new closed tokens for the same generic type.
+
+### Features
+
+* open generics (core/di/transformer) ([#75](https://github.com/fnioc/ioc/issues/75)) ([74930ba](https://github.com/fnioc/ioc/commit/74930baaa404a8a9024657679941c6a320e28dce))
+
 ## [6.0.0](https://github.com/fnioc/ioc/compare/di-v5.0.0...di-v6.0.0) (2026-06-04)
 
 
