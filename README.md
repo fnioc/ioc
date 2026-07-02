@@ -38,6 +38,38 @@ The lowered form is the ABI. Libraries compile once with the transformer and pub
 
 ---
 
+## Open generics
+
+Closing a generic is the same trick, one level up — token algebra, not runtime type machinery. TypeScript generics are erased: there is exactly ONE JS class per generic implementation, so a "closing" needs no reflection. Register once against a placeholder-typed interface using `$<N>`/`Hole<N>` skolems on both sides:
+
+```ts
+// Author code — $<1> stands in for IRepository's type parameter on both sides
+interface IRepository<T> { find(id: string): Promise<T>; }
+
+class SqlRepository<T> implements IRepository<T> {
+  constructor(private db: IDbConnection, private entityToken: Typeof<T>) {}
+}
+
+services.add<IRepository<$<1>>>(SqlRepository<$<1>>).as<"singleton">();
+
+// Distinct closings resolve to distinct, independently-cached instances
+const userRepo = scope.resolve<IRepository<User>>();
+const orderRepo = scope.resolve<IRepository<Order>>();
+```
+
+The transformer lowers this to a **template token** carrying the constructor's dep signature on the registration itself, not the usual ctor-keyed `defineDeps` (one open impl can back many closings, so the metadata can't live on the shared ctor object):
+
+```ts
+// Lowered output
+services.add("pkg:IRepository<$1>", SqlRepository, [
+  ["pkg:IDbConnection", { typeArg: 1 }],
+]);
+```
+
+**The erasure insight.** Because every closing shares the same JS class, the runtime never instantiates a generic — it derives the right *string*. `IRepository<User>` and `IRepository<Order>` are two ordinary, distinct-cache-key tokens (`pkg:IRepository<pkg:User>`, `pkg:IRepository<pkg:Order>`) that happen to share a base and an implementation. Resolving one parses the token, matches it against the open registration by base + arity, substitutes `$1` → `pkg:User` through the carried dep signature, and caches the result as a synthesized, perfectly ordinary registration from then on. See [`@fnioc/di`](packages/di/README.md#open-generics) for the resolution mechanics and [`@fnioc/transformer`](packages/transformer/README.md#open-generics) for the full closed-token grammar, instantiation expressions, and diagnostics.
+
+---
+
 ## Design philosophy — scopes are uniform tags
 
 **Scopes are uniform tags — there is no root.** `"singleton"` is literally just a tag you happen to open once at the top. You can run the container without ever opening a scope at all; with no matching frame open, resolution is transient.
@@ -182,7 +214,7 @@ await using _ = root; // uses native Symbol.asyncDispose (TypeScript 5.2+)
 
 | Package | Responsibility |
 |---|---|
-| [`@fnioc/core`](packages/core) | Immutable substrate: `Token`, `DepSlot`, `FactoryRef`, `ScopeRef`, `Union`, `union`, `Inject`, `defineDeps`, `@signature`, `forCtor`. The ABI both `di` and `transformer` build on. |
+| [`@fnioc/core`](packages/core) | Immutable substrate: `Token`, `DepSlot`, `FactoryRef`, `ScopeRef`, `Union`, `union`, `Inject`, `defineDeps`, `@signature`, `forCtor`, plus the open-generics grammar (`Hole`, `$`, `Typeof`, `closeToken`, `parseToken`, `isOpenToken`, `substituteToken`). The ABI both `di` and `transformer` build on. |
 | [`@fnioc/di`](packages/di) | Runtime engine: `ServiceManifest<Scopes>`, uniform scope tags, frameless `build()`, resolution with transient fallback, captive-dependency protection, disposal, `useFactory`/`useValue`. Re-exports the `@fnioc/core` authoring surfaces. |
 | [`@fnioc/transformer`](packages/transformer) | Build-time ts-patch plugin: token derivation, dep extraction, `defineDeps` emission, registration lowering, factory-signature diagnostics. Re-exports `Inject`. |
 
