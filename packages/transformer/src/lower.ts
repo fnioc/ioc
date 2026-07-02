@@ -17,7 +17,7 @@
 //
 // A dynamic arg with no statically derivable signature gets no dep array and no
 // hoist (a single use) — the runtime throws with guidance if it needs metadata.
-// An already-`@signature`/`forCtor`-annotated class is left to its own metadata
+// An already-`forCtor`-annotated class is left to its own metadata
 // (skip emission + info diagnostic).
 
 import ts from "typescript";
@@ -29,7 +29,6 @@ import {
   extractFromExpression,
   extractInstantiatedSignature,
   extractSignatureFromFunction,
-  hasSignatureDecorator,
   isFactorySlot,
   isLiteralSlot,
   isScopeSlot,
@@ -620,8 +619,8 @@ function emitHoisted(
  * The class signature to emit for a statically-resolved class, running the PRD
  * §8 checks (equal-arity overload ambiguity, factory-param §4.5, async
  * mismatch). Returns `undefined` — skip `defineDeps` — when the class is already
- * manually annotated (`@signature` / `forCtor` is authoritative); an info
- * diagnostic is emitted so the skip is never silent.
+ * manually annotated (`forCtor` is authoritative); an info diagnostic is emitted
+ * so the skip is never silent.
  */
 function classSignatureFromExtraction(
   extraction: ConstructorExtraction,
@@ -630,12 +629,7 @@ function classSignatureFromExtraction(
 ): Signature[] | undefined {
   checkOverloads(extraction.classSymbol, concreteArg, ctx);
 
-  const classDecl = extraction.classSymbol
-    .getDeclarations()
-    ?.find(ts.isClassDeclaration);
-  const annotated =
-    (classDecl && hasSignatureDecorator(classDecl)) ||
-    ctx.forCtorAnnotated.has(extraction.classSymbol);
+  const annotated = ctx.forCtorAnnotated.has(extraction.classSymbol);
   if (annotated) {
     checkAnnotatedFactoryParams(extraction.classSymbol, ctx);
     ctx.sink.addDiagnostic(
@@ -643,7 +637,7 @@ function classSignatureFromExtraction(
         ctx.sourceFile,
         concreteArg,
         DiagnosticCode.AlreadyAnnotated,
-        `${extraction.classSymbol.getName()} already has a manual @signature/forCtor annotation; ` +
+        `${extraction.classSymbol.getName()} already has a manual forCtor annotation; ` +
           `skipping transformer-generated defineDeps (manual annotation is authoritative).`,
       ),
     );

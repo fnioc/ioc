@@ -340,12 +340,12 @@ Registering `IRedis` or `IMemoryCache` separately does nothing for a `CacheProvi
 
 ## Already-annotated classes
 
-When the transformer encounters a class that already has a `@signature` decorator or a `forCtor` annotation, it treats the manual annotation as **authoritative**:
+When the transformer encounters a class that already has a `forCtor` annotation, it treats the manual annotation as **authoritative**:
 
 - It skips dep extraction and `defineDeps` emission for that class.
 - It emits an **info diagnostic** — never silent, never double-writes.
 
-This is the opt-out path. Hand-annotate a class with `@signature` or `forCtor` to take full control of its signature, and the transformer will step aside.
+This is the opt-out path. Hand-annotate a class with `forCtor` to take full control of its signature, and the transformer will step aside.
 
 ---
 
@@ -354,9 +354,10 @@ This is the opt-out path. Hand-annotate a class with `@signature` or `forCtor` t
 If the transformer cannot statically inspect a constructor (a class reference passed through a variable, a dynamically-constructed class), it emits no `defineDeps` call. At resolve time, `@fnioc/di` checks the global-symbol Map and throws with guidance if the constructor has parameters but no record:
 
 ```
-No dep metadata found for <ClassName>. The constructor has parameters but
-no @signature, forCtor, or transformer-generated defineDeps call was found.
-Use forCtor(...).signature(...) or useFactory to register it manually.
+No dep metadata found for <ClassName> (resolving "<token>"). The
+constructor has parameters but no forCtor or transformer-generated
+defineDeps call was found. Use forCtor(...).signature(...) or register
+it with useFactory to wire it manually.
 ```
 
 A genuine zero-argument constructor is `new`ed directly without a dep lookup.
@@ -392,7 +393,7 @@ This check fires only when the `useFactory` for the same token is visibly `async
 
 ### Equal-arity overload ambiguity (code 990005)
 
-Two manually-registered constructor signatures (via stacked `@signature` decorators or chained `forCtor(...).signature(...)` calls) have the same length. The engine's greedy selection picks overloads by argument count, so two same-length signatures cannot be distinguished:
+Two manually-registered constructor signatures (via chained `forCtor(...).signature(...)` calls) have the same length. The engine's greedy selection picks overloads by argument count, so two same-length signatures cannot be distinguished:
 
 ```
 MyService has two constructor signatures of the same length (2). The
@@ -470,4 +471,4 @@ Fix: add the missing hole to the service token, or replace the dependency's refe
 The transformer is not required to *use* `@fnioc/di`. It automates annotation for classes you own. When you don't have the transformer configured:
 
 - Libraries compiled with the transformer publish plain-data lowered JS — their registrations work without any plugin on the consumer side.
-- For your own classes, use `useFactory`/`useValue`, `@signature`, or `forCtor`. See [`@fnioc/di`](../di/README.md) and [`@fnioc/core`](../core/README.md) for those APIs.
+- For your own classes, use `useFactory`/`useValue`, or `forCtor`. See [`@fnioc/di`](../di/README.md) and [`@fnioc/core`](../core/README.md) for those APIs.

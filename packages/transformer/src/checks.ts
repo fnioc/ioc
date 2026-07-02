@@ -13,9 +13,9 @@
 //   2. Async mismatch. A ctor param declared as a bare `IDb` for a token that
 //      is registered async (a `useFactory` whose result is a `Promise`) — the
 //      value is a `Promise<IDb>`, so the dep should be declared `Promise<IDb>`.
-//   3. Equal-arity overload ambiguity. Two manual `@signature` / `forCtor`
-//      signatures of the same length for one constructor — the engine can't
-//      tell them apart by arity.
+//   3. Equal-arity overload ambiguity. Two manual `forCtor` signatures of the
+//      same length for one constructor — the engine can't tell them apart by
+//      arity.
 
 import ts from "typescript";
 import {
@@ -69,8 +69,8 @@ export function checkExtractedRegistration(
 }
 
 /**
- * Factory-signature (§4.5) check for a manually-annotated class (`@signature` /
- * `forCtor`). The annotated path skips dep extraction and `defineDeps` emission,
+ * Factory-signature (§4.5) check for a manually-annotated class (`forCtor`).
+ * The annotated path skips dep extraction and `defineDeps` emission,
  * so `checkExtractedRegistration` never runs for it — but PRD §8 still requires
  * factory parameters declared on a hand-annotated ctor to be validated against
  * the produced type's constructor holes. This runs ONLY the factory-signature
@@ -97,9 +97,9 @@ export function checkAnnotatedFactoryParams(
 
 /**
  * Equal-arity overload-ambiguity check. Runs for EVERY registration, including
- * manually-annotated ones — overloads only ever come from stacked `@signature`
- * decorators or chained `forCtor(...).signature(...)`, which the transformer
- * skips for emission but must still validate.
+ * manually-annotated ones — overloads only ever come from chained
+ * `forCtor(...).signature(...)`, which the transformer skips for emission but
+ * must still validate.
  */
 export function checkOverloads(
   classSymbol: ts.Symbol,
@@ -242,8 +242,8 @@ function checkAsyncParam(
 }
 
 /**
- * Equal-arity overload ambiguity: two manual `@signature` / `forCtor`
- * signatures of the same length on one constructor. The engine selects
+ * Equal-arity overload ambiguity: two manual `forCtor` signatures of the same
+ * length on one constructor. The engine selects
  * overloads by arity, so two same-length signatures it cannot disambiguate.
  */
 function checkOverloadAmbiguity(
@@ -251,13 +251,7 @@ function checkOverloadAmbiguity(
   site: ts.Expression,
   ctx: CheckContext,
 ): void {
-  const decorators = ts.getDecorators(classDecl) ?? [];
   const lengths: number[] = [];
-  for (const dec of decorators) {
-    if (!ts.isCallExpression(dec.expression)) {continue;}
-    if (!isSignatureCallee(dec.expression.expression)) {continue;}
-    lengths.push(dec.expression.arguments.length);
-  }
   // forCtor(C).signature(a, b).signature(c, d) — chained signature() arities.
   for (const len of forCtorSignatureArities(classDecl, ctx)) {lengths.push(len);}
 
@@ -321,15 +315,6 @@ function isPromiseTypeNode(node: ts.TypeNode): boolean {
     ts.isIdentifier(node.typeName) &&
     node.typeName.text === "Promise"
   );
-}
-
-/** True when a decorator callee is `signature` (bare or `ns.signature`). */
-function isSignatureCallee(callee: ts.Expression): boolean {
-  if (ts.isIdentifier(callee)) {return callee.text === "signature";}
-  if (ts.isPropertyAccessExpression(callee)) {
-    return callee.name.text === "signature";
-  }
-  return false;
 }
 
 /**

@@ -201,7 +201,7 @@ export interface DepRecord {
 
 ## `defineDeps`
 
-The single write path into the dep-metadata store. Both the transformer-emitted output and the `@signature`/`forCtor` authoring surfaces funnel through this function.
+The single write path into the dep-metadata store. Both the transformer-emitted output and the `forCtor` authoring surface funnel through this function.
 
 ```ts
 export function defineDeps(
@@ -210,7 +210,7 @@ export function defineDeps(
 ): void
 ```
 
-If a `DepRecord` already exists for `ctor`, `defineDeps` merges by appending unique signatures — stacked `@signature` decorators accumulate overloads rather than overwrite each other.
+If a `DepRecord` already exists for `ctor`, `defineDeps` merges by appending unique signatures — chained `forCtor(...).signature(...)` calls accumulate overloads rather than overwrite each other.
 
 ---
 
@@ -226,40 +226,9 @@ Used by `@fnioc/di` during resolution. Returns `undefined` if no record has been
 
 ---
 
-## `@signature` decorator
-
-A TC39 class decorator (not legacy `experimentalDecorators`). Writes one signature into the global-symbol Map by calling `defineDeps`.
-
-```ts
-export function signature(
-  ...tokens: readonly DepSlot[]
-): (ctor: Function, ctx: ClassDecoratorContext) => void
-```
-
-Stack decorators to register multiple overloads. TypeScript evaluates decorators bottom-up:
-
-```ts
-@signature("pkg:ILogger", "pkg:IDb")  // overload 1 (appended second)
-@signature("pkg:IDb")                  // overload 0 (appended first)
-class MyService {
-  constructor(logOrDb: ILogger | IDb, db?: IDb) { ... }
-}
-```
-
-Use a `Union` slot for alternative deps, a `FactoryRef` for factory-injected params:
-
-```ts
-@signature(union("pkg:IRedis", "pkg:IMemory"), "pkg:IDb")
-class CacheAwareRepo {
-  constructor(cache: IRedis | IMemory, db: IDb) { ... }
-}
-```
-
----
-
 ## `forCtor`
 
-Fluent free-function equivalent of `@signature`. Use for classes you don't own (third-party, dynamically generated) or when you prefer not to decorate.
+The manual authoring surface: a fluent free-function that writes signatures into the global-symbol Map by calling `defineDeps`. Use it for classes the transformer can't see, classes you don't own (third-party, dynamically generated), or whenever you prefer to hand-annotate.
 
 ```ts
 export function forCtor(ctor: Function): ForCtorBuilder
@@ -269,12 +238,19 @@ interface ForCtorBuilder {
 }
 ```
 
-Chain `.signature()` calls to add overloads:
+Chain `.signature()` calls to register multiple overloads:
 
 ```ts
-forCtor(ThirdPartyService)
-  .signature("pkg:IDb")
-  .signature("pkg:ILogger", "pkg:IDb");
+forCtor(MyService)
+  .signature("pkg:IDb")                 // overload 0 (appended first)
+  .signature("pkg:ILogger", "pkg:IDb"); // overload 1 (appended second)
+```
+
+Use a `Union` slot for alternative deps, a `FactoryRef` for factory-injected params:
+
+```ts
+forCtor(CacheAwareRepo)
+  .signature(union("pkg:IRedis", "pkg:IMemory"), "pkg:IDb");
 ```
 
 For a third-party class where you need to override specific positions without rewriting the full signature, pass an override array to `add<I>(C, sig)` instead — see the registration override section in [`@fnioc/di`](../di/README.md).
@@ -365,7 +341,7 @@ const store: Map<DepTarget, DepRecord> =
   (globalThis as any)[KEY] ??= new Map();
 ```
 
-**Why a regular Map and not a WeakMap:** every key is a constructor or factory function that is pinned for the module's lifetime — a class is a module binding, an `@signature`/`forCtor` target is a named declaration, and a transformer-lowered factory is hoisted into a module-level `const`. No key ever becomes unreachable, so a WeakMap could never collect an entry — its weakness would be pure ceremony. DI metadata is registered once at startup and lives for the process by design, so a plain Map's non-collection is correct, not a leak.
+**Why a regular Map and not a WeakMap:** every key is a constructor or factory function that is pinned for the module's lifetime — a class is a module binding, a `forCtor` target is a named declaration, and a transformer-lowered factory is hoisted into a module-level `const`. No key ever becomes unreachable, so a WeakMap could never collect an entry — its weakness would be pure ceremony. DI metadata is registered once at startup and lives for the process by design, so a plain Map's non-collection is correct, not a leak.
 
 **Why `Symbol.for`, never `Symbol()`:** a unique symbol would create separate maps if two copies of `@fnioc/core` end up in the same runtime (the dual-package hazard — deduplication failures, monorepos, certain bundler configurations). `Symbol.for` keys are global-registry entries; two copies of `@fnioc/core` will find the same symbol and the same Map, so metadata written through either copy is visible to both.
 
@@ -400,8 +376,7 @@ const store: Map<DepTarget, DepRecord> =
 | `DepRecord` | Interface | `{ signatures }` — per-constructor metadata shape. |
 | `defineDeps` | Function | Write dep metadata into the global-symbol Map. |
 | `getDeps` | Function | Read dep metadata from the global-symbol Map. |
-| `signature` | Decorator | TC39 class decorator — hand-annotate a class's signature. |
-| `forCtor` | Function | Fluent alternative to `@signature` for classes you don't own. |
+| `forCtor` | Function | Fluent manual authoring surface — hand-annotate a class's signatures. |
 | `ForCtorBuilder` | Interface | Return type of `forCtor`. |
 | `closeToken` | Function | Render the canonical closed-generic token `base<a,b>`. |
 | `parseToken` | Function | Parse a closed-generic token into `{ base, args }`, or `undefined`. |

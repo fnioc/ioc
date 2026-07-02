@@ -121,18 +121,12 @@ services.add("pkg:ICache", {
 });
 ```
 
-**`@signature`** — hand-annotate your own classes:
+**`forCtor`** — hand-annotate your own classes or classes you don't own:
 
 ```ts
-@signature("pkg:ILogger", "pkg:IDbConnection")
-class SqlUserRepo {
-  constructor(log: ILogger, db: IDbConnection) { ... }
-}
-```
+forCtor(SqlUserRepo)
+  .signature("pkg:ILogger", "pkg:IDbConnection");
 
-**`forCtor`** — annotate classes you don't own:
-
-```ts
 forCtor(ThirdPartyService)
   .signature("pkg:IDb")
   .signature("pkg:ILogger", "pkg:IDb");
@@ -214,7 +208,7 @@ await using _ = root; // uses native Symbol.asyncDispose (TypeScript 5.2+)
 
 | Package | Responsibility |
 |---|---|
-| [`@fnioc/core`](packages/core) | Immutable substrate: `Token`, `DepSlot`, `FactoryRef`, `ScopeRef`, `Union`, `union`, `Inject`, `defineDeps`, `@signature`, `forCtor`, plus the open-generics grammar (`Hole`, `$`, `Typeof`, `closeToken`, `parseToken`, `isOpenToken`, `substituteToken`). The ABI both `di` and `transformer` build on. |
+| [`@fnioc/core`](packages/core) | Immutable substrate: `Token`, `DepSlot`, `FactoryRef`, `ScopeRef`, `Union`, `union`, `Inject`, `defineDeps`, `forCtor`, plus the open-generics grammar (`Hole`, `$`, `Typeof`, `closeToken`, `parseToken`, `isOpenToken`, `substituteToken`). The ABI both `di` and `transformer` build on. |
 | [`@fnioc/di`](packages/di) | Runtime engine: `ServiceManifest<Scopes>`, uniform scope tags, frameless `build()`, resolution with transient fallback, captive-dependency protection, disposal, `useFactory`/`useValue`. Re-exports the `@fnioc/core` authoring surfaces. |
 | [`@fnioc/transformer`](packages/transformer) | Build-time ts-patch plugin: token derivation, dep extraction, `defineDeps` emission, registration lowering, factory-signature diagnostics. Re-exports `Inject`. |
 

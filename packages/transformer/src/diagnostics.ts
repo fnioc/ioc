@@ -22,7 +22,7 @@ export interface DiagnosticSink {
  * transformer's observable surface — tests assert on them.
  */
 export const enum DiagnosticCode {
-  /** A registered class already carries a manual `@signature` / `forCtor`. */
+  /** A registered class already carries a manual `forCtor` annotation. */
   AlreadyAnnotated = 990001,
   /** A registration's concrete argument could not be statically resolved. */
   DynamicRegistration = 990002,

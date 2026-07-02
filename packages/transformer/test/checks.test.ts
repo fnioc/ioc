@@ -106,36 +106,6 @@ describe("factory-signature diagnostic (§4.5)", () => {
     );
   });
 
-  test("fires for a hand-declared @signature factory slot with too few params", () => {
-    // Foo ctor: (a: string, b: number) — both holes. The factory declares only 1
-    // param but there are 2 holes that must be covered → mismatch. The §8 diagnostic
-    // must still fire for the hand-declared slot, not be skipped by the annotated path.
-    const src = `
-      import { signature } from "@fnioc/core";
-      interface IFoo {}
-      class Foo implements IFoo {
-        constructor(a: string, b: number) {}
-      }
-      interface ISvc {}
-      @signature("manual:IA")
-      class Svc implements ISvc {
-        constructor(makeFoo: (x: string) => Foo) {}
-      }
-      declare const services: any;
-      services.add<ISvc>(Svc).as<"singleton">();
-    `;
-    const { output, diagnostics } = transform(fixture(src));
-    // The annotated class still skips transformer-generated defineDeps.
-    expect(output).not.toContain("defineDeps(Svc");
-    const diag = diagnostics.find(
-      (d) => d.code === DiagnosticCode.FactorySignatureMismatch,
-    );
-    expect(diag).toBeDefined();
-    expect(diag!.category).toBe(0 /* ts.DiagnosticCategory.Warning */);
-    expect(String(diag!.messageText)).toContain("makeFoo");
-    expect(String(diag!.messageText)).not.toContain("lower");
-  });
-
   test("fires for a forCtor-annotated class factory slot with too few params", () => {
     // Foo ctor: (a: string, b: number) — both holes. Factory declares only 1 → mismatch.
     const src = `
@@ -159,19 +129,19 @@ describe("factory-signature diagnostic (§4.5)", () => {
     );
   });
 
-  test("no diagnostic for a hand-declared factory slot with matching arity", () => {
+  test("no diagnostic for a forCtor-annotated factory slot with matching arity", () => {
     const src = `
-      import { signature } from "@fnioc/core";
+      import { forCtor } from "@fnioc/core";
       interface IA {}
       interface IFoo {}
       class Foo implements IFoo {
         constructor(a: IA, b: string) {}
       }
       interface ISvc {}
-      @signature("manual:IA")
       class Svc implements ISvc {
         constructor(makeFoo: (b: string) => Foo) {}
       }
+      forCtor(Svc).signature("manual:IA");
       declare const services: any;
       services.add<ISvc>(Svc).as<"singleton">();
     `;
@@ -256,13 +226,12 @@ describe("async-mismatch diagnostic", () => {
 });
 
 describe("equal-arity overload-ambiguity diagnostic", () => {
-  test("fires for two @signature overloads of the same length", () => {
+  test("fires for two chained forCtor signatures of the same length", () => {
     const src = `
-      import { signature } from "@fnioc/core";
+      import { forCtor } from "@fnioc/core";
       interface ISvc {}
-      @signature("a", "b")
-      @signature("c", "d")
       class Svc implements ISvc { constructor(x: any, y: any) {} }
+      forCtor(Svc).signature("a", "b").signature("c", "d");
       declare const services: any;
       services.add<ISvc>(Svc).as<"singleton">();
     `;
@@ -275,26 +244,12 @@ describe("equal-arity overload-ambiguity diagnostic", () => {
     expect(String(diag!.messageText)).not.toContain("lower");
   });
 
-  test("fires for two chained forCtor signatures of the same length", () => {
+  test("no diagnostic when overload arities differ", () => {
     const src = `
       import { forCtor } from "@fnioc/core";
       interface ISvc {}
-      class Svc implements ISvc { constructor(x: any, y: any) {} }
-      forCtor(Svc).signature("a", "b").signature("c", "d");
-      declare const services: any;
-      services.add<ISvc>(Svc).as<"singleton">();
-    `;
-    const { diagnostics } = transform(fixture(src));
-    expect(codes(diagnostics)).toContain(DiagnosticCode.OverloadAmbiguity);
-  });
-
-  test("no diagnostic when overload arities differ", () => {
-    const src = `
-      import { signature } from "@fnioc/core";
-      interface ISvc {}
-      @signature("a", "b")
-      @signature("c")
       class Svc implements ISvc { constructor(x: any, y?: any) {} }
+      forCtor(Svc).signature("a", "b").signature("c");
       declare const services: any;
       services.add<ISvc>(Svc).as<"singleton">();
     `;
