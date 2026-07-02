@@ -5,11 +5,23 @@ import {
   signature,
   forCtor,
   union,
+  typeArg,
   isFactoryRef,
   isScopeRef,
   isUnionSlot,
+  isLiteralRef,
+  isTypeArgRef,
 } from "@fnioc/core";
-import type { FactoryRef, DepSlot, Union, Inject, Token } from "@fnioc/core";
+import type {
+  FactoryRef,
+  DepSlot,
+  Union,
+  Inject,
+  Token,
+  Hole,
+  $,
+  Typeof,
+} from "@fnioc/core";
 
 // ── Global anchor ─────────────────────────────────────────────────────────────
 
@@ -519,5 +531,150 @@ describe("Inject brand", () => {
     type _Check = Inject<{ id: number }, "pkg:MyService">;
     const val: Inject<{ id: number }, "pkg:MyService"> = { id: 1 };
     expect(val.id).toBe(1);
+  });
+});
+
+// ── typeArg() helper and TypeArgRef slot ─────────────────────────────────────
+
+describe("typeArg helper", () => {
+  test("typeArg(n) constructs { typeArg: n }", () => {
+    expect(typeArg(1)).toEqual({ typeArg: 1 });
+    expect(typeArg(3)).toEqual({ typeArg: 3 });
+  });
+
+  test("a TypeArgRef slot is stored verbatim in the DepRecord", () => {
+    class TypeArgSlotCtor {}
+
+    defineDeps(TypeArgSlotCtor, [[typeArg(1), "slot:IDb"]]);
+
+    const rec = getDeps(TypeArgSlotCtor);
+    expect(rec!.signatures[0]).toEqual([{ typeArg: 1 }, "slot:IDb"]);
+  });
+});
+
+describe("isTypeArgRef guard", () => {
+  test("true for { typeArg: number }", () => {
+    expect(isTypeArgRef(typeArg(1))).toBe(true);
+    expect(isTypeArgRef({ typeArg: 9 })).toBe(true);
+  });
+
+  test("false for every other slot kind", () => {
+    expect(isTypeArgRef("tok:IFoo")).toBe(false);
+    expect(isTypeArgRef({ type: "tok:IFoo" })).toBe(false);
+    expect(isTypeArgRef({ scope: true })).toBe(false);
+    expect(isTypeArgRef({ union: ["tok:A"] })).toBe(false);
+    expect(isTypeArgRef({ value: 1 })).toBe(false);
+  });
+
+  test("other guards are false for a TypeArgRef (key-disjoint)", () => {
+    const slot: DepSlot = typeArg(2);
+    expect(isFactoryRef(slot)).toBe(false);
+    expect(isScopeRef(slot)).toBe(false);
+    expect(isUnionSlot(slot)).toBe(false);
+    expect(isLiteralRef(slot)).toBe(false);
+  });
+});
+
+describe("TypeArgRef structural dedup in slotsEqual", () => {
+  test("two identical TypeArgRef slots dedup to one signature", () => {
+    class TypeArgDedupSame {}
+
+    defineDeps(TypeArgDedupSame, [["tok:IA", typeArg(1)]]);
+    defineDeps(TypeArgDedupSame, [["tok:IA", typeArg(1)]]);
+
+    const rec = getDeps(TypeArgDedupSame);
+    expect(rec!.signatures).toHaveLength(1);
+  });
+
+  test("different hole numbers stay distinct signatures", () => {
+    class TypeArgDedupDiff {}
+
+    defineDeps(TypeArgDedupDiff, [["tok:IA", typeArg(1)]]);
+    defineDeps(TypeArgDedupDiff, [["tok:IA", typeArg(2)]]);
+
+    const rec = getDeps(TypeArgDedupDiff);
+    expect(rec!.signatures).toHaveLength(2);
+  });
+
+  test("a TypeArgRef and a LiteralRef with matching numbers stay distinct", () => {
+    class TypeArgVsLiteral {}
+
+    defineDeps(TypeArgVsLiteral, [["tok:IA", typeArg(1)]]);
+    defineDeps(TypeArgVsLiteral, [["tok:IA", { value: 1 }]]);
+
+    const rec = getDeps(TypeArgVsLiteral);
+    expect(rec!.signatures).toHaveLength(2);
+  });
+
+  test("a TypeArgRef and a string slot stay distinct", () => {
+    class TypeArgVsString {}
+
+    defineDeps(TypeArgVsString, [["tok:IA", typeArg(1)]]);
+    defineDeps(TypeArgVsString, [["tok:IA", "$1"]]);
+
+    const rec = getDeps(TypeArgVsString);
+    expect(rec!.signatures).toHaveLength(2);
+  });
+});
+
+// ── Hole / $<N> / Typeof brands (type-level) ─────────────────────────────
+
+describe("Hole brand", () => {
+  test("$<N> aliases are usable as type arguments (the authoring position)", () => {
+    // Holes appear as TYPE ARGUMENTS (`SqlRepository<$<1>>`), never as value
+    // targets — an unconstrained hole is a weak brand type, so a VALUE slot
+    // typed by one takes an explicit cast. That's fine: the transformer reads
+    // holes from the type system; no runtime value ever inhabits one.
+    class Box<T> {
+      constructor(readonly value: T) {}
+    }
+    const first = new Box<$<1>>("payload" as $<1>);
+    const second = new Box<$<2>>(42 as $<2>);
+    expect(first.value).toBe("payload" as $<1>);
+    expect(second.value).toBe(42 as $<2>);
+  });
+
+  test("constrained skolem: Hole<1, Entity> is assignable TO Entity", () => {
+    // The brand property is optional, so the intersection stays an Entity —
+    // this is what lets `class Repo<T extends Entity>` accept a hole.
+    interface Entity {
+      readonly id: number;
+    }
+    const skolem: Hole<1, Entity> = { id: 7 };
+    const asEntity: Entity = skolem;
+    expect(asEntity.id).toBe(7);
+  });
+
+  test("constrained skolem satisfies a T-extends-constraint type parameter", () => {
+    interface Entity {
+      readonly id: number;
+    }
+    class Repo<T extends Entity> {
+      keep(entity: T): T {
+        return entity;
+      }
+    }
+    // If this instantiation compiles, Hole<1, Entity> satisfies `T extends Entity`.
+    const repo = new Repo<Hole<1, Entity>>();
+    expect(repo.keep({ id: 1 }).id).toBe(1);
+  });
+});
+
+describe("Typeof brand", () => {
+  test("Typeof<T> is assignable from a plain string (branded Token)", () => {
+    interface Entity {
+      readonly id: number;
+    }
+    const token: Typeof<Entity> = "./src/Entity";
+    const asToken: Token = token;
+    expect(asToken).toBe("./src/Entity");
+  });
+
+  test("Typeof works with a Hole binding (open-template authoring shape)", () => {
+    class Witness<T> {
+      constructor(readonly entityToken: Typeof<T>) {}
+    }
+    const w = new Witness<$<1>>("app/IUser");
+    expect(w.entityToken).toBe("app/IUser");
   });
 });

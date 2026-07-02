@@ -4,6 +4,7 @@ import type {
   DepTarget,
   FactoryRef,
   LiteralRef,
+  TypeArgRef,
   Union,
 } from "./types.js";
 import { store } from "./store.js";
@@ -50,6 +51,20 @@ export function isLiteralRef(slot: DepSlot): slot is LiteralRef {
 }
 
 /**
+ * True when `slot` is a `TypeArgRef` — an object slot carrying a numeric
+ * `typeArg` key (the 1-based hole number). Key-disjoint from every other slot
+ * kind (FactoryRef `.type`, ScopeRef `.scope`, Union `.union`, LiteralRef
+ * `.value`), so the check is unambiguous.
+ */
+export function isTypeArgRef(slot: DepSlot): slot is TypeArgRef {
+  return (
+    typeof slot === "object" &&
+    slot !== null &&
+    typeof (slot as { typeArg?: unknown }).typeArg === "number"
+  );
+}
+
+/**
  * Structural equality of two signature slots:
  *   - two `FactoryRef`s are equal iff their `.type` tokens match and their
  *     `.params` arrays are element-wise identical (or both absent),
@@ -58,6 +73,7 @@ export function isLiteralRef(slot: DepSlot): slot is LiteralRef {
  *     under recursive `slotsEqual`,
  *   - two `LiteralRef`s are equal iff their `.value`s are strictly equal (bigint
  *     compares by value),
+ *   - two `TypeArgRef`s are equal iff their `.typeArg` hole numbers match,
  *   - strings compare by value,
  *   - slots of different kinds are never equal.
  */
@@ -94,6 +110,11 @@ function slotsEqual(a: DepSlot, b: DepSlot): boolean {
   const bIsLiteral = isLiteralRef(b);
   if (aIsLiteral || bIsLiteral) {
     return aIsLiteral && bIsLiteral && a.value === b.value;
+  }
+  const aIsTypeArg = isTypeArgRef(a);
+  const bIsTypeArg = isTypeArgRef(b);
+  if (aIsTypeArg || bIsTypeArg) {
+    return aIsTypeArg && bIsTypeArg && a.typeArg === b.typeArg;
   }
   return a === b;
 }

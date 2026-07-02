@@ -73,14 +73,27 @@ export interface LiteralRef {
 }
 
 /**
+ * Marks a parameter to be injected with the TOKEN STRING of one of the
+ * registration's type arguments — the `typeof(T)` analog for open-generic
+ * templates. `typeArg` is the 1-based hole number (`{ typeArg: 1 }` names the
+ * argument bound to `$1`). At close time, substitution replaces the slot with
+ * a `LiteralRef` carrying the substituted argument's token string; a raw
+ * (unsubstituted) `TypeArgRef` reaching resolution is an error.
+ */
+export interface TypeArgRef {
+  readonly typeArg: number;
+}
+
+/**
  * One positional slot in a constructor / factory signature:
  *   - a `Token` string  — a container-resolved dependency,
  *   - a `FactoryRef`    — a factory-injected parameter (see `FactoryRef`),
  *   - a `ScopeRef`      — the live resolution scope (see `ScopeRef`),
- *   - a `Union`         — member-level alternatives tried in order, or
- *   - a `LiteralRef`    — a singular literal supplying its value directly.
+ *   - a `Union`         — member-level alternatives tried in order,
+ *   - a `LiteralRef`    — a singular literal supplying its value directly, or
+ *   - a `TypeArgRef`    — the token string of a type argument (see `TypeArgRef`).
  */
-export type DepSlot = Token | FactoryRef | ScopeRef | Union | LiteralRef;
+export type DepSlot = Token | FactoryRef | ScopeRef | Union | LiteralRef | TypeArgRef;
 
 /**
  * Per-constructor dependency metadata stored in the global-symbol Map.
@@ -115,3 +128,51 @@ export interface DepRecord {
  */
 declare const TOK: unique symbol;
 export type Inject<T, K extends Token> = T & { readonly [TOK]?: K };
+
+// ── Hole brand (open generics) ────────────────────────────────────────────────
+
+/**
+ * Compile-time skolem standing in for the `N`th type argument of an open
+ * template (1-based). Writing `add<IRepository<$<1>>>(SqlRepository<$<1>>)` binds
+ * the hole; the transformer derives `$N` wherever a Hole-branded type appears.
+ *
+ * `C` is the constraint carrier: `Hole<1, Entity>` IS an `Entity` (the brand
+ * property is optional, so the intersection stays assignable to `C`), which
+ * lets a constrained implementation `class Repo<T extends Entity>` accept a
+ * hole as its type argument. Zero runtime footprint.
+ */
+declare const HOLE: unique symbol;
+export type Hole<N extends number, C = unknown> = C & { readonly [HOLE]?: N };
+
+/**
+ * Unbounded sugar for the common unconstrained hole: `$<1>`, `$<2>`, … `$<N>`.
+ * `$<N>` is exactly `Hole<N>`; reach for `Hole<N, C>` when the impl's type
+ * parameter carries a constraint the skolem must satisfy.
+ */
+export type $<N extends number> = Hole<N>;
+
+// ── Typeof brand ────────────────────────────────────────────────────────
+
+/**
+ * Compile-time phantom brand marking a constructor parameter that receives the
+ * TOKEN STRING of type argument `T` — the `typeof(T)` analog (hence the name).
+ * The value type stays `Token` (a plain string is assignable; the brand
+ * property is optional).
+ *
+ * `Typeof<T>` is type-driven: the transformer infers the hole from `T`. The
+ * manual counterpart `typeArg(n)` is positional — a plugin-less author names
+ * the hole by number.
+ *
+ * When `T` is a Hole, the transformer emits an open `{ typeArg: N }` slot that
+ * substitution closes per registration; when `T` is concrete, it emits the
+ * derived token directly as a literal value slot. Zero runtime footprint.
+ *
+ * @example
+ * ```ts
+ * class SqlRepository<T> {
+ *   constructor(readonly entityToken: Typeof<T>) {}
+ * }
+ * ```
+ */
+declare const ARG: unique symbol;
+export type Typeof<T> = Token & { readonly [ARG]?: T };
