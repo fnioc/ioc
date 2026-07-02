@@ -14,6 +14,13 @@
         "typescript-eslint": "^8.60.1",
       },
     },
+    "examples/shared": {
+      "name": "@fnioc-examples/shared",
+      "version": "0.0.0",
+      "devDependencies": {
+        "@fnioc/di": "workspace:*",
+      },
+    },
     "examples/with-transformer": {
       "name": "@fnioc-examples/with-transformer",
       "version": "0.0.0",
@@ -45,7 +52,7 @@
     },
     "packages/di": {
       "name": "@fnioc/di",
-      "version": "5.0.0",
+      "version": "6.0.0",
       "devDependencies": {
         "@fnioc/core": "workspace:*",
         "@rhombus-toolkit/func": "3.5.3",
@@ -63,7 +70,7 @@
     },
     "packages/transformer": {
       "name": "@fnioc/transformer",
-      "version": "4.0.0",
+      "version": "5.0.0",
       "dependencies": {
         "@rhombus-toolkit/func": "3.5.3",
       },
@@ -118,6 +125,8 @@
     "@eslint/object-schema": ["@eslint/object-schema@3.0.5", "", {}, "sha512-vqTaUEgxzm+YDSdElad6PiRoX4t8VGDjCtt05zn4nU810UIx/uNEV7/lZJ6KwFThKZOzOxzXy48da+No7HZaMw=="],
 
     "@eslint/plugin-kit": ["@eslint/plugin-kit@0.7.2", "", { "dependencies": { "@eslint/core": "^1.2.1", "levn": "^0.4.1" } }, "sha512-+CNAzxglkrpNf/kKywqQfk74QjtceuOE7Qm+AF8miRvPF/wmmK5+OJOgVh3AVTT3RP2mH3+FOaxlE5v72owk0A=="],
+
+    "@fnioc-examples/shared": ["@fnioc-examples/shared@workspace:examples/shared"],
 
     "@fnioc-examples/with-transformer": ["@fnioc-examples/with-transformer@workspace:examples/with-transformer"],
 

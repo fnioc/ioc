@@ -20,8 +20,8 @@
 // one's cached instance — when no matching frame encloses the owner, the dep
 // resolves transiently (a fresh instance) instead.
 
-import { getDeps, isFactoryRef as coreIsFactoryRef, isLiteralRef as coreIsLiteralRef, isScopeRef as coreIsScopeRef, isUnionSlot } from "@fnioc/core";
-import type { DepSlot, FactoryRef, LiteralRef, ScopeRef, Token, Union } from "@fnioc/core";
+import { getDeps, isFactoryRef as coreIsFactoryRef, isLiteralRef as coreIsLiteralRef, isOpenToken, isScopeRef as coreIsScopeRef, isTypeArgRef as coreIsTypeArgRef, isUnionSlot, parseToken, substituteSignatures } from "@fnioc/core";
+import type { DepSlot, FactoryRef, LiteralRef, ParsedToken, ScopeRef, Token, TypeArgRef, Union } from "@fnioc/core";
 import type { Func } from "@rhombus-toolkit/func";
 
 import {
@@ -31,6 +31,7 @@ import {
   MissingMetadataError,
   NoSatisfiableSignatureError,
   NoSatisfiableUnionError,
+  OpenTokenResolutionError,
   UnregisteredTokenError,
 } from "./errors.js";
 import type {
@@ -38,6 +39,7 @@ import type {
   Ctor,
   Factory,
   FactoryRegistration,
+  OpenRegistration,
   Registration,
   Resolver,
   ScopeFactory,
@@ -97,6 +99,24 @@ const isUnion: (slot: DepSlot) => slot is Union = isUnionSlot;
  * value directly (Rule 2). Always satisfiable; injected as `slot.value`.
  */
 const isLiteralRef: (slot: DepSlot) => slot is LiteralRef = coreIsLiteralRef;
+
+/**
+ * True when a `DepSlot` is a raw `TypeArgRef` — an OPEN template slot that
+ * substitution should have closed into a `LiteralRef`. One reaching the engine
+ * means an open template's signature is being used unclosed: never satisfiable
+ * in selection, a loud error in resolution.
+ */
+const isTypeArgRef: (slot: DepSlot) => slot is TypeArgRef = coreIsTypeArgRef;
+
+/** The loud error for a raw `TypeArgRef` slot reaching resolution. */
+function rawTypeArgError(slot: TypeArgRef): TypeError {
+  return new TypeError(
+    `Raw TypeArgRef slot { typeArg: ${slot.typeArg} } reached resolution — ` +
+      `an open template's signature was used without substitution. Resolve a ` +
+      `closed token so the engine can close the template, or substitute the ` +
+      `signatures before hand-feeding them.`,
+  );
+}
 
 /**
  * The string-token members of a `Union` (recursing into nested unions), used to
@@ -164,12 +184,28 @@ export class ServiceProvider<S extends string = string>
   /** The sealed registration map (shared across all providers in the tree). */
   readonly #registrations: ReadonlyMap<Token, Registration[]>;
 
+  /** The sealed OPEN-registration table (shared across the tree), keyed by base. */
+  readonly #openRegistrations: ReadonlyMap<Token, readonly OpenRegistration[]>;
+
+  /**
+   * The memo of registrations synthesized from open matches, keyed by closed
+   * token. Deliberately MUTABLE and shared across ALL providers of one tree
+   * (`build()` creates it once and every `createScope` passes the same Map),
+   * so a closing resolved in one frame reuses the identical Registration
+   * object everywhere. The sealed maps are never touched.
+   */
+  readonly #closedMemo: Map<Token, Registration>;
+
   public constructor(
     registrations: ReadonlyMap<Token, Registration[]>,
+    openRegistrations: ReadonlyMap<Token, readonly OpenRegistration[]>,
+    closedMemo: Map<Token, Registration>,
     /** This provider's scope frame, if any. */
     frame?: Scope,
   ) {
     this.#registrations = registrations;
+    this.#openRegistrations = openRegistrations;
+    this.#closedMemo = closedMemo;
     this.#frame = frame;
   }
 
@@ -199,7 +235,12 @@ export class ServiceProvider<S extends string = string>
   ): ServiceProvider<S> {
     const name = (args[0] ?? "scoped") as string;
     const childFrame = new Scope(name, this.#frame);
-    return new ServiceProvider<S>(this.#registrations, childFrame);
+    return new ServiceProvider<S>(
+      this.#registrations,
+      this.#openRegistrations,
+      this.#closedMemo,
+      childFrame,
+    );
   }
 
   // ── Resolver ─────────────────────────────────────────────────────────────────
@@ -239,10 +280,127 @@ export class ServiceProvider<S extends string = string>
    * Returns the most-recent registration for `token` from the sealed map.
    * The sealed map is shared across all providers in the tree; local overrides
    * are not supported in the new model (scope-local registration is deleted).
+   *
+   * The single lookup funnel — instance resolution, factory injection, and
+   * satisfiability all come through here. On an exact miss the open-generic
+   * fallback chain runs: memo hit → parse as closed-generic → open-table match
+   * → substitute → synthesize a `ClassRegistration` → memoize. Exact beats
+   * open (this order IS the precedence rule). Never throws: a holey token
+   * simply misses (so `#isResolvable` is false for it); the dedicated error is
+   * raised by `#resolveWith`.
    */
   #lookup(token: Token): Registration | undefined {
     const list = this.#registrations.get(token);
-    return list !== undefined && list.length ? list[list.length - 1] : undefined;
+    if (list !== undefined && list.length) {
+      return list[list.length - 1];
+    }
+
+    const memoized = this.#closedMemo.get(token);
+    if (memoized !== undefined) {
+      return memoized;
+    }
+
+    // An open template is not resolvable — and letting it reach the open table
+    // would "close" the template with its own holes. Miss, never throw.
+    if (isOpenToken(token)) {
+      return undefined;
+    }
+
+    const parsed = parseToken(token);
+    if (parsed === undefined) {
+      return undefined;
+    }
+
+    const match = ServiceProvider.#matchOpen(
+      this.#openRegistrations.get(parsed.base),
+      parsed,
+    );
+    if (match === undefined) {
+      return undefined;
+    }
+
+    // Synthesize the closed registration: the open registration's ctor + scope
+    // tag, with the closing's arg tokens substituted through the template
+    // signatures. Carried signatures win; a signature-less open registration
+    // falls back to the ctor-keyed store — the manual `forCtor` hole-template
+    // path (one template per ctor: the store merges records, so two templates
+    // on one ctor would mix).
+    const template = match.open.signatures ?? getDeps(match.open.ctor)?.signatures;
+    // Substituting the carried signatures for this closing can fail when a
+    // mis-authored template references a hole the service token never binds
+    // (e.g. `IX<$1,$3>` carrying a dep on `$2`) — `substituteSignatures` throws
+    // `RangeError` then. #lookup must NEVER throw (so `#isResolvable` can probe
+    // safely and greedy selection can fall back), so treat a substitution
+    // failure as a plain miss: no synthesis, no memo entry.
+    let signatures: readonly (readonly DepSlot[])[] | undefined;
+    if (template !== undefined) {
+      try {
+        signatures = substituteSignatures(template, match.args);
+      } catch (err) {
+        if (err instanceof RangeError) {
+          return undefined;
+        }
+        throw err;
+      }
+    }
+    const registration: ClassRegistration = {
+      kind: "class",
+      ctor: match.open.ctor,
+      scope: match.open.scope,
+      signatures,
+    };
+    this.#closedMemo.set(token, registration);
+    return registration;
+  }
+
+  /**
+   * Matches a parsed closed token against `base`'s open registrations —
+   * iterated from the END so the most-recent match wins, mirroring the exact
+   * map's last-wins list semantics. A candidate matches when its arity equals
+   * the closing's and its repeated holes bind equal arg tokens. Returns the
+   * matched registration plus the substitution args INDEXED BY HOLE NUMBER
+   * (`args[N-1]` closes `$N` — the template's holes need not be in order).
+   */
+  static #matchOpen(
+    list: readonly OpenRegistration[] | undefined,
+    parsed: ParsedToken,
+  ): { open: OpenRegistration; args: readonly Token[] } | undefined {
+    if (list === undefined) {
+      return undefined;
+    }
+    for (let i = list.length - 1; i >= 0; i--) {
+      const open = list[i]!;
+      if (open.pattern.length !== parsed.args.length) {
+        continue;
+      }
+      const args = ServiceProvider.#bindPattern(open.pattern, parsed.args);
+      if (args !== undefined) {
+        return { open, args };
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Binds a template's hole pattern (each entry exactly `$N` — validated at
+   * registration) to a closing's arg tokens. Returns the args indexed by hole
+   * number, or `undefined` when a repeated hole binds two different tokens.
+   */
+  static #bindPattern(
+    pattern: readonly Token[],
+    args: readonly Token[],
+  ): readonly Token[] | undefined {
+    const bound: Token[] = [];
+    for (let i = 0; i < pattern.length; i++) {
+      const hole = Number(pattern[i]!.slice(1));
+      const prior = bound[hole - 1];
+      if (prior === undefined) {
+        bound[hole - 1] = args[i]!;
+      } else if (prior !== args[i]) {
+        return undefined;
+      }
+    }
+    return bound;
   }
 
   /**
@@ -279,6 +437,11 @@ export class ServiceProvider<S extends string = string>
 
     const registration = this.#lookup(token);
     if (registration === undefined) {
+      // A holey token can never resolve — it is a template naming a FAMILY of
+      // tokens. Distinguish that from a plain miss so the fix is actionable.
+      if (isOpenToken(token)) {
+        throw new OpenTokenResolutionError(token);
+      }
       throw new UnregisteredTokenError(token);
     }
 
@@ -346,7 +509,7 @@ export class ServiceProvider<S extends string = string>
       return this.#invokeFactory<T>(token, registration.factory, owningFrame, stack);
     }
 
-    return this.#construct<T>(token, registration.ctor, owningFrame, stack);
+    return this.#construct<T>(token, registration, owningFrame, stack);
   }
 
   /**
@@ -371,7 +534,12 @@ export class ServiceProvider<S extends string = string>
       createScope: (...args: ["scoped"?] | [S]): ServiceProvider<S> => {
         const name = (args[0] ?? "scoped") as string;
         const childFrame = new Scope(name, owningFrame);
-        return new ServiceProvider<S>(sp.#registrations, childFrame);
+        return new ServiceProvider<S>(
+          sp.#registrations,
+          sp.#openRegistrations,
+          sp.#closedMemo,
+          childFrame,
+        );
       },
     } as Resolver & ScopeFactory<S>;
   }
@@ -408,6 +576,7 @@ export class ServiceProvider<S extends string = string>
       if (isFactoryRef(slot)) {return this.#makeFactory(slot, owningFrame);}
       if (isUnion(slot)) {return this.#resolveUnion(slot, owningFrame, stack);}
       if (isLiteralRef(slot)) {return slot.value;}
+      if (isTypeArgRef(slot)) {throw rawTypeArgError(slot);}
       // Selection guarantees every remaining slot is a resolvable string token.
       return this.#resolveWith<unknown>(slot as Token, owningFrame, stack);
     });
@@ -426,22 +595,26 @@ export class ServiceProvider<S extends string = string>
    */
   #construct<T>(
     token: Token,
-    ctor: Ctor,
+    registration: ClassRegistration,
     owningFrame: Scope | undefined,
     stack: Token[],
   ): T {
-    const record = getDeps(ctor);
+    const ctor = registration.ctor;
+    // Registration-carried signatures win over the ctor-keyed store: a generic
+    // impl's one JS class object may be registered under many closings, each
+    // carrying its own (substituted) signatures.
+    const signatures = registration.signatures ?? getDeps(ctor)?.signatures;
 
     // No metadata: a zero-arg ctor is `new`ed directly; a ctor with parameters
     // and no record is a hard error with actionable guidance.
-    if (record === undefined || !record.signatures.length) {
+    if (signatures === undefined || !signatures.length) {
       if (ctor.length) {
         throw new MissingMetadataError(token, ctor.name);
       }
       return new ctor() as T;
     }
 
-    const signature = this.#selectSignature(token, ctor.name, record.signatures, owningFrame);
+    const signature = this.#selectSignature(token, ctor.name, signatures, owningFrame);
 
     const providerView = this.#makeProviderView(owningFrame, stack);
     const args = signature.map((slot) => {
@@ -463,6 +636,11 @@ export class ServiceProvider<S extends string = string>
       if (isLiteralRef(slot)) {
         // A singular literal (Rule 2): supply its value directly, no lookup.
         return slot.value;
+      }
+      if (isTypeArgRef(slot)) {
+        // A raw TypeArgRef is an unclosed template slot — selection never
+        // accepts one, so reaching it here is a loud invariant break.
+        throw rawTypeArgError(slot);
       }
       // A string token — resolve it through the owning frame's chain. Selection
       // guarantees every string-token slot here is resolvable.
@@ -525,14 +703,17 @@ export class ServiceProvider<S extends string = string>
     }
 
     // Parameterized mode: the dep-metadata target is the ctor (class) or the
-    // factory function. Select the target signature and partition slots against
-    // the caller-supplied params list.
-    const depTarget = target.kind === "class" ? target.ctor : target.factory;
-    const record = getDeps(depTarget);
+    // factory function. Registration-carried signatures win over the ctor-keyed
+    // store (a synthesized closed-generic target carries its substituted
+    // signatures). Select the target signature and partition slots against the
+    // caller-supplied params list.
+    const signatures = target.kind === "class"
+      ? target.signatures ?? getDeps(target.ctor)?.signatures
+      : getDeps(target.factory)?.signatures;
     const targetSignature =
-      record === undefined || !record.signatures.length
+      signatures === undefined || !signatures.length
         ? undefined
-        : sp.#selectTargetSignature(record.signatures);
+        : sp.#selectTargetSignature(signatures);
 
     // Build a fresh instance on every call, threading caller args into the
     // params-claimed slots and resolving the remainder from the container.
@@ -602,6 +783,7 @@ export class ServiceProvider<S extends string = string>
       if (isFactoryRef(slot)) {return this.#makeFactory(slot, owningFrame);}
       if (isUnion(slot)) {return this.#resolveUnion(slot, owningFrame, stack);}
       if (isLiteralRef(slot)) {return slot.value;}
+      if (isTypeArgRef(slot)) {throw rawTypeArgError(slot);}
 
       // String token slot: check if it is claimed by callerParams (caller wins,
       // even if the token is also registered).
@@ -667,6 +849,12 @@ export class ServiceProvider<S extends string = string>
       let satisfiable = true;
       for (const slot of sig) {
         if (isFactoryRef(slot) || isScopeRef(slot) || isLiteralRef(slot)) {continue;}
+        if (isTypeArgRef(slot)) {
+          // A raw TypeArgRef is an unclosed template slot — never satisfiable
+          // (only substitution turns it into a LiteralRef).
+          satisfiable = false;
+          continue;
+        }
         if (isUnion(slot)) {
           // A union slot is satisfiable iff at least one member is resolvable.
           // When none is, surface its string-token members so the error names
@@ -724,6 +912,7 @@ export class ServiceProvider<S extends string = string>
    */
   #isResolvableSlot(slot: DepSlot): boolean {
     if (isFactoryRef(slot) || isScopeRef(slot) || isLiteralRef(slot)) {return true;}
+    if (isTypeArgRef(slot)) {return false;}
     if (isUnion(slot)) {
       return slot.union.some((member) => this.#isResolvableSlot(member as DepSlot));
     }
@@ -771,6 +960,7 @@ export class ServiceProvider<S extends string = string>
     if (isFactoryRef(slot)) {return this.#makeFactory(slot, owningFrame) as T;}
     if (isUnion(slot)) {return this.#resolveUnion<T>(slot, owningFrame, stack);}
     if (isLiteralRef(slot)) {return slot.value as T;}
+    if (isTypeArgRef(slot)) {throw rawTypeArgError(slot);}
     return this.#resolveWith<T>(slot as Token, owningFrame, stack);
   }
 

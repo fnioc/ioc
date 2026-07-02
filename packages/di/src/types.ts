@@ -1,7 +1,7 @@
 // Shared runtime types for the engine: the concrete-constructor shape, the
 // registration kinds, and the resolver-facing provider contract.
 
-import type { Token, Union } from "@fnioc/core";
+import type { DepSlot, Token, Union } from "@fnioc/core";
 import type { Ctor, Func } from "@rhombus-toolkit/func";
 
 export type { Union };
@@ -31,6 +31,14 @@ export interface ClassRegistration {
    * `undefined` means transient (never cached; a fresh instance per resolve).
    */
   readonly scope: string | undefined;
+  /**
+   * Registration-carried dep signatures. When present, they win over the
+   * ctor-keyed `defineDeps` store at resolve time. Carried by generic impls
+   * (open templates and closed instantiation expressions), whose one JS class
+   * object would otherwise collide in the ctor-keyed store when registered
+   * under multiple closings/templates.
+   */
+  readonly signatures?: readonly (readonly DepSlot[])[];
 }
 
 /** A factory-function registration — its params are injected like a ctor's. */
@@ -56,6 +64,36 @@ export type Registration =
   | ClassRegistration
   | FactoryRegistration
   | ValueRegistration;
+
+/**
+ * An OPEN registration — a class bound to an open template token whose type
+ * arguments are all holes (`pkg:IRepo<$1>`). It never resolves directly;
+ * resolving a closed token that misses the exact map matches against these
+ * (base + arity + repeated-hole equality, last registered wins), substitutes
+ * the closing's arg tokens through the carried signatures, and synthesizes an
+ * ordinary `ClassRegistration` memoized per closed token.
+ */
+export interface OpenRegistration {
+  /** The full template token as registered (`pkg:IRepo<$1>`). */
+  readonly template: Token;
+  /** The template's base (`pkg:IRepo`) — the open-table key. */
+  readonly base: Token;
+  /**
+   * The parsed top-level args of the template — each exactly a hole (`$N`).
+   * Length is the arity; repeated holes (`["$1","$1"]`) constrain a match to
+   * equal arg tokens.
+   */
+  readonly pattern: readonly Token[];
+  readonly ctor: Ctor;
+  /** The lifetime tag, applied per closing. `undefined` means transient. */
+  readonly scope: string | undefined;
+  /**
+   * The template dep signatures (holes and `TypeArgRef`s still open) —
+   * substituted per closing. When absent, the ctor-keyed store is consulted at
+   * resolve time (the manual `forCtor` hole-template path).
+   */
+  readonly signatures?: readonly (readonly DepSlot[])[];
+}
 
 /**
  * The named lifetime tag for a registration. `"singleton"` and `"transient"`

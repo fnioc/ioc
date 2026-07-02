@@ -57,6 +57,9 @@ export function createTransformerFactory(
       checker,
       projectRoot,
       readFile: options.readFile,
+      // Default-lib types (`Promise`, `Map`) tokenize by bare name — their lib
+      // path is machine-dependent and carries no identity.
+      isDefaultLib: (file) => program.isSourceFileDefaultLibrary(file),
       factory: context.factory,
       sink,
     });

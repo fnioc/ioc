@@ -64,7 +64,7 @@ This is the central organizing principle of the runtime, not a footnote. A regis
 - A separate async resolution channel or `resolveAsync()` API — async is values; one channel.
 - Auto-creating missing scope frames — a tag whose frame is not open resolves transiently; a frame is opened only by an explicit `createScope(name)`.
 - `static $inject` as a v1 authoring surface — deferred; reintroduces prototype-bleed the global-symbol Map design prevents.
-- Wessberg-style two-type-param `add<IFoo, Foo>()` with ctor inferred from generic — deferred (TS partial type-argument inference blocker).
+- Wessberg-style two-type-param `add<IFoo, Foo>()` with ctor inferred from generic — deferred (TS partial type-argument inference blocker). Not the same feature as open-generic registration (a later addition, documented in the package READMEs): that closes an implementation class already named as a value argument against a placeholder-typed service token (`add<IRepository<$<1>>>(SqlRepository<$<1>>)`); this entry is about inferring the implementation class itself from the interface type parameter, with no value argument at all — still blocked on partial type-argument inference.
 - By-name dep matching — deferred.
 - A separate `@fnioc/abi` package — `@fnioc/core` *is* the ABI.
 
@@ -798,7 +798,7 @@ These were the open questions from the original handoff (originally §12); each 
 
 Not in scope for v1. Do not design around these prematurely — they are explicitly out of scope.
 
-- **Wessberg-style `services.add<Interface, Concrete>()`** — ctor inferred from the generic, no value argument. The transformer would resolve the implementation ctor and its dep graph from the type parameter. Blocked partly by TypeScript's lack of partial type-argument inference (two-type-param `add<IFoo, Foo>()` would force a redundant type arg). `@wessberg/di` is the reference implementation.
+- **Wessberg-style `services.add<Interface, Concrete>()`** — ctor inferred from the generic, no value argument. The transformer would resolve the implementation ctor and its dep graph from the type parameter. Blocked partly by TypeScript's lack of partial type-argument inference (two-type-param `add<IFoo, Foo>()` would force a redundant type arg). `@wessberg/di` is the reference implementation. Not the same feature as open-generic registration (a later addition): that closes an implementation class already named as a value argument (`add<IRepository<$<1>>>(SqlRepository<$<1>>)`) against a placeholder-typed service token; this entry remains about inferring the implementation class itself from the type parameter alone, with no value argument.
 - **By-name dep/factory matching** — the transformer reads ctor parameter identifiers from the AST (no decorators needed). Fixes the same-type positional ambiguity footgun (two `string` params in the same ctor; positional matching can't distinguish them). Deferred.
 - **Arg/parameter-name override mechanism** — if by-name matching ever needs explicit overrides. Note: standard decorators have no parameter decorators, so a different mechanism would be required.
 - **`@fnioc/eslint-plugin`** — surfaces the factory-signature diagnostic in-editor (currently only fires at tsc time via the transformer).

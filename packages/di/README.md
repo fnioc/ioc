@@ -58,6 +58,16 @@ add<ICache>(RedisCache, ["pkg:IRedisClient", undefined, "pkg:ILogger"]);
 
 Pure token users (no transformer) supply a complete signature via `forCtor(C).signature(...)` instead.
 
+### `add(token, Ctor, signatures?)` — registration-carried dep signatures
+
+Not to be confused with the sparse `sig` override above — that's a type-driven, compile-time-only feature consumed entirely by the transformer. This is the **runtime** form of `add`: it takes an optional third argument, `signatures`, a complete (non-sparse) multi-signature array carried on the registration itself rather than written into the ctor-keyed dep-metadata store.
+
+```ts
+add(token: Token, ctor: Ctor, signatures?: readonly (readonly DepSlot[])[]): AddBuilder
+```
+
+This exists for **open-generic registrations** — one implementation class can back many closings or templates, and the dep-metadata store is keyed on the ctor object, so two `defineDeps` calls for the same class would collide (same-length signatures, greedy selection can't distinguish them). A registration's own `signatures` wins over `getDeps(ctor)` at every read site — construction, injected-factory parameter resolution, greedy overload selection. (Factory registrations never carry signatures — open registrations are class-only and `addFactory` takes no third argument.) The transformer emits this form for every generic registration, open or closed via an instantiation expression; hand-write it directly for the plugin-less path. See [Open generics](#open-generics) below.
+
 ### `add(token, { useFactory })` and `add(token, { useValue })`
 
 The same `add` surface also takes factory and value specs — registration paths that bypass the dep-metadata system entirely. Recommended for test doubles, third-party instances, and plugin-less consumers. Both return the builder for chaining.
@@ -125,6 +135,81 @@ req.resolve<IUserService>("pkg:IUserService");
 ```
 
 This preserves `Microsoft.Extensions.DependencyInjection`'s captive-dependency safety, via the uniform-tag transient fallback rather than a throw: the construct-relative-to-owner rule guarantees a fresh transient is the worst that happens, never a captured cached instance.
+
+---
+
+## Open generics
+
+A registration whose service token contains a **hole** (`$1`, `$2`, …) is an *open* (template) registration — it doesn't cache one instance, it matches **any** closing of its base + arity at resolve time.
+
+```ts
+// Open registration: matches any closing of IRepository<T>, one hole per arg
+services.add<IRepository<$<1>>>(SqlRepository<$<1>>).as<"singleton">();
+
+// Each closing resolves and caches independently
+const userRepo  = scope.resolve<IRepository<User>>();   // "pkg:IRepository<pkg:User>"
+const orderRepo = scope.resolve<IRepository<Order>>();  // "pkg:IRepository<pkg:Order>"
+// distinct singleton instances — the closed token is the cache key
+```
+
+### Registration rules
+
+- **All-holes only.** Every type-arg position in an open service token must be a hole — `IFoo<$1,$1>` is allowed (repeats mean "match only equal args"); mixing concrete args and holes (`IFoo<$1,User>`) is a registration error.
+- **Class registrations only.** `addValue`/`addFactory` reject an open token — there is no single value or factory that could serve every closing.
+- **`.as(tag)` applies per closing**, not to the template as a whole — `IRepository<A>` and `IRepository<B>` are distinct singletons, each cached in the nearest enclosing frame carrying `tag`, exactly like two unrelated `.as("singleton")` registrations.
+- **Last-registered wins** among multiple open registrations matching the same base + arity (and satisfying any repeated-hole equality constraint) — same semantics as the exact-match list.
+
+### Resolve-time fallback and memoization
+
+Resolving a token the exact-match map has no entry for falls through, in order:
+
+1. **Memo** — a closed token already synthesized on a previous resolve returns the *same* `Registration` object (identity-stable — this is what makes per-closing caching correct across repeat resolves).
+2. **Parse.** A non-generic token that misses here is simply unregistered.
+3. **Open-table match** — search open registrations for the same base + arity (respecting repeated-hole equality), most-recently-registered first.
+4. **Substitute** — the open registration's carried dep signatures are substituted with the closing's concrete type args (`TypeArgRef` slots become `LiteralRef`s carrying the substituted token).
+5. **Synthesize** a `ClassRegistration` for the closed token — inherits the ctor and scope tag, carries the substituted signatures — and memoize it.
+
+**Exact beats open.** An exact registration for a closed token — one you registered directly, e.g. `services.add<IRepository<User>>(SpecialUserRepo)` alongside the open `IRepository<$<1>>` registration — is checked *before* the memo and the open-table fallback, so it always wins.
+
+**Resolving a token that still contains a hole throws.** `scope.resolve("pkg:IRepository<$1>")` is not a valid resolve target — only closed tokens resolve. See `OpenTokenResolutionError` below.
+
+### Errors
+
+| Error | Thrown when |
+|---|---|
+| `OpenTokenResolutionError(token)` | `resolve()` (directly or transitively) is asked for a token that still contains an unbound hole. |
+| `OpenTokenRegistrationError(token, method)` | `add()` is given a service token that mixes concrete args and holes, or `addValue()`/`addFactory()` is given any open token. `method` names the call that rejected it (`"add"`, `"addValue"`, `"addFactory"`). |
+
+### Manual / plugin-less path
+
+No transformer required — template tokens are just strings with `$N` holes, and the grammar helpers are plain functions re-exported from `@fnioc/core`:
+
+```ts
+import { closeToken, typeArg } from "@fnioc/di";
+
+// Template registration — carried signatures include a TypeArgRef via typeArg(1)
+services.add(
+  "app:IRepository<$1>",
+  SqlRepository,
+  [["app:IDbConnection", typeArg(1)]],
+).as("singleton");
+
+// Resolve closings by hand-closing the token
+const userToken = closeToken("app:IRepository", "app:User");  // "app:IRepository<app:User>"
+scope.resolve(userToken);
+```
+
+`forCtor(ctor).signature(...)` also works with a hole-templated signature — but it writes into the same ctor-keyed store every other manual annotation uses, so it can carry **only one template per ctor**. If the same class backs two different open templates (or an open template and a closed override), `forCtor` calls for it collide; use the 3-argument `add(token, ctor, signatures)` form instead — its signatures live on the registration, not the ctor, so each registration is independent. The scoping invariant behind that split: the global ctor-keyed store holds **class-intrinsic** facts (derivable from the declaration, safely process-global), whereas a generic impl's signature-under-a-binding is **registration-intrinsic** — keying it globally would merely relocate the collision cross-manifest.
+
+```ts
+// OK: SqlRepository backs exactly one template
+forCtor(SqlRepository).signature("app:IDbConnection", typeArg(1));
+services.add("app:IRepository<$1>", SqlRepository);
+
+// NOT OK: two templates for the same ctor collide in the ctor-keyed store —
+// use the registration-carried add(token, ctor, signatures) form for the
+// second one instead.
+```
 
 ---
 
@@ -323,7 +408,7 @@ Zero-argument constructor — there is no `rootName`; scopes are just tags.
 | `add<I>(Concrete)` | `(ctor: new (...) => I) => AddBuilder` | Register a concrete class against interface `I`. |
 | `add<I>(Concrete, sig)` | `(ctor, sig: readonly (DepSlot \| undefined)[]) => AddBuilder` | Register with a positional signature override. |
 | `.as<S>()` | `(scope: S) => void` | Set the lifetime scope tag. No call → transient. |
-| `add(token, ctor)` | `(token: string, ctor) => AddBuilder` | Class registration (lowered form). |
+| `add(token, ctor, signatures?)` | `(token: string, ctor, signatures?: readonly (readonly DepSlot[])[]) => AddBuilder` | Class registration (lowered form). An open (holey) token routes to the open-registration table; `signatures`, when present, wins over the ctor-keyed store (open generics, §Open generics). |
 | `addFactory(token, factory)` | `(token: string, factory: (sp: Resolver) => T) => AddBuilder` | Factory registration. No dep metadata required — the factory receives the live `Resolver`. |
 | `addValue(token, value)` | `(token: string, value: unknown) => void` | Value registration. A pre-built instance, re-used as-is. |
 | `build()` | `() => ServiceProvider<Scopes>` | Seal the registration map and return a **frameless** `ServiceProvider` (no scope pre-opened). No post-build mutation is possible. |

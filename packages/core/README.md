@@ -77,6 +77,20 @@ forCtor(Handler).signature(
 
 ---
 
+## `TypeArgRef`
+
+Marks a constructor parameter to be injected with the **token string** of one of an open registration's type arguments — the `typeof(T)` analog for open-generic templates.
+
+```ts
+export interface TypeArgRef {
+  readonly typeArg: number;
+}
+```
+
+`typeArg` is the 1-based hole number (`{ typeArg: 1 }` names the argument bound to `$1`). It only ever appears raw inside an **open** registration's carried signature. At close time, substitution replaces it with a `LiteralRef` carrying the substituted argument's token string — a raw `TypeArgRef` reaching resolution is a bug (unsatisfiable; fails loud rather than silently falling into the token branch). Authored via `Typeof<T>` (below) or, by hand, `typeArg(n)`.
+
+---
+
 ## `Inject<T, K extends Token>`
 
 A phantom brand type. Pins the token for one constructor or factory parameter without changing the value type.
@@ -104,20 +118,70 @@ Re-exported by `@fnioc/transformer`.
 
 ---
 
+## `Hole<N, C>` and `$<N>`
+
+Compile-time skolems — placeholders standing in for the `N`th type argument of an open-generic template (1-based, mirrors the `Inject` brand pattern above).
+
+```ts
+declare const HOLE: unique symbol;
+export type Hole<N extends number, C = unknown> = C & { readonly [HOLE]?: N };
+
+export type $<N extends number> = Hole<N>;
+```
+
+`$<N>` is unbounded sugar for the common unconstrained case (`$<1>` = `Hole<1>`, `$<2>` = `Hole<2>`, … no upper bound). Write `Hole<N, C>` directly when the implementation's type parameter carries a constraint the skolem needs to satisfy — `Hole<1, Entity>` **is** an `Entity` (the brand property is optional, so the intersection stays assignable to `C`), letting a constrained impl like `class SqlRepository<T extends Entity>` accept a hole as its type argument:
+
+```ts
+services.add<IRepository<$<1>>>(SqlRepository<Hole<1, Entity>>);
+```
+
+Zero runtime footprint — like `Inject`, these are pure compile-time brands read structurally by `@fnioc/transformer`. See [`@fnioc/transformer`](../transformer/README.md#open-generics) for how they drive token derivation and instantiation expressions.
+
+---
+
+## `Typeof<T>`
+
+A phantom brand marking a constructor parameter that receives the **token string** of type argument `T` — the `typeof(T)` analog (hence the name).
+
+```ts
+declare const ARG: unique symbol;
+export type Typeof<T> = Token & { readonly [ARG]?: T };
+```
+
+`Typeof<T>` is type-driven — the transformer infers the hole from `T`; its manual counterpart `typeArg(n)` is positional. The value type stays `Token` (a plain string) — the brand property is optional, so any string is assignable. When `T` resolves to a `Hole`, the transformer emits an open `TypeArgRef` slot (`{ typeArg: N }`) that substitution closes per registration; when `T` is concrete (a closed registration via an instantiation expression), it emits the derived token directly as a `LiteralRef` value slot — no substitution step needed.
+
+```ts
+class SqlRepository<T> implements IRepository<T> {
+  constructor(
+    private db: IDbConnection,
+    private entityToken: Typeof<T>,
+  ) {}
+}
+
+services.add<IRepository<$<1>>>(SqlRepository<$<1>>);
+
+const userRepo = scope.resolve<IRepository<User>>();
+// userRepo.entityToken === "pkg:User"
+```
+
+---
+
 ## `DepSlot`
 
 One positional slot in a constructor signature:
 
 ```ts
-export type DepSlot = Token | FactoryRef | ScopeRef | Union;
+export type DepSlot = Token | FactoryRef | ScopeRef | Union | LiteralRef | TypeArgRef;
 ```
 
 - `Token` — a container-resolved dep (registered) or a caller-supplied param (unregistered); the live registration map determines which at resolve time.
 - `FactoryRef` — a factory-injected parameter.
 - `ScopeRef` — the live resolution scope.
 - `Union` — member-level alternatives; first resolvable wins.
+- `LiteralRef` — a singular literal or nullish-singleton value, injected directly, no container lookup, always satisfiable.
+- `TypeArgRef` — the token string of an open registration's `N`th type argument; substituted to a `LiteralRef` at close time (see `TypeArgRef` above).
 
-There is no hole sentinel. An unregistered token slot is caller-supplied by definition.
+An unregistered token slot is caller-supplied by definition; a `TypeArgRef` slot is only ever satisfiable through substitution, never directly.
 
 ---
 
@@ -217,6 +281,80 @@ For a third-party class where you need to override specific positions without re
 
 ---
 
+## Open-generic token grammar
+
+Closing a generic is token algebra, not runtime type machinery — TypeScript generics are erased, so there is exactly one JS class per generic implementation. `@fnioc/transformer` renders the grammar below at build time; these functions are how `@fnioc/di`'s resolve-time fallback (and any hand-written manual registration) works with it directly.
+
+**Closed-generic grammar (canonical, recursive):** `base<arg1,arg2>` — no whitespace around `<` `>` `,`. Each arg is itself a token, so nesting recurses (`pkg:IFoo<pkg:IBar<./src/Baz>>`). A **hole** is an arg that is exactly `$N` (decimal, `N ≥ 1`); a token containing a hole at any depth is an *open template*. Literal-type args keep their interior spaces/quotes (`"a" | "b"`) — the parser is quote-aware, so commas and angle brackets inside double quotes never count as separators.
+
+### `closeToken(base, ...args)`
+
+```ts
+export function closeToken(base: Token, ...args: Token[]): Token
+```
+
+Renders the canonical form. With no args, returns `base` unchanged.
+
+```ts
+closeToken("pkg:IRepository", "pkg:User");  // "pkg:IRepository<pkg:User>"
+closeToken("pkg:IMap", "string", "$1");     // "pkg:IMap<string,$1>"
+```
+
+### `parseToken(token)`
+
+```ts
+export interface ParsedToken {
+  readonly base: Token;
+  readonly args: readonly Token[];
+}
+export function parseToken(token: Token): ParsedToken | undefined
+```
+
+Splits a closed-generic token into its base and top-level args. Returns `undefined` for non-generic tokens (no top-level `<`) and for malformed input (unbalanced brackets, empty arg, trailing text after the closing `>`, unterminated quote) — callers fall through to their normal exact-match / unregistered-token handling either way.
+
+### `isOpenToken(token)`
+
+```ts
+export function isOpenToken(token: Token): boolean
+```
+
+True when `token` contains a hole (`$N`) at any depth — grammar-aware, so a `$N` inside a quoted literal arg is not a hole.
+
+### `substituteToken(template, args)`
+
+```ts
+export function substituteToken(template: Token, args: readonly Token[]): Token
+```
+
+Grammar-aware, recursive substitution — NOT a naive string replace. A node that is exactly `$N` is replaced by `args[N - 1]` (which may itself be a closed-generic token); everything else recurses through the parsed structure. Throws `RangeError` if the template references a hole beyond the supplied args.
+
+```ts
+substituteToken("pkg:IRepository<$1>", ["pkg:User"]);
+// → "pkg:IRepository<pkg:User>"
+```
+
+### `substituteSignatures(signatures, args)`
+
+```ts
+export function substituteSignatures(
+  signatures: readonly (readonly DepSlot[])[],
+  args: readonly Token[],
+): readonly (readonly DepSlot[])[]
+```
+
+Substitutes `args` through every slot of every signature — the whole-record counterpart to `substituteToken`, used to close an open registration's carried dep signatures at resolve time. Per slot: a string token → `substituteToken`; a `FactoryRef` → its `type` and each `params` token substituted; a `Union` → members substituted recursively; a `TypeArgRef` → a `LiteralRef` carrying `args[typeArg - 1]`; `LiteralRef`/`ScopeRef` pass through unchanged.
+
+### `typeArg(n)` and `isTypeArgRef`
+
+```ts
+export function typeArg(n: number): TypeArgRef
+export function isTypeArgRef(slot: DepSlot): slot is TypeArgRef
+```
+
+`typeArg(n)` is the manual-authoring counterpart to `Typeof<T>` — build a `{ typeArg: n }` slot by hand for a `forCtor`-annotated hole template. `isTypeArgRef` is the type guard, alongside `isFactoryRef` / `isScopeRef` / `isUnionSlot` / `isLiteralRef`.
+
+---
+
 ## Global-symbol Map
 
 The dep-metadata store is a plain `Map<DepTarget, DepRecord>` anchored on `globalThis` under a fixed `Symbol.for` key:
@@ -252,11 +390,23 @@ const store: Map<DepTarget, DepRecord> =
 | `ScopeRef` | Interface | `{ scope: true }` — live resolution scope slot. |
 | `Union` | Interface | `{ union: readonly DepSlot[] }` — member-level alternatives. |
 | `union` | Function | Construct a `Union` slot from variadic `DepSlot` args. |
+| `LiteralRef` | Interface | `{ value }` — a singular literal / nullish-singleton slot, injected directly. |
+| `TypeArgRef` | Interface | `{ typeArg: number }` — the token string of an open registration's `N`th type argument. |
 | `Inject` | Type alias | Phantom brand — pins a token for one param without changing the value type. |
-| `DepSlot` | Type alias | `Token \| FactoryRef \| ScopeRef \| Union` — one positional slot in a signature. |
+| `Hole` | Type alias | `Hole<N, C>` — compile-time skolem for the `N`th type argument of an open template, optionally constrained to `C`. |
+| `$` | Type alias | `$<N>` — unbounded unconstrained sugar for `Hole<N>`. |
+| `Typeof` | Type alias | Phantom brand — a ctor param receiving the token string of type argument `T` (`typeof(T)` analog). |
+| `DepSlot` | Type alias | `Token \| FactoryRef \| ScopeRef \| Union \| LiteralRef \| TypeArgRef` — one positional slot in a signature. |
 | `DepRecord` | Interface | `{ signatures }` — per-constructor metadata shape. |
 | `defineDeps` | Function | Write dep metadata into the global-symbol Map. |
 | `getDeps` | Function | Read dep metadata from the global-symbol Map. |
 | `signature` | Decorator | TC39 class decorator — hand-annotate a class's signature. |
 | `forCtor` | Function | Fluent alternative to `@signature` for classes you don't own. |
 | `ForCtorBuilder` | Interface | Return type of `forCtor`. |
+| `closeToken` | Function | Render the canonical closed-generic token `base<a,b>`. |
+| `parseToken` | Function | Parse a closed-generic token into `{ base, args }`, or `undefined`. |
+| `isOpenToken` | Function | True when a token contains a hole (`$N`) at any depth. |
+| `substituteToken` | Function | Grammar-aware substitution of holes in a token template. |
+| `substituteSignatures` | Function | Substitute type args through every slot of every signature. |
+| `typeArg` | Function | Build a `TypeArgRef` slot (`{ typeArg: n }`) by hand. |
+| `isTypeArgRef` | Function | Type guard for `TypeArgRef` slots. |

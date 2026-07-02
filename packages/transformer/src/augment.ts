@@ -20,10 +20,17 @@ import type { Ctor, Func } from "@rhombus-toolkit/func";
 // No symbols are imported — the import exists solely to anchor the augmentation.
 import type {} from "@fnioc/di";
 
-// Re-export `Inject` so transformer consumers can use `Inject<T, "tok">` without
-// importing from `@fnioc/core` directly. A single import of `@fnioc/transformer`
-// brings both the transformer plugin and the brand type into scope.
-export type { Inject } from "@fnioc/core";
+// Re-export the authoring brand types so transformer consumers can use
+// `Inject<T, "tok">`, the open-generics placeholders (`Hole<N, C>`, `$<N>`)
+// and the `Typeof<T>` witness without importing from `@fnioc/core`
+// directly. A single import of `@fnioc/transformer` brings both the transformer
+// plugin and the brand types into scope.
+export type {
+  Inject,
+  Hole,
+  $,
+  Typeof,
+} from "@fnioc/core";
 
 declare module "@fnioc/di" {
   // The authoring forms merge onto the IMPLEMENTATION class `ServiceManifestClass`
@@ -35,6 +42,12 @@ declare module "@fnioc/di" {
      * Type-driven class authoring — lowers to `add("token", C)`. The ctor is
      * typed `Ctor<any[], I>` (a plain construct signature, so an abstract class
      * is rejected). Never runs post-transform.
+     *
+     * A GENERIC impl is authored as an instantiation expression —
+     * `add<IRepo<$<1>>>(SqlRepository<$<1>>)` (open template) or
+     * `add<IRepo<User>>(SqlRepository<User>)` (closed) — and lowers to
+     * `add("token", C, signatures)` with its dep signatures carried on the
+     * registration (type args stripped from the emitted ctor).
      */
     add<I>(ctor: Ctor<any[], I>): AddBuilder<Scopes>;
     /**

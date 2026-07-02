@@ -1,40 +1,56 @@
 # @fnioc/di — without the transformer
 
 The **same app** as [`../with-transformer`](../with-transformer), wired by hand
-with no ts-patch plugin. The only difference between the two examples is the
+with no ts-patch plugin. Both examples import the *identical* contracts + service
+classes from [`@fnioc-examples/shared`](../shared); the ONLY difference is the
 wiring style, so this is the side-by-side for what the transformer automates.
 
 ## What it shows
 
 - Plugin-less registration: explicit string tokens —
   `services.add("app/IGreeter", Greeter).as("singleton")`.
-- Hand-written constructor metadata: `forCtor(Greeter).signature(ILogger, IClock)`.
+- Hand-written constructor metadata: `forCtor(Greeter).signature(LOGGER, CLOCK)`.
   A class with ctor params and no registered metadata throws
-  `MissingMetadataError`, so every such class must declare its signature.
+  `MissingMetadataError`, so every such class declares its signature.
 - The same singleton sharing and `request` child-scope lifetimes as the
   transformer example.
-- **`union("tok:A", "tok:B")`**: `DiagnosticsReporter` takes a union slot — the
-  first registered member (`ILogger`) wins. Registering `IMetricsBackend` instead
-  would fall through to that.
-- **`forCtor(ThirdParty).signature(...)`**: `ThirdPartyFormatter` is wired with a
-  complete manual signature, exactly as the transformer would emit for a class you
-  don't own.
+- **`union(LOGGER, METRICS)`**: `UnionConsumer` takes a union slot — the first
+  registered member (`ILogger`) wins.
+- **The `Inject` brand replicated by hand**: `DiagnosticsService` carries an
+  `Inject<IClock, "app:primary-clock">` brand in its shared source; without the
+  plugin, `forCtor(DiagnosticsService).signature("app:primary-clock", LOGGER)`
+  reproduces the pin the transformer would derive.
+- **Open generics, by hand**: an open template registration
+  (`add("app/IRepository<$1>", SqlRepository, [[LOGGER, typeArg(1)]])`) with its
+  dep signatures carried on the registration; a closed exact registration
+  (`add(closeToken("app/IRepository", "app/Order"), InMemoryRepository, [[{ value: "app/Order" }]])`)
+  that beats the open fallback; a `forCtor` hole-template signature for a generic
+  dependent (`RepositoryAuditor`); and multiple closings resolved as distinct
+  singletons via `closeToken("app/IRepository", "app/User")`.
 
 ## What the transformer would have done for you
 
 | Step | With transformer | By hand (here) |
 | --- | --- | --- |
-| Token | derived (`./contracts/IGreeter`) | chosen string (`app/IGreeter`) |
+| Token | derived (`./shared/src/contracts/IGreeter`) | chosen string (`app/IGreeter`) |
 | Registration | `add<IGreeter>(Greeter)` | `add("app/IGreeter", Greeter)` |
 | Ctor metadata | injected `defineDeps(...)` | `forCtor(Greeter).signature(...)` |
+| Resolve | tokenless `resolve<IGreeter>()` | explicit `resolve(GREETER)` |
+| Open generic | `add<IRepository<$<1>>>(SqlRepository<$<1>>)` | `add("app/IRepository<$1>", SqlRepository, [[…, typeArg(1)]])` |
+| `Typeof<T>` witness | derived `{ typeArg: 1 }` slot | hand-written `typeArg(1)` |
+
+## How it works
+
+The shared source is imported by a relative path (`../../shared/src/index.js`),
+so plain `tsc` compiles it into this example's own `dist` — no bundler. The
+compiled entry is `dist/without-transformer/src/main.js`; `@fnioc/di` resolves at
+runtime through the `workspace:*` symlink.
 
 ## Run it
 
 ```sh
 moon run examples-without-transformer:build   # tsc compile to dist/
-moon run examples-without-transformer:start   # run it
-moon run examples-without-transformer:test    # run + assert stdout (expected.txt)
-moon run examples-without-transformer:lint    # typecheck
+node dist/without-transformer/src/main.js      # run it
+moon run examples-without-transformer:test     # run + assert stdout (expected.txt)
+moon run examples-without-transformer:lint     # typecheck
 ```
-
-Or directly with bun, no build step: `bun run src/main.ts`.

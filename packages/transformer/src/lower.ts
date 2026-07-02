@@ -21,16 +21,19 @@
 // (skip emission + info diagnostic).
 
 import ts from "typescript";
+import { isOpenToken, parseToken } from "@fnioc/core";
 import { deriveToken, type LiteralValue, type TokenContext } from "./tokens.js";
 import {
   extractCtorReferenceSignature,
   extractFactoryReferenceSignature,
   extractFromExpression,
+  extractInstantiatedSignature,
   extractSignatureFromFunction,
   hasSignatureDecorator,
   isFactorySlot,
   isLiteralSlot,
   isScopeSlot,
+  isTypeArgSlot,
   isUnionSlot,
   type ConstructorExtraction,
   type DepContext,
@@ -45,6 +48,7 @@ import {
 } from "./checks.js";
 import {
   DiagnosticCode,
+  error,
   info,
   type DiagnosticSink,
 } from "./diagnostics.js";
@@ -136,6 +140,21 @@ interface RegPlan {
    * name rather than written as a fluent `.as<"request">()` continuation.
    */
   readonly scope?: string;
+  /**
+   * When set, the registration's value arg becomes this expression — the plain
+   * ctor of an instantiation expression (`SqlRepository<$<1>>` → `SqlRepository`,
+   * type args stripped). Mutually exclusive with `hoistName` (a generic impl
+   * carries its deps on the registration, so nothing keys on the ctor object
+   * and no hoist is needed).
+   */
+  readonly valueOverride?: ts.Expression;
+  /**
+   * Registration-carried dep signatures — emitted as the THIRD argument of the
+   * lowered `add(token, ctor, signatures)` call, with NO `defineDeps` prelude.
+   * Set for generic impls (open or closed via an instantiation expression),
+   * whose ctor-keyed metadata would collide across closings/templates.
+   */
+  readonly signatures?: Signature[];
 }
 
 /**
@@ -159,17 +178,31 @@ export function lowerStatement(
   for (const reg of registrations) {
     const token = tokenForReg(reg, ctx);
     if (reg.method === "addValue") {
-      // Value: just a token prepend — no deps, no hoist (single use).
+      // Value: just a token prepend — no deps, no hoist (single use). An open
+      // template token is a hard error — a value has no per-closing construction.
+      if (token !== undefined && isOpenToken(token)) {
+        emitOpenTokenError(token, "addValue", reg, ctx);
+      }
       plans.set(reg.call, { token, calleeMethod: "addValue" });
       continue;
     }
-    const plan = planAddRegistration(
-      reg.arg,
-      token,
-      ctx,
-      preludes,
-      reg.overrideArg,
-    );
+    // v1 open-service restriction: every type arg of an open service token must
+    // be a bare hole (`IFoo<$<1>,$<2>>` — repeats allowed); concrete/hole mixes and
+    // nested holes (`IFoo<$<1>,string>`, `IFoo<IBar<$<1>>>`) are a hard error.
+    const shape = classifyServiceToken(token);
+    if (shape.mixed) {
+      ctx.sink.addDiagnostic(
+        error(
+          ctx.sourceFile,
+          reg.typeArg ?? reg.call,
+          DiagnosticCode.MixedServiceTokenArgs,
+          `open service token "${token}" mixes holes and concrete type args — ` +
+            "every type arg of an open service token must be a hole " +
+            "(`IFoo<$<1>,$<2>>`); close the token fully or open it fully",
+        ),
+      );
+    }
+    const plan = planAddRegistration(reg, token, shape, ctx, preludes);
     // A per-scope authoring method (`addRequest(C)`) bakes its scope into the
     // method name; carry it so the lowered call gains a trailing `.as(scope)`.
     plans.set(reg.call, reg.scope === undefined ? plan : { ...plan, scope: reg.scope });
@@ -339,21 +372,180 @@ function applyOverrides(
 }
 
 /**
+ * The static shape of a registration's SERVICE token w.r.t. the open-generics
+ * grammar: which holes its template binds, and whether it violates the v1
+ * all-holes-or-all-concrete restriction.
+ */
+interface ServiceTokenShape {
+  /** Hole numbers bound by the template's top-level args (empty when closed). */
+  readonly holes: ReadonlySet<number>;
+  /** Open, but not every top-level arg is a bare hole — 990008 territory. */
+  readonly mixed: boolean;
+}
+
+/** Classify a derived service token against the open-template grammar. */
+function classifyServiceToken(token: string | undefined): ServiceTokenShape {
+  const holes = new Set<number>();
+  const parsed = token === undefined ? undefined : parseToken(token);
+  if (!parsed) {return { holes, mixed: false };}
+  let sawConcrete = false;
+  let sawHole = false;
+  for (const arg of parsed.args) {
+    const hole = HOLE_NODE.exec(arg);
+    if (hole) {
+      holes.add(Number(hole[1]));
+      sawHole = true;
+    } else {
+      sawConcrete = true;
+      // A nested hole (`IFoo<IBar<$<1>>>`) opens the token without being a
+      // top-level hole — that counts as mixed too.
+      if (isOpenToken(arg)) {sawHole = true;}
+    }
+  }
+  return { holes, mixed: sawHole && sawConcrete };
+}
+
+/** A token node that is exactly a hole: `$N`, decimal N ≥ 1 (capture: N). */
+const HOLE_NODE = /^\$([1-9][0-9]*)$/;
+
+/** Hole numbers at any depth of a token (grammar-aware, recursive). */
+function* tokenHoles(token: string): Generator<number> {
+  const hole = HOLE_NODE.exec(token);
+  if (hole) {
+    yield Number(hole[1]);
+    return;
+  }
+  const parsed = parseToken(token);
+  if (!parsed) {return;}
+  for (const arg of parsed.args) {yield* tokenHoles(arg);}
+}
+
+/** Hole numbers referenced anywhere in a dep slot (recursive over unions). */
+function* slotHoles(slot: Slot): Generator<number> {
+  if (typeof slot === "string") {
+    yield* tokenHoles(slot);
+    return;
+  }
+  if (isTypeArgSlot(slot)) {
+    yield slot.typeArg;
+    return;
+  }
+  if (isFactorySlot(slot)) {
+    yield* tokenHoles(slot.type);
+    for (const p of slot.params ?? []) {yield* tokenHoles(p);}
+    return;
+  }
+  if (isUnionSlot(slot)) {
+    for (const member of slot.union) {yield* slotHoles(member);}
+  }
+  // Scope / literal slots carry no holes.
+}
+
+/**
+ * Every hole a dep signature references must be bound by the service template
+ * (990010) — substitution at close time has no argument for an unbound one.
+ * Skipped for a mixed service token (990008 already fired; the hole set is not
+ * meaningful).
+ */
+function checkDepHoles(
+  signatures: readonly Signature[],
+  token: string | undefined,
+  shape: ServiceTokenShape,
+  anchor: ts.Node,
+  ctx: LowerContext,
+): void {
+  if (shape.mixed) {return;}
+  const orphans = new Set<number>();
+  for (const sig of signatures) {
+    for (const slot of sig) {
+      for (const n of slotHoles(slot)) {
+        if (!shape.holes.has(n)) {orphans.add(n);}
+      }
+    }
+  }
+  if (!orphans.size) {return;}
+  const list = [...orphans]
+    .sort((a, b) => a - b)
+    .map((n) => `$${n}`)
+    .join(", ");
+  ctx.sink.addDiagnostic(
+    error(
+      ctx.sourceFile,
+      anchor,
+      DiagnosticCode.DepHoleNotInServiceTemplate,
+      `dependency hole(s) ${list} are not bound by the service token ` +
+        `"${token}" — every hole a dependency references must appear in the ` +
+        "service token's type arguments",
+    ),
+  );
+}
+
+/** Emit the 990009 error: an open template token on a value/factory registration. */
+function emitOpenTokenError(
+  token: string,
+  method: "addValue" | "addFactory",
+  reg: FoundReg,
+  ctx: LowerContext,
+): void {
+  ctx.sink.addDiagnostic(
+    error(
+      ctx.sourceFile,
+      reg.typeArg ?? reg.call,
+      DiagnosticCode.OpenTokenOnValueOrFactory,
+      `open template token "${token}" on ${method} — open registrations are ` +
+        "class registrations only; register a class implementation or close " +
+        "the token",
+    ),
+  );
+}
+
+/**
  * Plan an `add` / `addFactory` registration: pick the runtime method
  * (constructable → `add`, callable → `addFactory`) and, when a dep signature is
  * statically derivable, hoist the arg + emit `defineDeps` against the const.
+ *
+ * A GENERIC impl — an instantiation expression (`SqlRepository<$<1>>`,
+ * `Foo<string>`) — instead carries its dep signatures ON THE REGISTRATION (the
+ * third `add()` argument): its ctor-keyed metadata would collide across
+ * closings/templates, so no `defineDeps` and no hoist are emitted, and the
+ * lowered call passes the plain ctor with type args stripped.
  */
 function planAddRegistration(
-  arg: ts.Expression,
+  reg: FoundReg,
   token: string | undefined,
+  shape: ServiceTokenShape,
   ctx: LowerContext,
   preludes: ts.Statement[],
-  overrideArg?: ts.Expression,
 ): RegPlan {
+  const arg = reg.arg;
+  const overrideArg = reg.overrideArg;
+  const openToken = token !== undefined && isOpenToken(token);
+
   // Inline factory literal — signatures read straight off its parameters.
   if (isFactoryArg(arg)) {
+    if (openToken) {emitOpenTokenError(token, "addFactory", reg, ctx);}
     const signatures = extractSignatureFromFunction(arg, ctx);
+    checkDepHoles(signatures, token, shape, arg, ctx);
     return emitHoisted(arg, token, signatures, "addFactory", ctx, preludes);
+  }
+
+  // Instantiation expression (TS 4.7+): a generic impl, open or closed. The
+  // construct signatures on the EWTA's type are already instantiated, so the
+  // extracted slots surface holes as `$N` / `{ typeArg: N }` (or the concrete
+  // tokens of a closed registration) directly.
+  if (ts.isExpressionWithTypeArguments(arg)) {
+    const signatures = extractInstantiatedSignature(arg, ctx);
+    if (signatures) {
+      checkDepHoles(signatures, token, shape, arg, ctx);
+      return {
+        token,
+        calleeMethod: "add",
+        valueOverride: arg.expression,
+        signatures,
+      };
+    }
+    // Not constructable (e.g. a generic function instantiation) — fall through
+    // to the type-driven routing below, exactly as before.
   }
 
   const type = ctx.checker.getTypeAtLocation(arg);
@@ -373,6 +565,9 @@ function planAddRegistration(
         return merged ?? sig;
       });
     }
+    if (signatures) {
+      checkDepHoles(signatures, token, shape, arg, ctx);
+    }
     return signatures
       ? emitHoisted(arg, token, signatures, "add", ctx, preludes)
       : { token, calleeMethod: "add" };
@@ -380,7 +575,11 @@ function planAddRegistration(
 
   // Callable (not constructable) → a factory.
   if (type.getCallSignatures().length) {
+    if (openToken) {emitOpenTokenError(token, "addFactory", reg, ctx);}
     const signatures = extractFactoryReferenceSignature(arg, ctx);
+    if (signatures) {
+      checkDepHoles(signatures, token, shape, arg, ctx);
+    }
     return signatures
       ? emitHoisted(arg, token, signatures, "addFactory", ctx, preludes)
       : { token, calleeMethod: "addFactory" };
@@ -484,21 +683,25 @@ function defineDepsStatement(
   factory: ts.NodeFactory,
   defineDepsRef: ts.Identifier,
 ): ts.Statement {
+  const call = factory.createCallExpression(defineDepsRef, undefined, [
+    targetExpr,
+    signaturesLiteral(signatures, factory),
+  ]);
+  return factory.createExpressionStatement(call);
+}
+
+/** Render `[[...sig], ...]` — a signatures array literal (defineDeps 2nd arg / add 3rd arg). */
+function signaturesLiteral(
+  signatures: Signature[],
+  factory: ts.NodeFactory,
+): ts.Expression {
   const signatureArrays = signatures.map((sig) =>
     factory.createArrayLiteralExpression(
       sig.map((slot) => slotLiteral(slot, factory)),
       false,
     ),
   );
-  const signatureArray = factory.createArrayLiteralExpression(
-    signatureArrays,
-    false,
-  );
-  const call = factory.createCallExpression(defineDepsRef, undefined, [
-    targetExpr,
-    signatureArray,
-  ]);
-  return factory.createExpressionStatement(call);
+  return factory.createArrayLiteralExpression(signatureArrays, false);
 }
 
 /**
@@ -508,10 +711,22 @@ function defineDepsStatement(
  *   - `{ scope: true }` for a scope ref
  *   - `{ union: [slot, slot, ...] }` for a union slot (recursive)
  *   - `{ value: <literal> }` for a literal slot (Rule 2)
+ *   - `{ typeArg: N }` for a type-arg ref (an open `Typeof<Hole<N>>` param)
  *
  * There is no `null` emission — the `null`/hole sentinel has been removed.
  */
 function slotLiteral(slot: Slot, factory: ts.NodeFactory): ts.Expression {
+  if (isTypeArgSlot(slot)) {
+    return factory.createObjectLiteralExpression(
+      [
+        factory.createPropertyAssignment(
+          "typeArg",
+          factory.createNumericLiteral(slot.typeArg),
+        ),
+      ],
+      false,
+    );
+  }
   if (isScopeSlot(slot)) {
     return factory.createObjectLiteralExpression(
       [factory.createPropertyAssignment("scope", factory.createTrue())],
@@ -636,24 +851,28 @@ function lowerRegistrationCall(
   const valueArg =
     plan.hoistName !== undefined
       ? factory.createIdentifier(plan.hoistName)
-      : call.arguments[0]!;
+      : plan.valueOverride ?? call.arguments[0]!;
 
-  // The two-arg runtime call. Same callee name (class `add`, `addValue`) → update
-  // in place; a factory authored as `add<I>(fn)` or any per-scope method is built
-  // fresh on `plan.calleeMethod` (`add` / `addFactory`).
+  // The runtime call: `(token, value)` — plus registration-carried signatures as
+  // a third argument for a generic impl (no defineDeps prelude keys on the ctor).
+  const args: ts.Expression[] = [tokenLiteral, valueArg];
+  if (plan.signatures) {
+    args.push(signaturesLiteral(plan.signatures, factory));
+  }
+
+  // Same callee name (class `add`, `addValue`) → update in place; a factory
+  // authored as `add<I>(fn)` or any per-scope method is built fresh on
+  // `plan.calleeMethod` (`add` / `addFactory`).
   const runtimeCall =
     callee.name.text === plan.calleeMethod
-      ? factory.updateCallExpression(call, call.expression, undefined, [
-          tokenLiteral,
-          valueArg,
-        ])
+      ? factory.updateCallExpression(call, call.expression, undefined, args)
       : factory.createCallExpression(
           factory.createPropertyAccessExpression(
             callee.expression,
             plan.calleeMethod,
           ),
           undefined,
-          [tokenLiteral, valueArg],
+          args,
         );
 
   // A per-scope authoring form (`addRequest(C)`) bakes the scope into the name —

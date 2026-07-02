@@ -18,6 +18,13 @@ export const T = {
   C: "pkg:IC" as Token,
 } as const;
 
+/** Generic-token fixtures for the open-generics suite. */
+export const G = {
+  RepoTemplate: "pkg:IRepo<$1>" as Token,
+  RepoOfA: "pkg:IRepo<pkg:IA>" as Token,
+  RepoOfB: "pkg:IRepo<pkg:IB>" as Token,
+} as const;
+
 // ── Counters ────────────────────────────────────────────────────────────────
 
 /** A construction counter so tests can assert how many times a ctor ran. */

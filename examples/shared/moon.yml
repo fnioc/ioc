@@ -1,0 +1,23 @@
+# https://moonrepo.dev/docs/config/project
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+id: 'examples-shared'
+layer: 'library'
+language: 'typescript'
+
+# Source-only: no `build` / `test` task. Each example compiles this package's
+# source into its own dist via a relative import (plain tsc/tspc, no bundler), so
+# there is nothing to build or run here. A single `lint` task type-checks the
+# shared source in isolation, keeping `moon run :lint` green.
+dependsOn:
+  - 'di'
+
+tasks:
+  lint:
+    command: 'bun x tsc --noEmit -p tsconfig.json'
+    inputs:
+      - 'src/**/*'
+      - 'tsconfig.json'
+      - '/tsconfig.base.json'
+    options:
+      cache: false

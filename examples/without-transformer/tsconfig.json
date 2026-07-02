@@ -4,7 +4,12 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "outDir": "dist",
-    "rootDir": "src",
+    // rootDir is the examples/ parent so the shared source (imported relatively
+    // from ../../shared/src) compiles in alongside this example's own src —
+    // plugin-less source inlining, no bundler. Emit lands at
+    // dist/without-transformer/src/main.js + dist/shared/src/index.js, and the
+    // relative import between them is preserved, so `node` runs it standalone.
+    "rootDir": "..",
     "composite": false,
     "declaration": false,
     "declarationMap": false,

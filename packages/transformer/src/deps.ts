@@ -17,9 +17,12 @@ import {
   tokenForType,
   tokenForReturnType,
   injectTokenFor,
+  holeNumberFor,
+  deriveToken,
   isPureLiteralUnion,
   literalUnionTokenForOptional,
   singletonValue,
+  type DeriveFailure,
   type LiteralValue,
   type TokenContext,
 } from "./tokens.js";
@@ -74,12 +77,31 @@ export interface LiteralSlot {
 }
 
 /**
- * One positional slot: a token string, a factory ref, a scope ref, a union of
- * alternatives, or a literal value. There is no `null` / hole sentinel — an
- * unresolvable (anonymous-structure) type causes a hard compile error
- * (`UnderivableToken`).
+ * A type-arg slot — the transformer's in-memory mirror of the runtime
+ * `TypeArgRef`. Produced for a parameter typed `Typeof<T>` where `T` is
+ * bound to a Hole: the parameter receives the TOKEN STRING of the
+ * registration's `typeArg`th type argument (1-based). Emitted as
+ * `{ typeArg: N }` in the registration-carried signature array; substitution
+ * closes it into a literal value slot per closing. A CONCRETE binding emits a
+ * `LiteralSlot` with the derived token directly instead.
  */
-export type Slot = string | FactorySlot | ScopeSlot | UnionSlot | LiteralSlot;
+export interface TypeArgSlot {
+  readonly typeArg: number;
+}
+
+/**
+ * One positional slot: a token string, a factory ref, a scope ref, a union of
+ * alternatives, a literal value, or a type-arg ref. There is no `null` / hole
+ * sentinel — an unresolvable (anonymous-structure) type causes a hard compile
+ * error (`UnderivableToken`).
+ */
+export type Slot =
+  | string
+  | FactorySlot
+  | ScopeSlot
+  | UnionSlot
+  | LiteralSlot
+  | TypeArgSlot;
 
 /** One emitted signature: positional slots (token / factory / scope / union / literal). */
 export type Signature = readonly Slot[];
@@ -119,17 +141,30 @@ export function isLiteralSlot(slot: Slot): slot is LiteralSlot {
 }
 
 /**
+ * True when a slot is a type-arg ref (`{ typeArg: N }`). Key-disjoint from
+ * every other slot kind, so the numeric check is sufficient.
+ */
+export function isTypeArgSlot(slot: Slot): slot is TypeArgSlot {
+  return (
+    typeof slot === "object" &&
+    typeof (slot as { typeArg?: unknown }).typeArg === "number"
+  );
+}
+
+/**
  * Structural equality for slots. Two slots are equal when:
  *   - both are the same string token
  *   - both are factory refs with the same type and params
  *   - both are scope refs
  *   - both are union slots with element-wise equal members (recursive)
  *   - both are literal slots with strictly-equal values
+ *   - both are type-arg refs with the same hole number
  */
 export function slotsEqual(a: Slot, b: Slot): boolean {
   if (a === b) {return true;}
   if (typeof a === "string" || typeof b === "string") {return false;}
   if (isScopeSlot(a) && isScopeSlot(b)) {return true;}
+  if (isTypeArgSlot(a) && isTypeArgSlot(b)) {return a.typeArg === b.typeArg;}
   if (isFactorySlot(a) && isFactorySlot(b)) {
     if (a.type !== b.type) {return false;}
     const ap = a.params ?? [];
@@ -152,6 +187,13 @@ export function slotsEqual(a: Slot, b: Slot): boolean {
  * treated as the scope contract, mirroring the `nameof` / factory heuristics.
  */
 const RESOLVE_SCOPE_NAME = "ResolveScope";
+
+/**
+ * The name of the `Typeof<T>` brand alias (the `typeof(T)` analog for
+ * open generics). Matched by alias/symbol name — same convention as
+ * `ResolveScope` above. The binding `T` is read from `aliasTypeArguments[0]`.
+ */
+const TYPE_ARG_TOKEN_NAME = "Typeof";
 
 export interface ConstructorExtraction {
   /** The class symbol the constructor belongs to. */
@@ -290,13 +332,31 @@ function paramsToSignatures(
  * resolved type — the resolved `ts.Type` of an inline arrow and of a named
  * callable interface are structurally identical, so only the syntax tells them
  * apart.
+ *
+ * INSTANTIATED-TYPE OVERRIDE: for a generic impl registered via an
+ * instantiation expression (`add<IRepo<$<1>>>(SqlRepo<$<1>>)`), the param's
+ * declaration node carries the UNSUBSTITUTED type (`T`, `IRepo<T>`), while the
+ * checker's instantiated construct signature carries the substituted one
+ * (`Hole<1>`, `IRepo<Hole<1>>`). `typeOverride` supplies the substituted type;
+ * the declaration node keeps driving the SYNTACTIC classification (optional /
+ * FunctionTypeNode / UnionTypeNode).
  */
 function extractParamSlot(
   param: ts.ParameterDeclaration,
   ctx: DepContext,
+  typeOverride?: ts.Type,
 ): Slot {
+  const rawType = typeOverride ?? ctx.checker.getTypeAtLocation(param);
+
   // 1. A `ResolveScope`-typed parameter is the live scope, not a token.
-  if (isResolveScopeParam(param, ctx)) {return { scope: true };}
+  if (isResolveScopeType(rawType)) {return { scope: true };}
+
+  // 1.5. A `Typeof<T>`-typed parameter receives the token STRING of a
+  //      registration type argument: a Hole binding stays an open
+  //      `{ typeArg: N }` slot; a concrete binding closes to its derived token
+  //      as a literal value slot.
+  const typeArgSlot = typeArgSlotFor(rawType, param, ctx);
+  if (typeArgSlot !== undefined) {return typeArgSlot;}
 
   // 2. Check for the Inject<T, "tok"> brand. A brand on the WHOLE (single,
   //    non-nullish, non-union) param type wins unconditionally and short-circuits
@@ -306,8 +366,7 @@ function extractParamSlot(
   //    is handled per-member in the union/optional paths below (via
   //    `extractParamSlotFromTypeNode` / `nonNullishMemberSlots`, which check the
   //    brand on each member first).
-  const rawType = ctx.checker.getTypeAtLocation(param);
-  if (!isOptionalParam(param, ctx) && !isMultiMemberUnion(rawType)) {
+  if (!isOptionalParam(param, ctx, typeOverride) && !isMultiMemberUnion(rawType)) {
     const brandedToken = injectTokenFor(rawType, ctx.checker);
     if (brandedToken !== undefined) {return brandedToken;}
   }
@@ -317,8 +376,8 @@ function extractParamSlot(
   // fallback appended LAST. The fallback is always satisfiable, so the param can
   // never make a signature unresolvable; the real dep still wins when registered.
   // A branded non-nullish member keeps its brand (see `nonNullishMemberSlots`).
-  if (isOptionalParam(param, ctx)) {
-    const members = nonNullishMemberSlots(param, ctx);
+  if (isOptionalParam(param, ctx, typeOverride)) {
+    const members = nonNullishMemberSlots(param, ctx, typeOverride);
     // A whole-type `undefined` / `void` param has no non-nullish core — it IS the
     // undefined value, so emit the bare LiteralRef (the union would be redundant).
     if (!members.length) {return { value: undefined };}
@@ -326,7 +385,7 @@ function extractParamSlot(
   }
 
   // 3. Inline factory (syntactic: annotation is a FunctionTypeNode).
-  const factory = factorySlotFor(param, ctx);
+  const factory = factorySlotFor(param, ctx, typeOverride);
   if (factory) {return factory;}
 
   // 4. Inline union (syntactic: annotation is a UnionTypeNode). A `| null` member
@@ -344,10 +403,22 @@ function extractParamSlot(
     !isPureLiteralUnion(rawType) &&
     // `true | false` is syntactically a union but resolves to the wide `boolean`
     // type — let step 5 tokenize it as `"boolean"` rather than a LiteralRef union.
-    !(rawType.flags & ts.TypeFlags.Boolean)
+    !(rawType.flags & ts.TypeFlags.Boolean) &&
+    // Under an instantiation-expression override, the SUBSTITUTED type may no
+    // longer be a union that pairs member-for-member with the syntactic node —
+    // `T | Bar` with `T = Bar` collapses to the bare `Bar`. Descending into the
+    // per-member loop would then derive the UNSUBSTITUTED declaration nodes (the
+    // bare type parameter `T`) and hard-error; fall through to whole-type
+    // derivation (step 5, which uses the substituted `rawType`) instead.
+    overrideMatchesSyntacticUnion(typeOverride, typeNode.types.length)
   ) {
-    const memberSlots = typeNode.types.map((memberTypeNode) =>
-      extractParamSlotFromTypeNode(memberTypeNode, param, ctx),
+    const overrides = unionMemberOverrides(
+      typeOverride,
+      typeNode.types.length,
+      false,
+    );
+    const memberSlots = typeNode.types.map((memberTypeNode, i) =>
+      extractParamSlotFromTypeNode(memberTypeNode, param, ctx, overrides[i]),
     );
     return { union: memberSlots };
   }
@@ -362,21 +433,121 @@ function extractParamSlot(
   const singleton = singletonValue(type);
   if (singleton) {return { value: singleton.value };}
 
-  const result = tokenForType(type, ctx);
+  const failure: DeriveFailure = {};
+  const result = tokenForType(type, ctx, failure);
   if (result !== undefined) {return result.token;}
 
-  // 6. Hard error: no derivable token and no Inject brand.
+  // 6. Hard error: no derivable token and no Inject brand. An unbound type
+  //    parameter gets the sharper diagnostic — the fix is an instantiation
+  //    expression, not a name.
   ctx.sink.addDiagnostic(
-    error(
-      ctx.sourceFile,
-      param.type ?? param,
-      DiagnosticCode.UnderivableToken,
-      "cannot derive a token for this type — name the type or brand the parameter with `Inject<T, 'my:token'>`",
-    ),
+    failure.unboundTypeParameter
+      ? error(
+          ctx.sourceFile,
+          param.type ?? param,
+          DiagnosticCode.UnboundTypeParameter,
+          "this parameter references an unbound type parameter — register the class " +
+            "via an instantiation expression that binds it (`add<IFoo<$<1>>>(Foo<$<1>>)` " +
+            "for an open template, or `Foo<Concrete>` for a closed one)",
+        )
+      : error(
+          ctx.sourceFile,
+          param.type ?? param,
+          DiagnosticCode.UnderivableToken,
+          "cannot derive a token for this type — name the type or brand the parameter with `Inject<T, 'my:token'>`",
+        ),
   );
   // Return a sentinel string so the signature array is still well-shaped for
   // downstream processing; the hard error will stop compilation.
   return "??unresolvable??";
+}
+
+/**
+ * The `Typeof<T>` slot for a parameter type, or `undefined` when the type
+ * is not a `Typeof` reference. A Hole binding yields the open
+ * `{ typeArg: N }` slot; a concrete binding yields the derived token as a
+ * `{ value: "<token>" }` literal slot (the closed form needs no substitution).
+ * A binding with no derivable token is the same hard error as any other
+ * underivable parameter.
+ */
+function typeArgSlotFor(
+  type: ts.Type,
+  param: ts.ParameterDeclaration,
+  ctx: DepContext,
+): Slot | undefined {
+  const symbol = type.aliasSymbol ?? type.getSymbol();
+  if (symbol?.getName() !== TYPE_ARG_TOKEN_NAME) {return undefined;}
+  const binding = type.aliasTypeArguments?.[0];
+  if (!binding) {return undefined;}
+
+  const hole = holeNumberFor(binding, ctx.checker);
+  if (hole !== undefined) {return { typeArg: hole };}
+
+  const failure: DeriveFailure = {};
+  const token = deriveToken(binding, ctx, failure);
+  if (token !== undefined) {return { value: token };}
+
+  ctx.sink.addDiagnostic(
+    failure.unboundTypeParameter
+      ? error(
+          ctx.sourceFile,
+          param.type ?? param,
+          DiagnosticCode.UnboundTypeParameter,
+          "the Typeof binding references an unbound type parameter — register " +
+            "the class via an instantiation expression that binds it (`Foo<$<1>>` or " +
+            "`Foo<Concrete>`)",
+        )
+      : error(
+          ctx.sourceFile,
+          param.type ?? param,
+          DiagnosticCode.UnderivableToken,
+          "cannot derive a token for this Typeof binding — name the type",
+        ),
+  );
+  return "??unresolvable??";
+}
+
+/**
+ * Positionally pair an instantiated UNION override with a syntactic union
+ * node's members. Returns one override (or `undefined`) per member. Pairing is
+ * best-effort: when the override is not a union, or the constituent count
+ * (after optionally stripping the `undefined`/`void` the optional path
+ * consumed) differs from the syntactic member count — union normalization can
+ * reorder or collapse members — every member falls back to its own node type.
+ */
+/**
+ * True when the per-member union pairing is safe: there is NO instantiation
+ * override (the ordinary syntactic-union path applies), or the substituted
+ * override is itself a union whose constituent count matches the syntactic
+ * member count. When an override is present but collapsed (`T | Bar` → `Bar`)
+ * or otherwise mismatched, member-for-member pairing would fall back to the
+ * unsubstituted declaration nodes and hard-error on the bare type parameter —
+ * the caller must derive the whole substituted type as one slot instead.
+ */
+function overrideMatchesSyntacticUnion(
+  override: ts.Type | undefined,
+  memberCount: number,
+): boolean {
+  if (override === undefined) {return true;}
+  return override.isUnion() && override.types.length === memberCount;
+}
+
+function unionMemberOverrides(
+  override: ts.Type | undefined,
+  memberCount: number,
+  stripUndefinedAndVoid: boolean,
+): readonly (ts.Type | undefined)[] {
+  const none: (ts.Type | undefined)[] = Array.from(
+    { length: memberCount },
+    () => undefined,
+  );
+  if (!override || !override.isUnion()) {return none;}
+  const members = stripUndefinedAndVoid
+    ? override.types.filter(
+        (t) => !(t.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Void)),
+      )
+    : override.types;
+  return members.length === memberCount ? members : none;
 }
 
 /**
@@ -396,8 +567,9 @@ function extractParamSlot(
 function nonNullishMemberSlots(
   param: ts.ParameterDeclaration,
   ctx: DepContext,
+  typeOverride?: ts.Type,
 ): Slot[] {
-  const rawType = ctx.checker.getTypeAtLocation(param);
+  const rawType = typeOverride ?? ctx.checker.getTypeAtLocation(param);
 
   // A pure-literal non-nullish core (`"a" | "b" | undefined`) stays ONE sorted
   // literal-union token, not per-member LiteralRefs — same as a non-optional
@@ -430,7 +602,10 @@ function nonNullishMemberSlots(
       ) {
         return ["boolean"];
       }
-      return kept.map((t) => extractParamSlotFromTypeNode(t, param, ctx));
+      const overrides = unionMemberOverrides(typeOverride, kept.length, true);
+      return kept.map((t, i) =>
+        extractParamSlotFromTypeNode(t, param, ctx, overrides[i]),
+      );
     }
   }
   // No inline union: derive the single non-nullish slot from the resolved type.
@@ -440,6 +615,9 @@ function nonNullishMemberSlots(
   // Inject<T,K>` must keep its branded token, not derive structurally.
   const brandedCore = injectTokenFor(core, ctx.checker);
   if (brandedCore !== undefined) {return [brandedCore];}
+  // Likewise a `tok?: Typeof<T>` keeps its type-arg slot.
+  const typeArgSlot = typeArgSlotFor(core, param, ctx);
+  if (typeArgSlot !== undefined) {return [typeArgSlot];}
   const singleton = singletonValue(core);
   if (singleton) {return [{ value: singleton.value }];}
   // `nonNullish` can only collapse a union when a SINGLE non-nullish member
@@ -467,11 +645,16 @@ function extractParamSlotFromTypeNode(
   typeNode: ts.TypeNode,
   parentParam: ts.ParameterDeclaration,
   ctx: DepContext,
+  memberOverride?: ts.Type,
 ): Slot {
   // Check for Inject brand on the resolved type of this member.
-  const memberType = ctx.checker.getTypeFromTypeNode(typeNode);
+  const memberType = memberOverride ?? ctx.checker.getTypeFromTypeNode(typeNode);
   const brandedToken = injectTokenFor(memberType, ctx.checker);
   if (brandedToken !== undefined) {return brandedToken;}
+
+  // A `Typeof<T>` union member keeps its type-arg slot.
+  const typeArgSlot = typeArgSlotFor(memberType, parentParam, ctx);
+  if (typeArgSlot !== undefined) {return typeArgSlot;}
 
   // Nested factory: an inline function type node within a union member.
   if (ts.isFunctionTypeNode(typeNode)) {
@@ -502,8 +685,9 @@ function extractParamSlotFromTypeNode(
   const singleton = singletonValue(memberType);
   if (singleton) {return { value: singleton.value };}
 
-  // Normal derivation.
-  const token = deriveTokenForTypeNode(typeNode, ctx);
+  // Normal derivation (from the resolved member type — the instantiated
+  // override when present, the node's own type otherwise).
+  const token = tokenForType(memberType, ctx)?.token;
   if (token !== undefined) {return token;}
 
   // Hard error for this union member.
@@ -518,22 +702,8 @@ function extractParamSlotFromTypeNode(
   return "??unresolvable??";
 }
 
-/** Derive a token for a type node (used in union-member extraction). */
-function deriveTokenForTypeNode(
-  typeNode: ts.TypeNode,
-  ctx: DepContext,
-): string | undefined {
-  const type = ctx.checker.getTypeFromTypeNode(typeNode);
-  const result = tokenForType(type, ctx);
-  return result?.token;
-}
-
-/** True when `param`'s type resolves to the `ResolveScope` contract interface. */
-function isResolveScopeParam(
-  param: ts.ParameterDeclaration,
-  ctx: TokenContext,
-): boolean {
-  const type = ctx.checker.getTypeAtLocation(param);
+/** True when a param's resolved type is the `ResolveScope` contract interface. */
+function isResolveScopeType(type: ts.Type): boolean {
   const symbol = type.aliasSymbol ?? type.getSymbol();
   return symbol?.getName() === RESOLVE_SCOPE_NAME;
 }
@@ -631,6 +801,47 @@ export function extractCtorReferenceSignature(
 }
 
 /**
+ * Extract the constructor signature(s) of an INSTANTIATION EXPRESSION
+ * registration arg (`add<IRepo<$<1>>>(SqlRepository<$<1>>)` — an
+ * `ExpressionWithTypeArguments` in value position). The checker's construct
+ * signatures on the EWTA's type are already INSTANTIATED (holes and concrete
+ * args substituted for the class's type parameters), so the "inverted mapping"
+ * (`Foo<$<2>,$<1>>`) falls out for free. Each param pairs its DECLARATION node
+ * (syntactic classification: optional / FunctionTypeNode / UnionTypeNode) with
+ * the instantiated type from `checker.getTypeOfSymbol` — the declaration node
+ * alone would yield the unsubstituted type parameters.
+ *
+ * Returns `undefined` when the expression is not constructable or a parameter
+ * cannot be read positionally (no declaration / rest param), so the caller
+ * falls back to its non-EWTA handling.
+ */
+export function extractInstantiatedSignature(
+  ewta: ts.ExpressionWithTypeArguments,
+  ctx: DepContext,
+): Signature[] | undefined {
+  const constructSignatures = ctx.checker
+    .getTypeAtLocation(ewta)
+    .getConstructSignatures();
+  if (!constructSignatures.length) {return undefined;}
+
+  const results: Signature[] = [];
+  for (const sig of constructSignatures) {
+    const slots: Slot[] = [];
+    for (const paramSymbol of sig.parameters) {
+      const decl = paramSymbol.valueDeclaration;
+      if (!decl || !ts.isParameter(decl) || decl.dotDotDotToken) {
+        return undefined;
+      }
+      slots.push(
+        extractParamSlot(decl, ctx, ctx.checker.getTypeOfSymbol(paramSymbol)),
+      );
+    }
+    results.push(slots);
+  }
+  return results;
+}
+
+/**
  * If `param`'s type annotation is an inline function-type literal, return its
  * factory slot (keyed on the return type's token). Returns `undefined` when the
  * annotation is anything else — including a named function-interface reference
@@ -650,11 +861,18 @@ export function extractCtorReferenceSignature(
 function factorySlotFor(
   param: ts.ParameterDeclaration,
   ctx: DepContext,
+  typeOverride?: ts.Type,
 ): FactorySlot | undefined {
   const typeNode = param.type;
   if (!typeNode || !ts.isFunctionTypeNode(typeNode)) {return undefined;}
 
-  const signature = ctx.checker.getSignatureFromDeclaration(typeNode);
+  // The INSTANTIATED call signature when an override is present (a generic
+  // impl registered via an instantiation expression — the declaration's own
+  // signature would carry unsubstituted type parameters), the declaration's
+  // otherwise.
+  const signature = typeOverride
+    ? typeOverride.getCallSignatures()[0]
+    : ctx.checker.getSignatureFromDeclaration(typeNode);
   if (!signature) {return undefined;}
 
   const token = tokenForReturnType(signature, ctx);
@@ -666,9 +884,15 @@ function factorySlotFor(
   // One or more declared params → derive a token for each. A declared param
   // whose type yields no token (anonymous structure) is a hard error: the runtime
   // cannot match a caller arg with no token to route it to the right ctor slot.
+  // Under an override, each param's token derives from the instantiated
+  // signature's param symbol (positionally paired with the declaration node).
   const params: string[] = [];
-  for (const p of typeNode.parameters) {
-    const t = slotForParam(p, ctx);
+  for (let i = 0; i < typeNode.parameters.length; i++) {
+    const p = typeNode.parameters[i]!;
+    const overrideSymbol = typeOverride ? signature.parameters[i] : undefined;
+    const t = overrideSymbol
+      ? tokenForSymbolType(overrideSymbol, ctx)
+      : slotForParam(p, ctx);
     if (t === null) {
       ctx.sink.addDiagnostic(
         error(
@@ -725,6 +949,20 @@ export function slotForParam(
   return result === undefined ? null : result.token;
 }
 
+/**
+ * `slotForParam` over a resolved SYMBOL — used when the type must come from an
+ * instantiated signature's param symbol (`checker.getTypeOfSymbol`) rather than
+ * the declaration node, which would carry unsubstituted type parameters.
+ */
+function tokenForSymbolType(
+  symbol: ts.Symbol,
+  ctx: TokenContext,
+): string | null {
+  const type = nonNullish(ctx.checker.getTypeOfSymbol(symbol));
+  const result = tokenForType(type, ctx);
+  return result === undefined ? null : result.token;
+}
+
 // ── optionality (unified on union — no overload expansion) ───────────────────
 
 /**
@@ -736,11 +974,14 @@ export function slotForParam(
 function isOptionalParam(
   param: ts.ParameterDeclaration,
   ctx: TokenContext,
+  typeOverride?: ts.Type,
 ): boolean {
   if (param.questionToken !== undefined || param.initializer !== undefined) {
     return true;
   }
-  return typeIncludesUndefinedOrVoid(ctx.checker.getTypeAtLocation(param));
+  return typeIncludesUndefinedOrVoid(
+    typeOverride ?? ctx.checker.getTypeAtLocation(param),
+  );
 }
 
 /** True when a type is `undefined`/`void`, or a union with such a member. */

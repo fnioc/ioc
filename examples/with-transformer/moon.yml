@@ -6,12 +6,15 @@ layer: 'application'
 language: 'typescript'
 
 # A real external consumer: imports @fnioc/di + @fnioc/transformer as bare
-# specifiers via workspace:* deps. Both must be built first — the build runs
-# tspc (which loads the transformer plugin + injects a bare @fnioc/di import the
-# emitted dist resolves at runtime), so `deps` order di/transformer builds ahead.
+# specifiers via workspace:* deps, and the shared example services via a relative
+# source path (tspc compiles that source into this example's own dist — no
+# bundler). di + transformer must be built first — the build runs tspc (which
+# loads the transformer plugin + injects a bare @fnioc/di import the emitted dist
+# resolves at runtime), so `deps` order di/transformer builds ahead.
 dependsOn:
   - 'di'
   - 'transformer'
+  - 'examples-shared'
 
 tasks:
   build:
@@ -21,6 +24,7 @@ tasks:
       - 'transformer:build'
     inputs:
       - 'src/**/*'
+      - '/examples/shared/src/**/*'
       - 'tsconfig.json'
       - 'package.json'
       - '/tsconfig.base.json'
@@ -28,11 +32,12 @@ tasks:
       - 'dist'
   test:
     # Run the compiled output and diff against the golden snapshot.
-    script: 'node dist/main.js > /tmp/fnioc-with-transformer.out && diff -u expected.txt /tmp/fnioc-with-transformer.out'
+    script: 'node dist/with-transformer/src/main.js > /tmp/fnioc-with-transformer.out && diff -u expected.txt /tmp/fnioc-with-transformer.out'
     deps:
       - 'build'
     inputs:
       - 'src/**/*'
+      - '/examples/shared/src/**/*'
       - 'expected.txt'
       - 'tsconfig.json'
       - 'package.json'
@@ -42,6 +47,7 @@ tasks:
       - 'transformer:build'
     inputs:
       - 'src/**/*'
+      - '/examples/shared/src/**/*'
       - 'tsconfig.json'
       - '/tsconfig.base.json'
     options:
