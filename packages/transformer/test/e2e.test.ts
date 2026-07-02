@@ -66,6 +66,33 @@ services.add<IUserRepo>(SqlUserRepo).as<"request">();
 services.add<IWidget>(WidgetHost).as<"singleton">();
 `,
   );
+  // Open-generics fixtures (separate files so the non-generic contract above
+  // stays byte-identical): a generic impl authored with the real @fnioc/core
+  // placeholder types, registered open (holes) and closed (concrete args).
+  writeFileSync(
+    join(projDir, "src", "generics.ts"),
+    `
+import type { Typeof } from "@fnioc/core";
+import { ILogger } from "./services.js";
+export interface IRepository<T> {}
+export class User {}
+export class SqlRepository<T> implements IRepository<T> {
+  constructor(log: ILogger, entityToken: Typeof<T>) {}
+}
+`,
+  );
+  writeFileSync(
+    join(projDir, "src", "wiring-generics.ts"),
+    `
+import type { $ } from "@fnioc/core";
+import { SqlRepository, IRepository, User } from "./generics.js";
+declare const services: {
+  add<I>(c: new (...a: any[]) => I): { as<S extends string>(): void };
+};
+services.add<IRepository<$<1>>>(SqlRepository<$<1>>).as<"singleton">();
+services.add<IRepository<User>>(SqlRepository<User>).as<"singleton">();
+`,
+  );
   writeFileSync(
     join(projDir, "tsconfig.json"),
     JSON.stringify({
@@ -124,5 +151,33 @@ describe("ts-patch production e2e (ESM)", () => {
     expect(emitted).toContain(
       'services.add("./services/IWidget", ɵreg2).as("singleton");',
     );
+  }, 30_000);
+
+  test("placeholder authoring form: open + closed generic registrations carry signatures", () => {
+    const result = spawnSync("node", [TSPC, "-p", "tsconfig.json"], {
+      cwd: projDir,
+      encoding: "utf8",
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+
+    const emitted = readFileSync(
+      join(projDir, "dist", "wiring-generics.js"),
+      "utf8",
+    );
+
+    // Open template: type args stripped from the emitted ctor, dep signatures
+    // carried as the third `add()` argument (no defineDeps, no hoist), the
+    // Typeof param an open `{ typeArg: 1 }` slot.
+    expect(emitted).toContain(
+      'services.add("./generics/IRepository<$1>", SqlRepository, ' +
+        '[["./services/ILogger", { typeArg: 1 }]]).as("singleton");',
+    );
+    // Closed instantiation: concrete closed token + the witness closed to a
+    // literal value slot carrying the arg's token.
+    expect(emitted).toContain(
+      'services.add("./generics/IRepository<./generics/User>", SqlRepository, ' +
+        '[["./services/ILogger", { value: "./generics/User" }]]).as("singleton");',
+    );
+    expect(emitted).not.toContain("defineDeps");
   }, 30_000);
 });

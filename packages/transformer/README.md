@@ -112,6 +112,122 @@ Tokens do not embed the package version. Two compatible versions of the same pac
 
 ---
 
+## Open generics
+
+**Breaking change.** Before this release, type arguments were dropped during token derivation — `IFoo<A>` and `IFoo<B>` both tokenized to the same `pkg:IFoo` and silently collided. Generic type references now tokenize fully applied, recursively: `pkg:IFoo<pkg:A>` and `pkg:IFoo<pkg:B>` are distinct. Non-generic types are unaffected — zero change. (`@fnioc/transformer` ships this as `feat!`; `@fnioc/core` and `@fnioc/di` ship the open-generics substrate as additive `feat`s.)
+
+TypeScript generics are erased — there is exactly one JS class per generic implementation — so "closing" a generic registration needs no runtime type machinery. It's token algebra: a closed token (`pkg:IFoo<pkg:User>`) is an ordinary, distinct cache key; an open template (`pkg:IFoo<$1>`) gets substituted at resolve time. See [`@fnioc/di`](../di/README.md#open-generics) for the resolution side.
+
+### Closed-token grammar
+
+Canonical, recursive: `base<arg1,arg2>` — no whitespace around the `<` `>` `,` separators (reserved characters, along with `$`, the hole sentinel). Each arg is itself a token, so nesting recurses:
+
+```
+pkg:IFoo<pkg:IBar<./src/Baz>>
+```
+
+- **Generic types always tokenize fully applied.** A bare mention of `IFoo` where `interface IFoo<T = string>` resolves via the checker to `IFoo<string>` and tokenizes closed: `pkg:IFoo<string>`. Type-parameter defaults arrive pre-applied — you don't need to write `IFoo<string>` explicitly.
+- **`Promise<X>` unwrap is preserved exactly as today** — at the top level (a constructor parameter or factory return typed `Promise<IDb>` maps to the `IDb` token) and nowhere else. **Inside a type argument, there is no unwrap**: `IFoo<Promise<X>>` tokenizes `Promise<...>` applied like any other generic — `pkg:IFoo<Promise<pkg:X>>`.
+- **Default-lib types tokenize by their bare name.** A type argument whose primary declaration lives in a TypeScript default-lib file (`Promise`, `Map`, …) tokenizes as the bare symbol name rather than an absolute path — `Promise<pkg:X>`, not a machine-dependent lib path.
+- **Alias-wins is preserved.** `type UserRepo = IRepository<User>` tokenizes as the alias (`./src/UserRepo`), **not** the closed form `pkg:IRepository<pkg:User>` — consistent with the named-vs-inline union rule (see the wiki). This applies whenever the reference carries an alias symbol with no directly-applied type arguments of its own; loudly documented because it's easy to expect the opposite.
+
+**v1 service-token restriction.** In a service token — the type argument to `add<...>()` or `resolve<...>()` — every type-arg position must be either **all holes** or **all concrete**. `IRepository<$<1>>` (open) and `IRepository<User>` (closed) are both valid; `IRepository<$<1>, User>` (mixed) is a compile error (990008, below). Dependency templates on the *impl* side may mix holes and concrete args freely — `IMap<string, $<1>>` is a perfectly valid dep type.
+
+### Placeholder / skolem authoring — `Hole<N, C>`, `$<N>`
+
+Author an open registration by writing a hole in place of a type argument, both on the service token and the implementation:
+
+```ts
+import type { $ } from "@fnioc/transformer";
+
+class SqlRepository<T> implements IRepository<T> {
+  constructor(private db: IDbConnection) {}
+}
+
+services.add<IRepository<$<1>>>(SqlRepository<$<1>>);
+```
+
+`$<N>` is unbounded sugar for `Hole<N>` — a zero-runtime compile-time brand the transformer detects structurally (mirroring `Inject` brand detection), so it works whether referenced directly or through an alias. When the implementation's own type parameter carries a constraint, use `Hole<N, C>` directly so the skolem satisfies it:
+
+```ts
+class SqlRepository<T extends Entity> implements IRepository<T> {
+  constructor(private db: IDbConnection) {}
+}
+
+services.add<IRepository<$<1>>>(SqlRepository<Hole<1, Entity>>);
+// Hole<1, Entity> IS an Entity (constraint carrier `C`), so it satisfies
+// `T extends Entity` where a bare `Hole<1>` ($<1>) would not typecheck.
+```
+
+A bare generic class reference with no type arguments, whose constructor parameters reference its own type parameters, is a compile error (990007, below) — supply an instantiation expression naming holes or concrete types.
+
+### Instantiation expressions — closing (or holing) the impl side
+
+The implementation side accepts a TypeScript instantiation expression (`Foo<...>` in value position, TS 4.7+) with either holes or concrete type arguments — including reordering and repeats:
+
+```ts
+class Pair<A, B> { constructor(readonly a: A, readonly b: B) {} }
+
+// Inverted order: the transformer reads the checker's INSTANTIATED
+// construct-signature param types, so the substitution is already applied —
+// param 0 (type A) is bound to $2, param 1 (type B) is bound to $1.
+services.add<IPair<$<1>, $<2>>>(Pair<$<2>, $<1>>);
+
+// Fully closed — no holes at all. Still generic-impl handling (registration-
+// carried deps, below), because the ctor is still Pair, shared with every
+// other Pair<...> registration.
+services.add<IPair<User, Order>>(Pair<User, Order>);
+```
+
+The emitted value is the plain, un-parameterized ctor (`Pair`, type arguments stripped) — instantiation expressions only ever affect how the transformer *reads* the checker, never what's emitted at runtime.
+
+### `Typeof<T>` — the witness parameter
+
+`Typeof<T>` is the `typeof(T)` analog: a constructor parameter of this type receives the **token string** the type argument `T` was bound to, letting an implementation introspect its own closing. It is type-driven — the transformer infers the hole from `T` — where the manual `typeArg(n)` names the hole positionally.
+
+```ts
+class SqlRepository<T> implements IRepository<T> {
+  constructor(
+    private db: IDbConnection,
+    private entityToken: Typeof<T>,
+  ) {}
+
+  get category() { return this.entityToken; } // "pkg:User", "pkg:Order", …
+}
+
+services.add<IRepository<$<1>>>(SqlRepository<$<1>>);
+```
+
+For an **open** binding (`T` is a hole), the transformer emits a `{ typeArg: N }` slot that resolution substitutes per closing. For a **concrete** binding (a closed registration via an instantiation expression), the transformer emits the derived token directly as a literal value slot — no substitution needed, since the value is already known at compile time.
+
+### Registration-carried dep signatures
+
+Generic implementations — open templates and closed registrations made via an instantiation expression alike — can't use the usual ctor-keyed `defineDeps` emission: the dep-metadata store is keyed on the ctor **object**, and the same class backing two closings (or two templates) would collide there. Instead, the transformer emits the signatures literal directly as a **third argument to `add()`**, and skips both the `defineDeps` call and the `const ɵregN = …` hoist entirely:
+
+```ts
+// Author
+services.add<IRepository<$<1>>>(SqlRepository<$<1>>);
+
+// Lowered — no hoist, no defineDeps; the signature lives on the registration
+services.add("pkg:IRepository<$1>", SqlRepository, [
+  ["pkg:IDbConnection", { typeArg: 1 }],
+]);
+```
+
+```ts
+// Author — closed via instantiation expression
+services.add<IRepository<User>>(SqlRepository<User>);
+
+// Lowered — Typeof<T> binds concrete, so the slot is a literal value
+services.add("pkg:IRepository<pkg:User>", SqlRepository, [
+  ["pkg:IDbConnection", { value: "pkg:User" }],
+]);
+```
+
+**Non-generic registrations are unaffected** — they keep today's hoist + `defineDeps` emission, byte-for-byte. This is a regression-gated guarantee, not an incidental side effect. See [`@fnioc/di`](../di/README.md#open-generics) for how the runtime resolves and closes these against resolve-time type arguments.
+
+---
+
 ## What gets lowered
 
 For each `services.add<IFoo>(Foo).as<"scope">()` call the transformer finds, it:
@@ -249,7 +365,7 @@ A genuine zero-argument constructor is `new`ed directly without a dep lookup.
 
 ## Diagnostics
 
-The transformer emits warnings during `tsc`/`tspc` for three classes of statically-detectable misconfigurations. Each diagnostic is anchored at the relevant node in the source file. All checks are conservative — they fire only where a mismatch is statically certain, never on a guess.
+The transformer emits warnings during `tsc`/`tspc` for several classes of statically-detectable misconfigurations. Each diagnostic is anchored at the relevant node in the source file. All checks are conservative — they fire only where a mismatch is statically certain, never on a guess.
 
 ### Factory-signature mismatch (code 990003)
 
@@ -298,6 +414,54 @@ with `Inject<T, 'my:token'>`
 This is a hard compile error. Named types (interfaces, classes, type aliases, primitive keywords) always produce a token and never trigger this diagnostic. The fix is to either define a named type or brand the parameter with `Inject<T, "my:token">`.
 
 An `@fnioc/eslint-plugin` that surfaces these diagnostics in-editor is planned for a future release.
+
+### Unbound type parameter (code 990007)
+
+A bare generic class reference with no type arguments (open or concrete) whose constructor parameters reference its own type parameters — the transformer can't derive a token for an unbound `T`:
+
+```
+this parameter references an unbound type parameter — register the class via
+an instantiation expression that binds it (`add<IFoo<$<1>>>(Foo<$<1>>)` for an
+open template, or `Foo<Concrete>` for a closed one)
+```
+
+Fix: write an instantiation expression on the implementation, e.g. `SqlRepository<$<1>>` (open) or `SqlRepository<User>` (closed).
+
+### Mixed service-token arguments (code 990008)
+
+A service token's type arguments mix holes and concrete types — v1 requires every position to be **all holes** or **all concrete**:
+
+```
+open service token "./app/IRepository<$1,./app/User>" mixes holes and concrete
+type args — every type arg of an open service token must be a hole
+(`IFoo<$<1>,$<2>>`); close the token fully or open it fully
+```
+
+Fix: split into a fully-open registration (`IRepository<$<1>, $<2>>`) or a fully-closed one (`IRepository<User, Order>`).
+
+### Open token on value or factory registration (code 990009)
+
+`addValue`/`addFactory` targeting an open service token — there is no single value or factory that can serve every closing:
+
+```
+open template token "./app/IRepository<$1>" on addValue — open registrations
+are class registrations only; register a class implementation or close the
+token
+```
+
+Fix: use a class registration (`add<IRepository<$<1>>>(SqlRepository<$<1>>)`), or register each closing separately under a concrete token.
+
+### Dependency hole not in service template (code 990010)
+
+A constructor parameter's dep type references a hole (`$N`) that doesn't appear anywhere in the service token's own template — the hole has nothing to bind to at close time:
+
+```
+dependency hole(s) $2 are not bound by the service token
+"./app/IRepository<$1>" — every hole a dependency references must appear in
+the service token's type arguments
+```
+
+Fix: add the missing hole to the service token, or replace the dependency's reference with a concrete type.
 
 ---
 

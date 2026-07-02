@@ -38,6 +38,13 @@ import type { Func } from "@rhombus-toolkit/func";
 // type is a string literal. That is unique enough to be the brand in practice.
 const INJECT_TOK_PROPERTY = "TOK";
 
+// The unique symbol key name of the `Hole<N, C>` brand (open generics) —
+// detected exactly like the Inject brand above, except the extracted literal is
+// the NUMBER `N` rather than a token string:
+//   declare const HOLE: unique symbol;
+//   type Hole<N extends number, C = unknown> = C & { readonly [HOLE]?: N };
+const HOLE_BRAND_PROPERTY = "HOLE";
+
 export interface TokenContext {
   readonly checker: ts.TypeChecker;
   /**
@@ -52,6 +59,14 @@ export interface TokenContext {
    * reader that sees its virtual filesystem.
    */
   readonly readFile?: Func<[string], string | undefined>;
+  /**
+   * True when a source file is a TypeScript default lib (`lib.es*.d.ts`).
+   * A type declared there tokenizes as its BARE symbol name (`Promise`, `Map`)
+   * — the lib path is machine-dependent and carries no identity. Wired to
+   * `program.isSourceFileDefaultLibrary` in production; when absent, default-lib
+   * symbols fall through to the (nondeterministic) path-based derivation.
+   */
+  readonly isDefaultLib?: Func<[ts.SourceFile], boolean>;
 }
 
 /**
@@ -127,9 +142,10 @@ function unwrapPromise(type: ts.Type, checker: ts.TypeChecker): ts.Type {
 export function tokenForType(
   type: ts.Type,
   ctx: TokenContext,
+  failure?: DeriveFailure,
 ): TokenResult | undefined {
   const unwrapped = unwrapPromise(type, ctx.checker);
-  const token = deriveToken(unwrapped, ctx);
+  const token = deriveToken(unwrapped, ctx, failure);
   return token === undefined ? undefined : { kind: "resolvable", token };
 }
 
@@ -209,6 +225,48 @@ export function injectTokenFor(
 }
 
 /**
+ * If `type` carries the `Hole<N, C>` brand (an open-generic placeholder),
+ * return the hole number `N`. Returns `undefined` when the type is not a hole.
+ *
+ * Detection mirrors `injectTokenFor` exactly: walk the type's properties (the
+ * checker flattens intersections, so the constrained form `Hole<2, Entity>` —
+ * `Entity & { [HOLE]?: 2 }` — works) for one declared as a computed-symbol
+ * property named `HOLE`, then extract the number literal from its type. The
+ * brand property is optional, so its type is `N | undefined` — the literal is
+ * pulled from the union. Works for the anonymous unconstrained form `Hole<1>`
+ * (a `__type` with no aliasSymbol) and for aliased/constrained forms alike.
+ */
+export function holeNumberFor(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): number | undefined {
+  const props = checker.getPropertiesOfType(type);
+  for (const prop of props) {
+    const decls = prop.getDeclarations();
+    if (!decls || !decls.length) {continue;}
+
+    const isHoleProp = decls.some((decl) => {
+      if (!ts.isPropertySignature(decl)) {return false;}
+      const name = decl.name;
+      if (!ts.isComputedPropertyName(name)) {return false;}
+      const expr = name.expression;
+      if (!ts.isIdentifier(expr)) {return false;}
+      return expr.text === HOLE_BRAND_PROPERTY;
+    });
+    if (!isHoleProp) {continue;}
+
+    const propType = checker.getTypeOfSymbol(prop);
+    if (propType.isNumberLiteral()) {return propType.value;}
+    if (propType.isUnion()) {
+      for (const member of propType.types) {
+        if (member.isNumberLiteral()) {return member.value;}
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
  * The token for an inline function type's RETURN type — the factory's product.
  * Used for factory params (`() => IFoo` → token for `IFoo`). Unwraps a single
  * `Promise<X>` layer exactly as the normal path does (an `async () => IFoo`
@@ -226,14 +284,30 @@ export function tokenForReturnType(
 }
 
 /**
+ * Failure channel for `deriveToken` — an `undefined` return alone means
+ * "underivable" (990006); when the failure was specifically an UNBOUND type
+ * parameter reaching derivation (990007 territory), the field below is set so
+ * the caller can emit the sharper diagnostic. Callers that don't care simply
+ * omit the argument.
+ */
+export interface DeriveFailure {
+  unboundTypeParameter?: ts.Type;
+}
+
+/**
  * Derive the token string for a (already Promise-unwrapped) type. Returns
- * `undefined` ONLY for an anonymous structural type with no name (a `__type`
- * symbol or a nameless non-intrinsic) — the caller treats that as the underivable
- * hard-error case. Intrinsics tokenize by name (Rule 1); literals by value.
+ * `undefined` for an anonymous structural type with no name (a `__type`
+ * symbol or a nameless non-intrinsic) — the caller treats that as the
+ * underivable hard-error case — and for an unbound type parameter (reported
+ * through `failure` when supplied). Intrinsics tokenize by name (Rule 1);
+ * literals by value; a `Hole<N>`-branded type yields `$N`; a GENERIC type
+ * reference recurses into its checker-resolved type arguments and renders the
+ * canonical closed form `base<arg1,arg2>`.
  */
 export function deriveToken(
   type: ts.Type,
   ctx: TokenContext,
+  failure?: DeriveFailure,
 ): string | undefined {
   // Literal types — string / number / boolean / bigint, and unions of them —
   // derive a deterministic token from the literal text itself, enabling
@@ -249,6 +323,24 @@ export function deriveToken(
   const intrinsic = intrinsicToken(type);
   if (intrinsic !== undefined) {return intrinsic;}
 
+  // A Hole-branded placeholder tokenizes as `$N`. Must run BEFORE the
+  // alias/symbol derivation — an aliased hole (`type H2 = Hole<2, Entity>`)
+  // carries an aliasSymbol that would otherwise mint an alias token, and the
+  // unconstrained form (`Hole<1>`) is an anonymous `__type` that would
+  // otherwise bail as underivable.
+  const hole = holeNumberFor(type, ctx.checker);
+  if (hole !== undefined) {return `$${hole}`;}
+
+  // An unbound type parameter has no token — it names a compile-time binding,
+  // not a type identity. Report it through the failure channel so callers can
+  // emit UnboundTypeParameter (990007) rather than the generic 990006. Checked
+  // via the flag (not `isTypeParameter()`) — the predicate's negation would
+  // narrow `type` to `never` for the rest of the function.
+  if (type.flags & ts.TypeFlags.TypeParameter) {
+    if (failure) {failure.unboundTypeParameter = type;}
+    return undefined;
+  }
+
   const symbol = type.aliasSymbol ?? type.getSymbol();
   if (!symbol) {return undefined;}
 
@@ -259,8 +351,38 @@ export function deriveToken(
   if (!declaration) {return undefined;}
 
   const sourceFile = declaration.getSourceFile();
-  const declPath = sourceFile.fileName;
+  const base = baseTokenFor(name, sourceFile, ctx);
 
+  // A GENERIC reference appends its checker-resolved type arguments
+  // recursively: `base<arg1,arg2>`. Non-generic types return the bare base —
+  // exactly the pre-open-generics derivation.
+  const typeArguments = genericTypeArguments(type, ctx.checker);
+  if (!typeArguments) {return base;}
+
+  const argTokens: string[] = [];
+  for (const arg of typeArguments) {
+    const argToken = deriveToken(arg, ctx, failure);
+    if (argToken === undefined) {return undefined;}
+    argTokens.push(argToken);
+  }
+  return `${base}<${argTokens.join(",")}>`;
+}
+
+/**
+ * The BASE token for a named symbol (sans generic args): default-lib types by
+ * bare name, package-public types as `name:subpath/Symbol`, everything else as
+ * an app-internal source-relative token.
+ */
+function baseTokenFor(
+  name: string,
+  sourceFile: ts.SourceFile,
+  ctx: TokenContext,
+): string {
+  // Default-lib rule: a type declared in a TS default lib (`Promise`, `Map`)
+  // tokenizes as the bare symbol name — its lib path is machine-dependent.
+  if (ctx.isDefaultLib?.(sourceFile)) {return name;}
+
+  const declPath = sourceFile.fileName;
   const pkg = nearestPackage(declPath, ctx);
   if (pkg) {
     const subpath = publicExportSubpath(pkg, declPath);
@@ -274,6 +396,39 @@ export function deriveToken(
 
   // App-internal: source-relative path token, `./`-prefixed, no extension.
   return appInternalToken(declPath, name, ctx.projectRoot);
+}
+
+/**
+ * The type arguments a GENERIC reference was applied with, or `undefined` for
+ * a non-generic (or alias-winning) type.
+ *
+ * Three cases, in order:
+ *   - aliasSymbol + aliasTypeArguments → a generic ALIAS applied
+ *     (`Wrap<User>`): the alias is the base, its args recurse.
+ *   - aliasSymbol with NO aliasTypeArguments → alias-wins (decision 5):
+ *     `type UserRepo = IRepository<User>` tokenizes as the bare alias, NO args
+ *     — `checker.getTypeArguments` still sees `[User]` underneath, so it must
+ *     NOT be consulted here.
+ *   - no aliasSymbol → an `ObjectFlags.Reference` type reference
+ *     (`IRepository<User>`): `checker.getTypeArguments` (defaults arrive
+ *     pre-applied — a bare `IFoo<T = string>` yields `["string"]`).
+ */
+function genericTypeArguments(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): readonly ts.Type[] | undefined {
+  if (type.aliasSymbol) {
+    const args = type.aliasTypeArguments;
+    return args?.length ? args : undefined;
+  }
+  if (
+    type.flags & ts.TypeFlags.Object &&
+    (type as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference
+  ) {
+    const args = checker.getTypeArguments(type as ts.TypeReference);
+    return args.length ? args : undefined;
+  }
+  return undefined;
 }
 
 /**
