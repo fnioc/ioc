@@ -6,10 +6,13 @@ layer: 'application'
 language: 'typescript'
 
 # A real external consumer: imports @fnioc/di as a bare specifier via a
-# workspace:* dep, resolved at runtime through the symlink to its built dist.
-# No transformer / ts-patch — registration and metadata are hand-written.
+# workspace:* dep, resolved at runtime through the symlink to its built dist, and
+# the shared example services via a relative source path (plain tsc compiles that
+# source into this example's own dist — no bundler). No transformer / ts-patch —
+# registration and metadata are hand-written.
 dependsOn:
   - 'di'
+  - 'examples-shared'
 
 tasks:
   build:
@@ -18,6 +21,7 @@ tasks:
       - 'di:build'
     inputs:
       - 'src/**/*'
+      - '/examples/shared/src/**/*'
       - 'tsconfig.json'
       - 'package.json'
       - '/tsconfig.base.json'
@@ -25,11 +29,12 @@ tasks:
       - 'dist'
   test:
     # Run the compiled output and diff against the golden snapshot.
-    script: 'node dist/main.js > /tmp/fnioc-without-transformer.out && diff -u expected.txt /tmp/fnioc-without-transformer.out'
+    script: 'node dist/without-transformer/src/main.js > /tmp/fnioc-without-transformer.out && diff -u expected.txt /tmp/fnioc-without-transformer.out'
     deps:
       - 'build'
     inputs:
       - 'src/**/*'
+      - '/examples/shared/src/**/*'
       - 'expected.txt'
       - 'tsconfig.json'
       - 'package.json'
@@ -37,6 +42,7 @@ tasks:
     command: 'bun x tsc --noEmit -p tsconfig.json'
     inputs:
       - 'src/**/*'
+      - '/examples/shared/src/**/*'
       - 'tsconfig.json'
       - '/tsconfig.base.json'
     options:

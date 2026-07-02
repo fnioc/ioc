@@ -2,13 +2,25 @@
 greeter is a shared singleton: true
 Greeter instances built: 1
 ConsoleLogger instances built: 1
-SystemClock instances built: 1
+SystemClock instances built: 2
 logged lines:
   [2026-01-01T00:00:00Z] Hello, Ada!
   [2026-01-01T00:00:00Z] Hello, Linus!
-  [diag] startup
+  [union] union-test
+  diagnostics at 2026-01-01T00:00:00Z
+  [sql] saved app/User
+  [sql] saved app/Invoice
 request 1 id stable within scope: true (value 1)
 request 2 id is distinct: true (value 2)
 RequestId instances built: 2
-union resolved to logger (first member): true
-third-party formatter wired: true
+union resolved to logger (first in union): true
+inject brand pinned correct clock: true
+open generics:
+  user repo is a per-closing singleton: true
+  distinct closings are distinct instances: true
+  user save: [sql] saved app/User
+  invoice save: [sql] saved app/Invoice
+  SqlRepository instances built: 2
+  closed registration wins for Order: memory
+  order save: [memory] saved app/Order (count 1)
+  auditor closed over the user repo: true (auditing app/User)

@@ -7,7 +7,7 @@
   "type": "module",
   "scripts": {
     "build": "moon run examples-without-transformer:build",
-    "start": "node dist/main.js",
+    "start": "node dist/without-transformer/src/main.js",
     "test": "moon run examples-without-transformer:test",
     "lint": "moon run examples-without-transformer:lint"
   },
