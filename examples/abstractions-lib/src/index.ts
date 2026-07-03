@@ -14,8 +14,13 @@
 
 import type { ServiceManifest } from "@fnioc/core";
 
-/** A clock the greeter reads the current time from. */
+/** The primary clock the greeter prefers. */
 export interface IClock {
+  now(): string;
+}
+
+/** A fallback clock, used when no primary `IClock` is registered. */
+export interface IBackupClock {
   now(): string;
 }
 
@@ -30,8 +35,16 @@ export class SystemClock implements IClock {
   }
 }
 
+export class BackupClock implements IBackupClock {
+  public now(): string {
+    return "1970-01-01T00:00:00Z";
+  }
+}
+
 export class Greeter implements IGreeter {
-  public constructor(private readonly clock: IClock) {}
+  // The clock dependency is genuinely EITHER a primary `IClock` or a fallback
+  // `IBackupClock` — which is what makes the union slot below meaningful.
+  public constructor(private readonly clock: IClock | IBackupClock) {}
   public greet(name: string): string {
     return `[${this.clock.now()}] Hello, ${name}!`;
   }
@@ -49,14 +62,18 @@ export class Greeter implements IGreeter {
  *
  * const sc = new ServiceManifest<"singleton">();
  * addClockServices(sc);
- * const clock = sc.build().createScope("singleton").resolve<IClock>("lib:IClock");
+ * const greeter = sc.build().createScope("singleton").resolve<IGreeter>("lib:IGreeter");
+ * // → resolves the greeter's clock to the primary SystemClock; drop the
+ * //   "lib:IClock" registration and the same wiring falls back to BackupClock.
  * ```
  */
 export function addClockServices(sc: ServiceManifest<"singleton">): void {
   sc.add("lib:IClock", SystemClock).as("singleton");
-  // A plain-literal union slot — the `{ union: [...] }` data IS the DepSlot the
-  // resolver matches. The greeter's `clock` param resolves the first satisfiable
-  // member (the primary clock; a backup token is offered as the fallback).
+  sc.add("lib:IBackupClock", BackupClock).as("singleton");
+  // Greeter's `clock` param is `IClock | IBackupClock`, authored as a
+  // first-resolvable union slot: the resolver takes the primary `lib:IClock`
+  // when present and falls back to `lib:IBackupClock` otherwise. Both are
+  // registered here, so it resolves to the primary — but the fallback is real.
   sc.add("lib:IGreeter", Greeter, [
     [{ union: ["lib:IClock", "lib:IBackupClock"] }],
   ]).as("singleton");
