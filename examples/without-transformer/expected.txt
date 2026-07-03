@@ -15,6 +15,9 @@ request 2 id is distinct: true (value 2)
 RequestId instances built: 2
 union resolved to logger (first in union): true
 inject brand pinned correct clock: true
+overloaded signatures:
+  richer overload chosen when its deps are present: true
+  falls back to the leaner overload when a dep is absent: true
 open generics:
   user repo is a per-closing singleton: true
   distinct closings are distinct instances: true

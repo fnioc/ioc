@@ -11,7 +11,7 @@
 
 import { closeToken, ServiceManifest, typeArg, union } from "@fnioc/di";
 
-import type { IAuditor, IRepository } from "../../shared/src/index.js";
+import type { IAuditor, ILogger, IMetricsBackend, IRepository } from "../../shared/src/index.js";
 import {
   ConsoleLogger,
   DiagnosticsService,
@@ -37,6 +37,14 @@ const UNION_CONSUMER = "app/UnionConsumer";
 const PRIMARY_CLOCK = "app:primary-clock";
 const DIAGNOSTICS = "app/IDiagnosticsService";
 
+// Overloaded-signature tokens. Both point at the SAME `Reporter` class but select
+// different constructor overloads (see the registrations below).
+const REPORTER = "app/Reporter";
+const LEAN_REPORTER = "app/LeanReporter";
+// A token that is never registered — used to make the richer overload
+// unsatisfiable for LEAN_REPORTER so selection falls through to the leaner one.
+const ABSENT_SINK = "app/IAbsentSink";
+
 // Open-generics tokens (manual path). Repositories register under an open
 // TEMPLATE — `$1` is the hole — and each closing is addressed by the canonical
 // closed form `app/IRepository<app/User>` (built with `closeToken`). Entities
@@ -48,6 +56,25 @@ const AUDITOR_TEMPLATE = "app/IAuditor<$1>";
 const USER = "app/User";
 const INVOICE = "app/Invoice";
 const ORDER = "app/Order";
+
+// A class with TWO constructor overloads. Defined locally because overloaded
+// construction is a plugin-less authoring feature this example exists to show:
+// the resolver carries BOTH ctor signatures on one registration and greedily
+// selects the FIRST whose slots are all registered.
+class Reporter {
+  public static built = 0;
+  public constructor(logger: ILogger, metrics: IMetricsBackend);
+  public constructor(logger: ILogger);
+  public constructor(
+    public readonly logger: ILogger,
+    public readonly metrics?: IMetricsBackend,
+  ) {
+    Reporter.built += 1;
+  }
+  public report(): string {
+    return this.metrics ? "with-metrics" : "logger-only";
+  }
+}
 
 // `singleton` and `request` are the two scope tags this app opens. There is no
 // root: scopes are uniform tags, and `singleton` is just the one we open once at
@@ -69,6 +96,17 @@ services.add(PRIMARY_CLOCK, SystemClock);
 // The Inject brand replicated by hand: DiagnosticsService's `clock` param pins
 // PRIMARY_CLOCK (the with-transformer example derives this automatically).
 services.add(DIAGNOSTICS, DiagnosticsService, [[PRIMARY_CLOCK, LOGGER]]).as("singleton");
+
+// Overloaded signatures — the third `add` argument is a LIST of signatures, one
+// per constructor overload, tried in order. Both registrations below offer the
+// SAME two signatures ([logger, metrics] then [logger]); which overload the
+// resolver selects depends only on what is registered:
+//   REPORTER      — METRICS is registered, so the richer [LOGGER, METRICS]
+//                   signature is satisfiable and wins.
+//   LEAN_REPORTER — the richer signature names ABSENT_SINK (never registered),
+//                   so it is unsatisfiable and selection falls back to [LOGGER].
+services.add(REPORTER, Reporter, [[LOGGER, METRICS], [LOGGER]]).as("singleton");
+services.add(LEAN_REPORTER, Reporter, [[LOGGER, ABSENT_SINK], [LOGGER]]).as("singleton");
 
 // Open template registration: the third `add` argument carries the dep
 // signatures ON the registration (a generic class can't use the ctor-keyed store
@@ -117,6 +155,11 @@ unionConsumer.emit("union-test");
 const diag = root.resolve<DiagnosticsService>(DIAGNOSTICS);
 const diagResult = diag.diagnose();
 
+// Overloaded-signature demo: same class, two registrations, different overload
+// selected by what is registered.
+const reporter = root.resolve<Reporter>(REPORTER);
+const leanReporter = root.resolve<Reporter>(LEAN_REPORTER);
+
 // Open-generics demo: resolve closings of the open template. Each closed token
 // is its own cache key, so the closings are distinct singletons of the SAME
 // erased class; the typeArg(1) witness tells each instance its entity.
@@ -145,6 +188,9 @@ const lines = [
   `RequestId instances built: ${RequestId.built}`,
   `union resolved to logger (first in union): ${(unionConsumer.sink as { log?: unknown }).log !== undefined}`,
   `inject brand pinned correct clock: ${diagResult.includes("2026-01-01")}`,
+  "overloaded signatures:",
+  `  richer overload chosen when its deps are present: ${reporter.report() === "with-metrics"}`,
+  `  falls back to the leaner overload when a dep is absent: ${leanReporter.report() === "logger-only"}`,
   "open generics:",
   `  user repo is a per-closing singleton: ${userRepo === userRepoAgain}`,
   `  distinct closings are distinct instances: ${userRepo !== invoiceRepo}`,
