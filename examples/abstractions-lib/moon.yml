@@ -1,0 +1,23 @@
+# https://moonrepo.dev/docs/config/project
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+id: 'examples-abstractions-lib'
+layer: 'library'
+language: 'typescript'
+
+# The abstractions smoke test — a library depending ONLY on @fnioc/core
+# (import type), no @fnioc/di runtime. Source-only: no build/test/run, just a
+# `lint` task that type-checks the free-function authoring pattern against core's
+# pure-types authoring surface. That it compiles IS the proof.
+dependsOn:
+  - 'core'
+
+tasks:
+  lint:
+    command: 'bun x tsc --noEmit -p tsconfig.json'
+    inputs:
+      - 'src/**/*'
+      - 'tsconfig.json'
+      - '/tsconfig.base.json'
+    options:
+      cache: false
