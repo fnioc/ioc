@@ -118,6 +118,13 @@ export interface Resolver {
   resolve<T>(token: Token): T;
   resolve(token: Token): unknown;
   /**
+   * Resolves asynchronously — the only path that may satisfy `T` via a
+   * `Promise<T>` registration. Always returns a Promise; a lookup miss whose
+   * honest `Promise<T>` registration exists is awaited and delivers `T`.
+   */
+  resolveAsync<T>(token: Token): Promise<T>;
+  resolveAsync(token: Token): Promise<unknown>;
+  /**
    * Returns a FACTORY for `type` rather than an instance. When `params` is
    * absent or empty, returns a strict zero-arg `() => T` — every ctor slot must
    * resolve from the container. When `params` is present, it is the complete

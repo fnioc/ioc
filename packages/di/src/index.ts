@@ -55,6 +55,7 @@ export {
   FactoryTargetError,
   CircularDependencyError,
   AsyncDisposalRequiredError,
+  AsyncResolutionRequiredError,
   OpenTokenResolutionError,
   OpenTokenRegistrationError,
 } from "./errors.js";

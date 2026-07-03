@@ -179,3 +179,18 @@ export class AsyncDisposalRequiredError extends DiError {
     );
   }
 }
+
+/**
+ * Sync `resolve()` met an async result: a cached in-flight async construction
+ * (a concurrent `resolveAsync` is mid-build). The instance cannot be produced
+ * synchronously — use `resolveAsync()`.
+ */
+export class AsyncResolutionRequiredError extends DiError {
+  public constructor(public readonly token: Token) {
+    super(
+      `"${token}" is resolving asynchronously (an async construction is in ` +
+        `flight for it). It cannot be returned synchronously — use ` +
+        `resolveAsync() instead of resolve().`,
+    );
+  }
+}
