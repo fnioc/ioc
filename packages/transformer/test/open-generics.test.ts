@@ -36,11 +36,11 @@ describe("closed-generic token derivation", () => {
     const { output, diagnostics } = transform(fixture(src));
     expect(codes(diagnostics)).toEqual([]);
     expect(output).toContain(
-      'services.add("./app/IRepo<./app/User>", ɵreg0).as("singleton");',
+      'services.add("./app/IRepo<./app/User>", UserRepo, [[]]).as("singleton");',
     );
-    // A non-generic impl keeps the ctor-keyed hoist + defineDeps emission.
-    expect(output).toContain("const ɵreg0 = UserRepo;");
-    expect(output).toContain("defineDeps(ɵreg0, [[]]);");
+    // Signatures ride inline on the registration — no hoist, no defineDeps.
+    expect(output).not.toContain("ɵreg");
+    expect(output).not.toContain("defineDeps");
   });
 
   test("package-public type arg → base<pkg:subpath/Symbol>", () => {
@@ -67,7 +67,7 @@ describe("closed-generic token derivation", () => {
     });
     expect(codes(diagnostics)).toEqual([]);
     expect(outputs["/proj/src/app.ts"]!).toContain(
-      'services.add("./src/app/IWrap<your-lib:contracts/IFoo>", ɵreg0)',
+      'services.add("./src/app/IWrap<your-lib:contracts/IFoo>", Wrap, ',
     );
   });
 
@@ -103,7 +103,7 @@ describe("closed-generic token derivation", () => {
       services.add<UserRepoAlias>(SqlUserRepo).as<"singleton">();
     `;
     const { output } = transform(fixture(src));
-    expect(output).toContain('services.add("./app/UserRepoAlias", ɵreg0)');
+    expect(output).toContain('services.add("./app/UserRepoAlias", SqlUserRepo, ');
     expect(output).not.toContain("UserRepoAlias<");
   });
 
@@ -119,7 +119,7 @@ describe("closed-generic token derivation", () => {
     expect(output).toContain('"./app/Wrap<./app/User>"');
   });
 
-  test("Promise<X> ctor param still unwraps at top level (generic X)", () => {
+  test("Promise<X> ctor param → the honest closed-generic token Promise<X>", () => {
     const src = `
       interface User {}
       interface IRepo<T> {}
@@ -130,8 +130,10 @@ describe("closed-generic token derivation", () => {
       services.add(Svc).as<"singleton">();
     `;
     const { output } = transform(fixture(src));
+    // Honest token-split: Promise<IRepo<User>> is NOT stripped — it derives the
+    // closed-generic token `Promise<./app/IRepo<./app/User>>`.
     expect(output).toContain(
-      'defineDeps(ɵreg0, [["./app/IRepo<./app/User>"]]);',
+      'Svc, [["Promise<./app/IRepo<./app/User>>"]]',
     );
   });
 
@@ -583,7 +585,7 @@ describe("diagnostics 990007–990010", () => {
 });
 
 describe("non-generic regression", () => {
-  test("a non-generic registration keeps the exact hoist + defineDeps + two-arg add shape", () => {
+  test("a non-generic registration carries its signature inline as the third arg", () => {
     const src = `
       interface ILogger {}
       interface IRepo {}
@@ -597,15 +599,13 @@ describe("non-generic regression", () => {
     `;
     const { output, diagnostics } = transform(fixture(src));
     expect(codes(diagnostics)).toEqual([]);
-    expect(output).toContain("const ɵreg0 = ConsoleLogger;");
-    expect(output).toContain("defineDeps(ɵreg0, [[]]);");
+    expect(output).not.toContain("defineDeps");
+    expect(output).not.toContain("ɵreg");
     expect(output).toContain(
-      'services.add("./app/ILogger", ɵreg0).as("singleton");',
+      'services.add("./app/ILogger", ConsoleLogger, [[]]).as("singleton");',
     );
-    expect(output).toContain("const ɵreg1 = SqlRepo;");
-    expect(output).toContain('defineDeps(ɵreg1, [["./app/ILogger"]]);');
     expect(output).toContain(
-      'services.add("./app/IRepo", ɵreg1).as("request");',
+      'services.add("./app/IRepo", SqlRepo, [["./app/ILogger"]]).as("request");',
     );
   });
 });

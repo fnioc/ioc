@@ -12,10 +12,8 @@
  *   - `Inject`         — compile-time brand that pins a token for one arg
  *   - `Hole`, `$`      — compile-time skolems for open-template type arguments (`$<N>` = `Hole<N>`)
  *   - `Typeof`         — compile-time brand: parameter receives a type argument's token
- *   - `DepTarget`      — a ctor or factory function metadata attaches to
- *   - `DepRecord`      — shape of per-constructor metadata in the global-symbol Map
- *   - `defineDeps`     — the single write path into the global-symbol Map
- *   - `getDeps`        — the read path (consumed by @fnioc/di)
+ *   - `DepTarget`      — a ctor or factory function a signature describes
+ *   - `DepRecord`      — shape of per-constructor dependency metadata
  *   - `union`          — runtime helper: constructs a Union slot from member slots
  *   - `typeArg`        — runtime helper: constructs a TypeArgRef slot
  *   - `isFactoryRef`   — type guard for FactoryRef slots
@@ -23,8 +21,6 @@
  *   - `isUnionSlot`    — type guard for Union slots
  *   - `isLiteralRef`   — type guard for LiteralRef slots
  *   - `isTypeArgRef`   — type guard for TypeArgRef slots
- *   - `ForCtorBuilder` — return type of `forCtor`
- *   - `forCtor`        — fluent free-function for third-party classes
  *   - `ParsedToken`    — result shape of `parseToken`
  *   - `closeToken`     — renders the canonical closed-generic form `base<a,b>`
  *   - `parseToken`     — parses a closed-generic token into base + args
@@ -51,16 +47,12 @@ export type {
   Typeof,
 } from "./types.js";
 export {
-  defineDeps,
-  getDeps,
   isFactoryRef,
   isScopeRef,
   isUnionSlot,
   isLiteralRef,
   isTypeArgRef,
-} from "./defineDeps.js";
-export type { ForCtorBuilder } from "./forCtor.js";
-export { forCtor } from "./forCtor.js";
+} from "./guards.js";
 export type { ParsedToken } from "./tokens.js";
 export {
   closeToken,
@@ -77,10 +69,10 @@ export {
  *
  * @example
  * ```ts
- * forCtor(Handler).signature(
+ * services.add("pkg:IHandler", Handler, [[
  *   union("pkg:IRedis", "pkg:IMemoryCache"),
  *   "pkg:ILogger",
- * );
+ * ]]);
  * ```
  */
 export function union(...slots: DepSlot[]): Union {
@@ -95,7 +87,7 @@ export function union(...slots: DepSlot[]): Union {
  *
  * @example
  * ```ts
- * forCtor(SqlRepository).signature(typeArg(1), "app/IDb");
+ * services.add("app/IRepo<$1>", SqlRepository, [[typeArg(1), "app/IDb"]]);
  * ```
  */
 export function typeArg(n: number): TypeArgRef {

@@ -4,9 +4,8 @@
 // references in the shipped artifacts — core is never published):
 //
 //   1. dist/index.js   — `bun build` bundles the ESM entry. @fnioc/core resolves
-//      through the workspace to its TS source and is bundled in.
-//      @rhombus-toolkit/type-guards contributes one tiny runtime helper
-//      (`assertNever`) that is likewise inlined; @rhombus-toolkit/func is
+//      through the workspace to its TS source and is bundled in. The one runtime
+//      helper (`assertNever`) is a local 2-liner; @rhombus-toolkit/func is
 //      type-only and erases. Nothing is externalized.
 //   2. dist/index.d.ts — rollup-plugin-dts rolls the public type surface into one
 //      declaration file, inlining @fnioc/core's (and the type-only
@@ -28,9 +27,8 @@ const js = await Bun.build({
   outdir: DIST,
   target: "node",
   format: "esm",
-  // No external: @fnioc/core must be bundled, and the only @rhombus-toolkit
-  // runtime import (type-guards' `assertNever`) is a trivial helper we inline
-  // too (func is type-only and erases).
+  // No external: @fnioc/core must be bundled; the only runtime helper
+  // (`assertNever`) is a local 2-liner (func is type-only and erases).
 });
 if (!js.success) {
   for (const log of js.logs) console.error(log);

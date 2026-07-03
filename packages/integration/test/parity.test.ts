@@ -1,7 +1,7 @@
 import { test, expect, describe, beforeAll, afterAll } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ServiceManifest, forCtor, union, NoSatisfiableSignatureError } from "@fnioc/di";
+import { ServiceManifest, union, NoSatisfiableSignatureError } from "@fnioc/di";
 import { compileWithTransformer, type CompiledProject } from "./harness.js";
 
 // Coverage 2: progressive-enhancement parity — THE headline property.
@@ -42,7 +42,10 @@ const T = {
   reportFactory: "./sample/contracts/IReportFactory",
   thunkConsumer: "./sample/contracts/IThunkConsumer",
   configConsumer: "./sample/contracts/IConfigConsumer",
-  config: "./sample/contracts/IConfig",
+  // Honest Promise<IConfig> token-split: ConfigConsumer's ctor param is typed
+  // `Promise<IConfig>`, so it depends on this closed-generic token, and the async
+  // factory is registered here.
+  config: "Promise<./sample/contracts/IConfig>",
   thunk: "./sample/contracts/IThunk",
 } as const;
 
@@ -53,29 +56,24 @@ const theThunk = () => "thunk-result";
 function buildHandFed(): ServiceManifest<"singleton" | "request"> {
   handFedConfigRuns = 0;
 
-  // Path 2: hand-feed each class's ctor signature (forCtor / signature). These
-  // arrays are exactly what the transformer's defineDeps emits.
-  forCtor(SqlUserRepo).signature(T.logger, T.db);
-  forCtor(Report).signature(T.repo);
-  forCtor(ConfigConsumer).signature(T.config);
-  forCtor(ThunkConsumer).signature(T.thunk);
-  // ReportService's one inline factory param → FactoryRef slot, by hand:
-  // a bare `() => IRequestContext`.
-  forCtor(ReportService).signature({ type: T.ctx });
-  // ReportFactory's parameterized factory: `(log: ILogger) => IReport`.
-  // The transformer emits `{ type: IReport-token, params: [ILogger-token] }`.
-  forCtor(ReportFactory).signature({ type: T.report, params: [T.logger] });
-
+  // Path 2: hand-feed each class's ctor signature inline as the third `add`
+  // argument. These arrays are exactly what the transformer emits inline.
   const services = new ServiceManifest<"singleton" | "request">();
   services.add(T.logger, ConsoleLogger).as("singleton");
   services.add(T.db, SqlDb).as("singleton");
-  services.add(T.repo, SqlUserRepo).as("request");
+  services.add(T.repo, SqlUserRepo, [[T.logger, T.db]]).as("request");
   services.add(T.ctx, RequestContext).as("request");
-  services.add(T.report, Report).as("request");
-  services.add(T.reportService, ReportService).as("request");
-  services.add(T.reportFactory, ReportFactory).as("request");
-  services.add(T.thunkConsumer, ThunkConsumer).as("singleton");
-  services.add(T.configConsumer, ConfigConsumer).as("singleton");
+  services.add(T.report, Report, [[T.repo]]).as("request");
+  // ReportService's one inline factory param → FactoryRef slot, by hand:
+  // a bare `() => IRequestContext`.
+  services.add(T.reportService, ReportService, [[{ type: T.ctx }]]).as("request");
+  // ReportFactory's parameterized factory: `(log: ILogger) => IReport`.
+  // The transformer emits `{ type: IReport-token, params: [ILogger-token] }`.
+  services
+    .add(T.reportFactory, ReportFactory, [[{ type: T.report, params: [T.logger] }]])
+    .as("request");
+  services.add(T.thunkConsumer, ThunkConsumer, [[T.thunk]]).as("singleton");
+  services.add(T.configConsumer, ConfigConsumer, [[T.config]]).as("singleton");
 
   // Path 1: plugin-less registrations for the async config + the named-callable.
   // addFactory (no defineDeps record) → engine calls factory(scope); factory
@@ -165,21 +163,19 @@ describe("Union slot — inline-union semantics (manual token surface)", () => {
   const TConsumer = "parity:Consumer";
 
   test("fallthrough: only second member registered → resolves to second", () => {
-    forCtor(Consumer).signature(union(TA, TB));
     const builder = new ServiceManifest();
     builder.add(TB, ServiceB);
-    builder.add(TConsumer, Consumer);
+    builder.add(TConsumer, Consumer, [[union(TA, TB)]]);
     const root = builder.build();
     const consumer = root.resolve<Consumer>(TConsumer);
     expect(consumer.dep.tag).toBe("B");
   });
 
   test("precedence: both members registered → resolves to first (declaration order)", () => {
-    forCtor(Consumer).signature(union(TA, TB));
     const builder = new ServiceManifest();
     builder.add(TA, ServiceA);
     builder.add(TB, ServiceB);
-    builder.add(TConsumer, Consumer);
+    builder.add(TConsumer, Consumer, [[union(TA, TB)]]);
     const root = builder.build();
     const consumer = root.resolve<Consumer>(TConsumer);
     expect(consumer.dep.tag).toBe("A");
@@ -193,9 +189,8 @@ describe("Union slot — inline-union semantics (manual token surface)", () => {
     // but then all members failed during the resolution phase — a scenario that
     // can arise if a member's own deps are unresolvable. For a pure "no-members-
     // registered" case the error is at the signature-selection level.
-    forCtor(Consumer).signature(union(TA, TB));
     const builder = new ServiceManifest();
-    builder.add(TConsumer, Consumer);
+    builder.add(TConsumer, Consumer, [[union(TA, TB)]]);
     const root = builder.build();
     expect(() => root.resolve(TConsumer)).toThrow(NoSatisfiableSignatureError);
   });
@@ -228,23 +223,21 @@ describe("Named alias — single-token semantics (manual token surface)", () => 
 
   test("named alias resolves under its own single token, not member alternatives", () => {
     // Signature uses a single string token (the alias), NOT a union slot.
-    forCtor(Consumer).signature(TAB);
     const builder = new ServiceManifest();
     builder.add(TA, ServiceA);     // registering A does nothing for Consumer
     builder.add(TB, ServiceB);     // registering B does nothing for Consumer
     builder.add(TAB, ServiceAB);   // this is the only one that matters
-    builder.add(TConsumer, Consumer);
+    builder.add(TConsumer, Consumer, [[TAB]]);
     const root = builder.build();
     const consumer = root.resolve<Consumer>(TConsumer);
     expect(consumer.dep.tag).toBe("AB");
   });
 
   test("named alias: only A+B registered (not AB) → throws (unregistered single token)", () => {
-    forCtor(Consumer).signature(TAB);
     const builder = new ServiceManifest();
     builder.add(TA, ServiceA);
     builder.add(TB, ServiceB);
-    builder.add(TConsumer, Consumer);
+    builder.add(TConsumer, Consumer, [[TAB]]);
     const root = builder.build();
     expect(() => root.resolve(TConsumer)).toThrow();
   });
@@ -264,10 +257,9 @@ describe("Inject brand override — branded token wins (parity matrix §9)", () 
 
   test("branded token used in signature resolves against its own registration", () => {
     // The manual-surface equivalent of `Inject<ICache, "parity:inject:special-cache">`.
-    forCtor(Handler).signature(BRANDED_TOKEN);
     const builder = new ServiceManifest();
     builder.add(BRANDED_TOKEN, SpecialCache);
-    builder.add(THandler, Handler);
+    builder.add(THandler, Handler, [[BRANDED_TOKEN]]);
     const root = builder.build();
     const handler = root.resolve<Handler>(THandler);
     expect(handler.cache.kind).toBe("special");
@@ -292,10 +284,9 @@ describe("resolveFactory — mixed registered + caller-supplied params (§2)", (
   const TProduct = "parity:rf:Product";
 
   test("mixed: registered Logger resolved from container; unregistered label is caller-supplied", () => {
-    forCtor(Product).signature(TLogger, TLabel);
     const builder = new ServiceManifest();
     builder.add(TLogger, Logger);
-    builder.add(TProduct, Product);
+    builder.add(TProduct, Product, [[TLogger, TLabel]]);
     const root = builder.build();
 
     // params = [TLabel] → TLabel is caller-supplied; TLogger comes from the container.
@@ -310,10 +301,9 @@ describe("resolveFactory — mixed registered + caller-supplied params (§2)", (
       public constructor(public readonly logger: Logger) {}
     }
     const TZeroArgProduct = "parity:rf:ZeroArgProduct";
-    forCtor(ZeroArgProduct).signature(TLogger);
     const builder = new ServiceManifest();
     builder.add(TLogger, Logger);
-    builder.add(TZeroArgProduct, ZeroArgProduct);
+    builder.add(TZeroArgProduct, ZeroArgProduct, [[TLogger]]);
     const root = builder.build();
 
     // No params → strict zero-arg factory; every slot resolved from container.
@@ -324,10 +314,9 @@ describe("resolveFactory — mixed registered + caller-supplied params (§2)", (
 
   test("caller override of a registered slot (params wins over container)", () => {
     // TLogger IS registered, but we name it in params → caller wins.
-    forCtor(Product).signature(TLogger, TLabel);
     const builder = new ServiceManifest();
     builder.add(TLogger, Logger);
-    builder.add(TProduct, Product);
+    builder.add(TProduct, Product, [[TLogger, TLabel]]);
     const root = builder.build();
 
     // Naming both TLogger and TLabel in params: TLogger override wins over container.

@@ -1,7 +1,7 @@
 // The sample entry point — drives resolution against the engine. Imported AFTER
-// the transformer has lowered `wiring.ts`, so when this runs the `defineDeps`
-// metadata is in the global-symbol Map and `services` holds string-token
-// registrations. Exercises the full graph: a singleton chain, a request-scoped
+// the transformer has lowered `wiring.ts`, so when this runs `services` holds
+// string-token registrations carrying their dep signatures inline. Exercises the
+// full graph: a singleton chain, a request-scoped
 // repo, a bare zero-arg factory param, the named-callable opt-out, and the
 // async-config value path.
 

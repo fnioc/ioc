@@ -12,22 +12,28 @@ import { DiagnosticCode } from "../src/index.js";
 // non-intrinsic) still produces the hard UnderivableToken diagnostic.
 
 /**
- * Pull the `[[...]]` signature array text out of a defineDeps(...) call for the
- * given class. The transformer always hoists: `const ɵregN = Ctor;` followed by
- * `defineDeps(ɵregN, [[...]]);`. We find the hoisted const to resolve the name.
+ * Pull the `[[...]]` signature array text out of the inline registration call
+ * for the given class/factory. Signatures now ride ON the registration as the
+ * third argument: `add("token", Ctor, [[...]])` / `addFactory("token", fn,
+ * [[...]])`. We locate the `, ${ctor}, ` boundary and balanced-scan the `[[...]]`.
  */
 function depsArrayFor(output: string, ctor: string): string {
-  const hoistMatch = output.match(new RegExp(`const (ɵreg\\d+) = ${ctor};`));
-  if (!hoistMatch) {throw new Error(`no hoisted const for ${ctor} in:\n${output}`);}
-  const regName = hoistMatch[1]!;
-  const marker = `defineDeps(${regName}, `;
-  const start = output.indexOf(marker);
-  if (start < 0) {throw new Error(`no defineDeps for ${regName} in:\n${output}`);}
-  const from = start + marker.length;
-  // The emitted form is `defineDeps(ɵregN, [[...]]);`. The signature literal
-  // `[[...]]` ends just before the call's `)` — i.e. at the first `]` of `]);`.
-  const end = output.indexOf("]);", from);
-  return output.slice(from, end + 1);
+  const marker = `, ${ctor}, `;
+  const at = output.indexOf(marker);
+  if (at < 0) {throw new Error(`no inline signature for ${ctor} in:\n${output}`);}
+  const start = output.indexOf("[", at + marker.length);
+  if (start < 0) {throw new Error(`no signature array for ${ctor} in:\n${output}`);}
+  let depth = 0;
+  for (let i = start; i < output.length; i++) {
+    const ch = output[i];
+    if (ch === "[") {
+      depth += 1;
+    } else if (ch === "]") {
+      depth -= 1;
+      if (depth === 0) {return output.slice(start, i + 1);}
+    }
+  }
+  throw new Error(`unbalanced signature array for ${ctor} in:\n${output}`);
 }
 
 describe("dependency extraction", () => {

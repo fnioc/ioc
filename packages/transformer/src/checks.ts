@@ -69,37 +69,10 @@ export function checkExtractedRegistration(
 }
 
 /**
- * Factory-signature (§4.5) check for a manually-annotated class (`forCtor`).
- * The annotated path skips dep extraction and `defineDeps` emission,
- * so `checkExtractedRegistration` never runs for it — but PRD §8 still requires
- * factory parameters declared on a hand-annotated ctor to be validated against
- * the produced type's constructor holes. This runs ONLY the factory-signature
- * check (not the async-mismatch one, which keys off transformer-derived tokens
- * the author has overridden by annotating). Each param is independently
- * best-effort: an un-resolvable shape is skipped, never flagged.
- */
-export function checkAnnotatedFactoryParams(
-  classSymbol: ts.Symbol,
-  ctx: CheckContext,
-): void {
-  const classDecl = classSymbol
-    .getDeclarations()
-    ?.find(ts.isClassDeclaration);
-  if (!classDecl) {return;}
-
-  const ctor = findConstructor(classDecl);
-  if (!ctor) {return;}
-
-  for (const param of ctor.parameters) {
-    checkFactoryParam(param, ctx);
-  }
-}
-
-/**
- * Equal-arity overload-ambiguity check. Runs for EVERY registration, including
- * manually-annotated ones — overloads only ever come from chained
- * `forCtor(...).signature(...)`, which the transformer skips for emission but
- * must still validate.
+ * Equal-arity overload-ambiguity check. Runs for every registration whose class
+ * has chained `forCtor(...).signature(...)` overloads in scope. (With the global
+ * store retired the transformer no longer emits from `forCtor`, but the check is
+ * retained for any hand-authored `forCtor` chain still present in a source file.)
  */
 export function checkOverloads(
   classSymbol: ts.Symbol,

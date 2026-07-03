@@ -6,8 +6,9 @@ import {
   UnregisteredTokenError,
   NoSatisfiableSignatureError,
 } from "@fnioc/di";
-import { closeToken, defineDeps, union } from "@fnioc/core";
+import { closeToken, union } from "@fnioc/core";
 import type { Token } from "@fnioc/core";
+import { defineDeps } from "./fixtures.js";
 
 // The trampoline resolver spine: resolve() is deterministic-sync, resolveAsync()
 // is the ONLY path that may satisfy T via an honest `Promise<T>` registration.

@@ -2,9 +2,9 @@ import { test, expect, describe } from "bun:test";
 import { transform, fixture, ROOT } from "./harness.js";
 
 // Registration lowering (PRD §8): `add<I>(C).as<"x">()` → string-token form,
-// with a hoisted `const ɵregN = C;` + `defineDeps(ɵregN, [[...]])` prelude
-// inserted before the registration. The always-hoist invariant ensures metadata
-// is keyed on exactly the same object the registration uses.
+// carrying the derived dep signature INLINE as the registration call's third
+// argument (`add("token", C, [[...]])`). The global metadata store is retired —
+// no hoisted const, no `defineDeps(...)` prelude, no injected import.
 
 describe("registration lowering", () => {
   test("lowers add<I>(C).as<\"x\">() to the string-token form", () => {
@@ -20,20 +20,12 @@ describe("registration lowering", () => {
     `;
     const { output } = transform(fixture(src));
 
-    // The arg is hoisted; the lowered call references ɵreg0 (not the raw class).
-    expect(output).toContain('services.add("./app/IUserRepo", ɵreg0).as("request")');
-
-    // A defineDeps prelude is emitted against the hoisted const, with the ctor
-    // params as a single positional signature (no primitives here).
+    // The signature rides inline as the third argument; no hoist, no defineDeps.
     expect(output).toContain(
-      'defineDeps(ɵreg0, [["./app/ILogger", "./app/IDbConnection"]])',
+      'services.add("./app/IUserRepo", SqlUserRepo, [["./app/ILogger", "./app/IDbConnection"]]).as("request")',
     );
-
-    // The prelude precedes the lowered registration.
-    const depsIdx = output.indexOf("defineDeps(ɵreg0");
-    const addIdx = output.indexOf("services.add(");
-    expect(depsIdx).toBeGreaterThanOrEqual(0);
-    expect(addIdx).toBeGreaterThan(depsIdx);
+    expect(output).not.toContain("ɵreg");
+    expect(output).not.toContain("defineDeps");
   });
 
   test("emits an empty signature for a zero-arg constructor", () => {
@@ -44,40 +36,22 @@ describe("registration lowering", () => {
       services.add<ILogger>(ConsoleLogger).as<"singleton">();
     `;
     const { output } = transform(fixture(src));
-    expect(output).toContain("defineDeps(ɵreg0, [[]])");
-    expect(output).toContain('services.add("./app/ILogger", ɵreg0).as("singleton")');
-  });
-
-  test("injects the @fnioc/di defineDeps import when a registration lowers", () => {
-    const src = `
-      interface IFoo {}
-      class Foo implements IFoo { constructor() {} }
-      declare const services: any;
-      services.add<IFoo>(Foo).as<"singleton">();
-    `;
-    const { output } = transform(fixture(src));
-    // The injected import binds `defineDeps` from @fnioc/di. The standalone
-    // printer keeps the generated-name `as` alias (`defineDeps as defineDeps`);
-    // the real tsc emitter elides the redundant alias to `{ defineDeps }` (see
-    // the ts-patch e2e). Assert the binding regardless of the alias form.
-    expect(output).toMatch(
-      /import \{ defineDeps( as \w+)? \} from "@fnioc\/di"/,
+    expect(output).toContain(
+      'services.add("./app/ILogger", ConsoleLogger, [[]]).as("singleton")',
     );
-    // And the emitted call references the hoisted const.
-    expect(output).toContain("defineDeps(ɵreg0, [[]])");
+    expect(output).not.toContain("defineDeps");
   });
 
-  test("does not double-import defineDeps when already imported", () => {
+  test("no @fnioc/di import is injected (signatures ride inline)", () => {
     const src = `
-      import { defineDeps } from "@fnioc/core";
       interface IFoo {}
       class Foo implements IFoo { constructor() {} }
       declare const services: any;
       services.add<IFoo>(Foo).as<"singleton">();
     `;
     const { output } = transform(fixture(src));
-    const occurrences = output.split('from "@fnioc/core"').length - 1;
-    expect(occurrences).toBe(1);
+    expect(output).not.toContain("defineDeps");
+    expect(output).not.toContain('from "@fnioc/di"');
   });
 
   test("explicit two-arg add(token, val) is passed through untouched", () => {
@@ -100,8 +74,8 @@ describe("registration lowering", () => {
       services.add<IFoo>(Foo);
     `;
     const { output } = transform(fixture(src));
-    expect(output).toContain('services.add("./app/IFoo", ɵreg0)');
-    expect(output).toContain("defineDeps(ɵreg0, [[]])");
+    expect(output).toContain('services.add("./app/IFoo", Foo, [[]])');
+    expect(output).not.toContain("defineDeps");
   });
 });
 

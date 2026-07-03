@@ -11,7 +11,7 @@ import {
   union,
 } from "@fnioc/di";
 import type { OpenRegistration, Registration, Resolver, Token } from "@fnioc/di";
-import { defineDeps } from "@fnioc/core";
+import { defineDeps } from "./fixtures.js";
 import {
   AsyncDisposableThing,
   DisposeLog,
@@ -365,18 +365,19 @@ describe("registration-carried signatures", () => {
     expect(sp.resolve<GenImpl>("app/IG<pkg:IB>").dep).toBe("B!");
   });
 
-  test("a signature-less open registration falls back to the ctor store's hole template (manual forCtor path)", () => {
+  test("an open registration carries its hole template inline (typeArg substitution)", () => {
     class ManualImpl {
       public constructor(
         public readonly dep: unknown,
         public readonly argToken: unknown,
       ) {}
     }
-    defineDeps(ManualImpl, [["$1", typeArg(1)]]);
 
     const services = new ServiceManifest();
     services.addValue(T.A, "A!");
-    services.add("app/IM<$1>", ManualImpl);
+    // Signatures ride on the registration (the global store is retired): the
+    // open template's `$1` / typeArg(1) slots substitute per closing.
+    services.add("app/IM<$1>", ManualImpl, [["$1", typeArg(1)]]);
 
     const sp = services.build();
     const m = sp.resolve<ManualImpl>("app/IM<pkg:IA>");

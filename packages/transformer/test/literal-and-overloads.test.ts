@@ -14,17 +14,24 @@ import { DiagnosticCode } from "../src/index.js";
 //   - a pure-literal union `"a" | "b"`  →  one sorted token (NOT a union slot)
 //   - every intrinsic     →  its keyword token (Rule 1); `boolean` from `true|false`
 
-/** Pull the `[[...]]` signature literal out of a defineDeps(...) call. */
+/** Pull the `[[...]]` inline signature literal out of the registration call. */
 function depsArrayFor(output: string, ctor: string): string {
-  const hoistMatch = output.match(new RegExp(`const (ɵreg\\d+) = ${ctor};`));
-  if (!hoistMatch) {throw new Error(`no hoisted const for ${ctor} in:\n${output}`);}
-  const regName = hoistMatch[1]!;
-  const marker = `defineDeps(${regName}, `;
-  const start = output.indexOf(marker);
-  if (start < 0) {throw new Error(`no defineDeps for ${regName} in:\n${output}`);}
-  const from = start + marker.length;
-  const end = output.indexOf("]);", from);
-  return output.slice(from, end + 1);
+  const marker = `, ${ctor}, `;
+  const at = output.indexOf(marker);
+  if (at < 0) {throw new Error(`no inline signature for ${ctor} in:\n${output}`);}
+  const start = output.indexOf("[", at + marker.length);
+  if (start < 0) {throw new Error(`no signature array for ${ctor} in:\n${output}`);}
+  let depth = 0;
+  for (let i = start; i < output.length; i++) {
+    const ch = output[i];
+    if (ch === "[") {
+      depth += 1;
+    } else if (ch === "]") {
+      depth -= 1;
+      if (depth === 0) {return output.slice(start, i + 1);}
+    }
+  }
+  throw new Error(`unbalanced signature array for ${ctor} in:\n${output}`);
 }
 
 function emitFor(ctorBody: string, extra = ""): string {

@@ -1,4 +1,4 @@
-import { closeToken, forCtor, ServiceManifest, typeArg } from "@fnioc/di";
+import { closeToken, ServiceManifest, typeArg } from "@fnioc/di";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { type CompiledProject, compileWithTransformer } from "./harness.js";
 
@@ -226,14 +226,13 @@ describe("emit contract — open-generics lowered ABI", () => {
     );
   });
 
-  test("exact closed registration: closed token, non-generic impl keeps hoist+defineDeps", () => {
+  test("exact closed registration: closed token, non-generic impl carries its inline signature", () => {
     const wiring = project.emitted("wiring.js");
-    const m = wiring.match(/const (ɵreg\d+) = SpecialUserRepository;/);
-    expect(m).not.toBeNull();
-    const n = m![1];
-    expect(wiring).toContain(`defineDeps(${n}, [["${T.logger}"]]);`);
+    expect(wiring).not.toMatch(/const ɵreg\d+ = SpecialUserRepository;/);
+    expect(wiring).not.toContain("defineDeps");
     expect(wiring).toContain(
-      `services.add("${T.repoBase}<${T.user}>", ${n}).as("singleton");`,
+      `services.add("${T.repoBase}<${T.user}>", SpecialUserRepository, `
+        + `[["${T.logger}"]]).as("singleton");`,
     );
   });
 
@@ -334,7 +333,7 @@ describe("ABI unification — manual path ↔ transformer-derived tokens", () =>
     expect(root.resolve<Repo>(closeToken("app:IRepo", "app:Cat"))).toBe(cats);
   });
 
-  test("plugin-less manifest: forCtor hole-template signature (ctor-keyed store)", () => {
+  test("plugin-less manifest: single-hole template signature carried inline", () => {
     class Logger {
       public readonly id = "logger";
     }
@@ -344,12 +343,12 @@ describe("ABI unification — manual path ↔ transformer-derived tokens", () =>
     class Thing {
       public readonly name = "thing";
     }
-    // One template per ctor — the store-keyed alternative to carried signatures.
-    forCtor(Box).signature("$1");
     const services = new ServiceManifest<"singleton">();
     services.add("app:Logger", Logger).as("singleton");
     services.add("integ:Thing", Thing).as("singleton");
-    services.add("app:IBox<$1>", Box).as("singleton");
+    // The hole-template signature rides on the registration (the global store is
+    // retired) — `$1` substitutes to the closing's arg token per resolution.
+    services.add("app:IBox<$1>", Box, [["$1"]]).as("singleton");
     const root = services.build().createScope("singleton");
 
     const box = root.resolve<Box>(closeToken("app:IBox", "integ:Thing"));

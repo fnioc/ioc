@@ -1,7 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import { ServiceManifest } from "@fnioc/di";
-import { defineDeps } from "@fnioc/core";
-import { T } from "./fixtures.js";
+import { T, defineDeps } from "./fixtures.js";
 
 // Registration + basic resolution, transient vs singleton caching, `.as`
 // tagging — all hand-fed (no transformer).

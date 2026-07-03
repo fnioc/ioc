@@ -236,14 +236,12 @@ export class ServiceManifestClass<Scopes extends string = "singleton"> {
    * plugin-less caller writes directly. Returns the `.as(scope?)` continuation.
    *
    * The optional third `signatures` param carries the dep signatures ON the
-   * registration record, where they win over the ctor-keyed `defineDeps` store
-   * at resolve time. The scoping invariant behind that split: the global
-   * `defineDeps` store holds CLASS-INTRINSIC facts — derivable from the
-   * declaration alone, and so safely process-global. A generic impl's
-   * signature-under-a-binding is instead REGISTRATION-INTRINSIC: the same JS
-   * class closes differently per registration, so keying it on the ctor object
-   * globally would merely relocate the collision cross-manifest. Carrying it on
-   * the registration is the only key that scopes with the binding.
+   * registration record — the sole signature channel now that the global
+   * metadata store is retired. The transformer emits it inline for every
+   * constructed class (`add(token, ctor, [[...]])`); a plugin-less caller
+   * hand-feeds it directly. Keying signatures on the registration (not on the
+   * ctor object) is what lets one JS class close differently per registration —
+   * an open template and its closings never collide.
    *
    * An OPEN template token (`pkg:IRepo<$1>` — every type arg a hole) routes
    * into the open-registration table instead of the exact map; resolution
@@ -289,19 +287,22 @@ export class ServiceManifestClass<Scopes extends string = "singleton"> {
    * plugin-less caller writes directly.
    *
    * Parameter injection follows the metadata rule (see `ServiceProvider`): a
-   * factory WITH a `defineDeps` record (emitted by the transformer) has each
-   * parameter injected by its slot; a record-less factory (the plugin-less
-   * escape hatch) is called with the live provider — type it `(sp: Resolver)
-   * => T` and `sp.resolve(...)` its own deps. Returns the `.as(scope?)`
-   * continuation so a factory caches at a named scope exactly like a class.
+   * factory WITH registration-carried signatures (the optional third arg, emitted
+   * inline by the transformer) has each parameter injected by its slot; a
+   * signature-less factory (the plugin-less escape hatch) is called with the live
+   * provider — type it `(sp: Resolver) => T` and `sp.resolve(...)` its own deps.
+   * Returns the `.as(scope?)` continuation so a factory caches at a named scope
+   * exactly like a class.
    */
   public addFactory(
     token: Token,
     factory: Func<[Resolver], unknown>,
+    signatures?: readonly (readonly DepSlot[])[],
   ): AddBuilder<Scopes>;
   public addFactory(
     token: Token,
     factory: Factory,
+    signatures?: readonly (readonly DepSlot[])[],
   ): AddBuilder<Scopes> {
     // Open registrations are class-only: a template must synthesize per-closing
     // class registrations, which a factory/value shape cannot express in v1.
@@ -312,6 +313,7 @@ export class ServiceManifestClass<Scopes extends string = "singleton"> {
       kind: "factory",
       factory,
       scope: undefined,
+      signatures,
     });
   }
 

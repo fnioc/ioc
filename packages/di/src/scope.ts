@@ -20,10 +20,10 @@
 // one's cached instance — when no matching frame encloses the owner, the dep
 // resolves transiently (a fresh instance) instead.
 
-import { closeToken, getDeps, isFactoryRef as coreIsFactoryRef, isLiteralRef as coreIsLiteralRef, isOpenToken, isScopeRef as coreIsScopeRef, isTypeArgRef as coreIsTypeArgRef, isUnionSlot, parseToken, substituteSignatures } from "@fnioc/core";
+import { closeToken, isFactoryRef as coreIsFactoryRef, isLiteralRef as coreIsLiteralRef, isOpenToken, isScopeRef as coreIsScopeRef, isTypeArgRef as coreIsTypeArgRef, isUnionSlot, parseToken, substituteSignatures } from "@fnioc/core";
 import type { DepSlot, FactoryRef, LiteralRef, ParsedToken, ScopeRef, Token, TypeArgRef, Union } from "@fnioc/core";
 import type { Func } from "@rhombus-toolkit/func";
-import { assertNever } from "@rhombus-toolkit/type-guards";
+import { assertNever } from "./assert.js";
 
 import {
   AsyncDisposalRequiredError,
@@ -402,11 +402,10 @@ export class ServiceProvider<S extends string = string>
 
     // Synthesize the closed registration: the open registration's ctor + scope
     // tag, with the closing's arg tokens substituted through the template
-    // signatures. Carried signatures win; a signature-less open registration
-    // falls back to the ctor-keyed store — the manual `forCtor` hole-template
-    // path (one template per ctor: the store merges records, so two templates
-    // on one ctor would mix).
-    const template = match.open.signatures ?? getDeps(match.open.ctor)?.signatures;
+    // signatures carried on the open registration. A signature-less open
+    // registration has no template to substitute (a zero-arg ctor closes to a
+    // bare `new Ctor()`).
+    const template = match.open.signatures;
     // Substituting the carried signatures for this closing can fail when a
     // mis-authored template references a hole the service token never binds
     // (e.g. `IX<$1,$3>` carrying a dep on `$2`) — `substituteSignatures` throws
@@ -626,12 +625,11 @@ export class ServiceProvider<S extends string = string>
     stack: Token[],
     async: boolean,
   ): T | Pending<T> {
-    // Registration-carried signatures (closed generics) win over the store.
+    // Signatures ride solely on the registration record now — the global store
+    // is retired. Both class and factory registrations carry them.
     const source =
       registration.kind === "class" ? registration.ctor : registration.factory;
-    const carried =
-      registration.kind === "class" ? registration.signatures : undefined;
-    const signatures = carried ?? getDeps(source)?.signatures;
+    const signatures = registration.signatures;
 
     if (!signatures?.length) {
       if (registration.kind === "factory") {
@@ -784,14 +782,11 @@ export class ServiceProvider<S extends string = string>
       return () => sp.#resolve<unknown>(ref.type, owningFrame, [], false);
     }
 
-    // Parameterized mode: the dep-metadata target is the ctor (class) or the
-    // factory function. Registration-carried signatures win over the ctor-keyed
-    // store (a synthesized closed-generic target carries its substituted
+    // Parameterized mode: the target's signatures ride on its registration
+    // record (a synthesized closed-generic target carries its substituted
     // signatures). Select the target signature and partition slots against the
     // caller-supplied params list.
-    const signatures = target.kind === "class"
-      ? target.signatures ?? getDeps(target.ctor)?.signatures
-      : getDeps(target.factory)?.signatures;
+    const signatures = target.signatures;
     const targetSignature =
       signatures === undefined || !signatures.length
         ? undefined
@@ -1138,10 +1133,22 @@ export class ServiceProvider<S extends string = string>
     // settled values so the disposer sees the real object, not the wrapper.
     const settled: unknown[] = [];
     for (const instance of owned) {
+      // Guard each owned settle: a REJECTED owned Pending/thenable produced
+      // nothing to dispose, and must not abort teardown of its siblings
+      // (#disposed is already set, so an unguarded throw would leak every other
+      // owned Disposable).
       if (isPending(instance)) {
-        settled.push(await instance.promise);
+        try {
+          settled.push(await instance.promise);
+        } catch {
+          /* build rejected; nothing to dispose */
+        }
       } else if (isThenable(instance)) {
-        settled.push(await instance);
+        try {
+          settled.push(await instance);
+        } catch {
+          /* build rejected; nothing to dispose */
+        }
       } else {
         settled.push(instance);
       }

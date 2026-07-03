@@ -1,44 +1,22 @@
 import { test, expect, describe } from "bun:test";
 import { transform, fixture } from "./harness.js";
-import { DiagnosticCode } from "../src/index.js";
 
 // Basic edge-case behaviour (PRD §8) — NOT the Phase-2D factory diagnostic.
 
-describe("already-annotated classes", () => {
-  test("forCtor-annotated class: skip defineDeps + info diagnostic", () => {
-    const src = `
-      import { forCtor } from "@fnioc/core";
-      interface ILogger {}
-      interface IThirdParty {}
-      class ThirdPartyService implements IThirdParty {
-        constructor(log: ILogger) {}
-      }
-      forCtor(ThirdPartyService).signature("manual:ILogger");
-      declare const services: any;
-      services.add<IThirdParty>(ThirdPartyService).as<"singleton">();
-    `;
-    const { output, diagnostics } = transform(fixture(src));
-
-    expect(output).not.toContain("defineDeps(ThirdPartyService");
-    expect(output).toContain('services.add("./app/IThirdParty", ThirdPartyService)');
-    expect(
-      diagnostics.some((d) => d.code === DiagnosticCode.AlreadyAnnotated),
-    ).toBe(true);
-  });
-
-  test("non-annotated class still gets defineDeps (no false positive)", () => {
+describe("statically-resolved classes always carry an inline signature", () => {
+  // The transformer is now the sole signature channel — the global metadata
+  // store and the `forCtor` annotation/`AlreadyAnnotated` skip are retired. A
+  // statically-resolved class always gets its signature inline on the add call.
+  test("a class emits its signature inline as the third add argument", () => {
     const src = `
       interface IFoo {}
       class Foo implements IFoo { constructor() {} }
       declare const services: any;
       services.add<IFoo>(Foo).as<"singleton">();
     `;
-    const { output, diagnostics } = transform(fixture(src));
-    // Non-annotated → transformer emits defineDeps against the hoisted const.
-    expect(output).toContain("defineDeps(ɵreg0, [[]])");
-    expect(
-      diagnostics.some((d) => d.code === DiagnosticCode.AlreadyAnnotated),
-    ).toBe(false);
+    const { output } = transform(fixture(src));
+    expect(output).toContain('services.add("./app/IFoo", Foo, [[]]).as("singleton")');
+    expect(output).not.toContain("defineDeps");
   });
 });
 

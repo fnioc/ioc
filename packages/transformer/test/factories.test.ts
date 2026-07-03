@@ -10,20 +10,27 @@ import { DiagnosticCode } from "../src/index.js";
 // syntactic (the annotation's shape), never the resolved type.
 
 /**
- * Pull the `[[...]]` signature array text out of a defineDeps(...) call for the
- * given class. The transformer always hoists: `const ɵregN = Ctor;` followed by
- * `defineDeps(ɵregN, [[...]]);`. We find the hoisted const to resolve the name.
+ * Pull the `[[...]]` signature array text out of the inline registration call
+ * for the given class/factory. Signatures ride ON the registration as the third
+ * argument: `add("token", Ctor, [[...]])` / `addFactory("token", fn, [[...]])`.
  */
 function depsArrayFor(output: string, ctor: string): string {
-  const hoistMatch = output.match(new RegExp(`const (ɵreg\\d+) = ${ctor};`));
-  if (!hoistMatch) {throw new Error(`no hoisted const for ${ctor} in:\n${output}`);}
-  const regName = hoistMatch[1]!;
-  const marker = `defineDeps(${regName}, `;
-  const start = output.indexOf(marker);
-  if (start < 0) {throw new Error(`no defineDeps for ${regName} in:\n${output}`);}
-  const from = start + marker.length;
-  const end = output.indexOf("]);", from);
-  return output.slice(from, end + 1);
+  const marker = `, ${ctor}, `;
+  const at = output.indexOf(marker);
+  if (at < 0) {throw new Error(`no inline signature for ${ctor} in:\n${output}`);}
+  const start = output.indexOf("[", at + marker.length);
+  if (start < 0) {throw new Error(`no signature array for ${ctor} in:\n${output}`);}
+  let depth = 0;
+  for (let i = start; i < output.length; i++) {
+    const ch = output[i];
+    if (ch === "[") {
+      depth += 1;
+    } else if (ch === "]") {
+      depth -= 1;
+      if (depth === 0) {return output.slice(start, i + 1);}
+    }
+  }
+  throw new Error(`unbalanced signature array for ${ctor} in:\n${output}`);
 }
 
 describe("factory detection", () => {
@@ -77,7 +84,7 @@ describe("factory detection", () => {
     expect(output).not.toContain("factory:");
   });
 
-  test("Promise<IFoo> return type unwraps to IFoo's token", () => {
+  test("Promise<IFoo> return type → the honest closed-generic factory token", () => {
     const src = `
       interface IFoo {}
       interface ISvc {}
@@ -88,8 +95,9 @@ describe("factory detection", () => {
       services.add<ISvc>(Svc).as<"singleton">();
     `;
     const { output } = transform(fixture(src));
-    // Promise-ness lives in the factory, not the token (PRD §8 line 467).
-    expect(depsArrayFor(output, "Svc")).toBe('[[{ type: "./app/IFoo" }]]');
+    // Honest token-split: the factory's Promise<IFoo> return is NOT unwrapped —
+    // its FactoryRef type is the closed-generic token `Promise<./app/IFoo>`.
+    expect(depsArrayFor(output, "Svc")).toBe('[[{ type: "Promise<./app/IFoo>" }]]');
   });
 
   test("factory mixes with plain tokens in one signature", () => {

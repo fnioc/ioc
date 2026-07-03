@@ -4,10 +4,9 @@ import { transform, type VirtualFiles } from "./harness.js";
 // Token generation (PRD §8). Tokens are exercised through the lowered output:
 //   - package-public type  →  `packageName:subpath/Symbol`  (version excluded)
 //   - app-internal type    →  source-relative `./...` token
-//   - `Promise<X>`         →  the token for `X`
+//   - `Promise<X>`         →  the honest closed-generic token `Promise<X>`
 //
-// The transformer always hoists: `const ɵregN = Ctor;`. Assertions use ɵreg0
-// (first registration in file) or ɵreg1 (second), etc.
+// Signatures ride inline on the registration: `add("token", Ctor, [[...]])`.
 
 // A library installed under node_modules with an `exports` subpath map.
 function withLib(appSource: string): VirtualFiles {
@@ -41,7 +40,7 @@ describe("token generation", () => {
     `);
     const { outputs } = transform(files, { entry: ["/proj/src/app.ts"] });
     const out = outputs["/proj/src/app.ts"]!;
-    expect(out).toContain('services.add("your-lib:contracts/IFoo", ɵreg0)');
+    expect(out).toContain('services.add("your-lib:contracts/IFoo", Foo, ');
   });
 
   test("package-public root export → packageName:Symbol (no subpath)", () => {
@@ -53,7 +52,7 @@ describe("token generation", () => {
     `);
     const { outputs } = transform(files, { entry: ["/proj/src/app.ts"] });
     const out = outputs["/proj/src/app.ts"]!;
-    expect(out).toContain('services.add("your-lib:IRoot", ɵreg0)');
+    expect(out).toContain('services.add("your-lib:IRoot", RootImpl, ');
   });
 
   test("token excludes the package version", () => {
@@ -87,7 +86,7 @@ describe("token generation", () => {
       compilerOptions: { rootDir: "/proj" },
     });
     const out = outputs["/proj/src/app.ts"]!;
-    expect(out).toContain('services.add("./src/services/IUserRepo", ɵreg0)');
+    expect(out).toContain('services.add("./src/services/IUserRepo", SqlUserRepo, ');
   });
 
   test("app-internal token appends Symbol when file basename differs", () => {
@@ -106,10 +105,10 @@ describe("token generation", () => {
       compilerOptions: { rootDir: "/proj" },
     });
     const out = outputs["/proj/src/app.ts"]!;
-    expect(out).toContain('services.add("./src/contracts/IThing", ɵreg0)');
+    expect(out).toContain('services.add("./src/contracts/IThing", Thing, ');
   });
 
-  test("Promise<X> parameter → the token for X (Promise stripped)", () => {
+  test("Promise<X> parameter → the honest closed-generic token Promise<X>", () => {
     const files = withLib(`
       import { IFoo } from "your-lib/contracts";
       class Foo implements IFoo {}
@@ -123,10 +122,10 @@ describe("token generation", () => {
     `);
     const { outputs } = transform(files, { entry: ["/proj/src/app.ts"] });
     const out = outputs["/proj/src/app.ts"]!;
-    // NeedsAsync is the second registration → ɵreg1.
-    // Its ctor param Promise<IFoo> lowers to the IFoo token, not a Promise token.
-    expect(out).toContain('defineDeps(ɵreg1, [["your-lib:contracts/IFoo"]])');
-    expect(out).not.toContain('"Promise');
-    expect(out).not.toContain(":Promise");
+    // Honest token-split: Promise<IFoo> derives the closed-generic token
+    // `Promise<...IFoo>` (Promise-ness is part of the identity), NOT stripped.
+    expect(out).toContain(
+      'NeedsAsync, [["Promise<your-lib:contracts/IFoo>"]]',
+    );
   });
 });

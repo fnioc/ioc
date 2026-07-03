@@ -9,12 +9,10 @@
 //     in-memory Program (no ts-patch needed to exercise the rewrite).
 //
 // Per SourceFile the visitor:
-//   1. Collects `forCtor(C)` annotations (so registrations of C skip emission).
-//   2. Lowers each registration statement (`add<I>(C).as<"x">()` → string form)
-//      and inserts the `defineDeps(...)` prelude.
-//   3. Rewrites every `nameof<T>()` call to its string token.
-//   4. Injects an `import { defineDeps } from "@fnioc/di"` when a registration
-//      was lowered and the file does not already import it.
+//   1. Lowers each registration statement (`add<I>(C).as<"x">()` → string form),
+//      carrying the derived dep signature inline as the call's third argument.
+//   2. Rewrites every `nameof<T>()` and tokenless `resolve<T>()` call to its
+//      string token.
 
 import ts from "typescript";
 import type { Func } from "@rhombus-toolkit/func";
@@ -34,10 +32,6 @@ import {
 import { collectAsyncTokens } from "./checks.js";
 import type { DiagnosticSink } from "./diagnostics.js";
 import { NAMEOF_NAME } from "./nameof.js";
-
-/** The runtime package whose `defineDeps` the lowered output calls. */
-const RUNTIME_MODULE = "@fnioc/di";
-const DEFINE_DEPS = "defineDeps";
 
 /**
  * Create the `ts.TransformerFactory` that rewrites a SourceFile. Exposed so the
@@ -74,53 +68,25 @@ function transformSourceFile(
   sourceFile: ts.SourceFile,
   ctx: FileContext,
 ): ts.SourceFile {
-  const forCtorAnnotated = collectForCtorAnnotations(sourceFile, ctx.checker);
   const asyncTokens = collectAsyncTokens(sourceFile, ctx.checker);
 
-  // The local name every emitted `defineDeps(...)` call uses, and whether we
-  // need to inject the import. When the file already imports `defineDeps`, we
-  // reference its existing local name (honoring an alias); otherwise we inject
-  // `import { defineDeps }` and reference the plain name. The lowered form
-  // targets ESM output — see injectDefineDepsImport for the CJS caveat.
-  const existing = existingDefineDepsBinding(sourceFile);
-  const localName = existing?.text ?? DEFINE_DEPS;
-  const makeDefineDepsRef = (): ts.Identifier =>
-    ctx.factory.createIdentifier(localName);
-
-  let usedDefineDeps = false;
-  let hoistCounter = 0;
   const lowerCtx: LowerContext = {
     ...ctx,
     sourceFile,
-    forCtorAnnotated,
     asyncTokens,
-    makeDefineDepsRef,
-    markUsedDefineDeps() {
-      usedDefineDeps = true;
-    },
-    nextHoistName() {
-      return `ɵreg${hoistCounter++}`;
-    },
   };
 
-  // 1 + 2: lower registration statements (and emit defineDeps preludes), and
-  //        within every remaining node, rewrite nameof<T>() calls.
+  // Lower registration statements (carrying the inline signature 3rd arg), and
+  // within every remaining node, rewrite nameof<T>() and resolve<T>() calls.
   const statements = lowerStatements(sourceFile.statements, lowerCtx);
 
-  let updated = ts.factory.updateSourceFile(sourceFile, statements);
-
-  // 3: inject the defineDeps import when a registration lowered and the file
-  //    did not already import it.
-  if (usedDefineDeps && !existing) {
-    updated = injectDefineDepsImport(updated, ctx.factory);
-  }
-
-  return updated;
+  return ts.factory.updateSourceFile(sourceFile, statements);
 }
 
 /**
- * Lower each top-level statement: registration statements expand to
- * `[defineDeps..., loweredStmt]`; all statements then get a nameof rewrite pass.
+ * Lower each top-level statement: a registration statement is rewritten in place
+ * (its signature carried inline as the third `add` argument); all statements then
+ * get a nameof + resolve rewrite pass.
  */
 function lowerStatements(
   statements: ts.NodeArray<ts.Statement>,
@@ -306,96 +272,6 @@ function isNameofCall(call: ts.CallExpression, checker: ts.TypeChecker): boolean
       ? checker.getAliasedSymbol(symbol)
       : symbol;
   return target?.getName() === NAMEOF_NAME;
-}
-
-/** Collect class symbols annotated via a `forCtor(C)` call anywhere in `file`. */
-function collectForCtorAnnotations(
-  file: ts.SourceFile,
-  checker: ts.TypeChecker,
-): Set<ts.Symbol> {
-  const annotated = new Set<ts.Symbol>();
-  const visit = (node: ts.Node): void => {
-    if (
-      ts.isCallExpression(node) &&
-      ts.isIdentifier(node.expression) &&
-      node.expression.text === "forCtor" &&
-      node.arguments.length
-    ) {
-      const arg = node.arguments[0]!;
-      const symbol = checker.getSymbolAtLocation(arg);
-      const target =
-        symbol && symbol.flags & ts.SymbolFlags.Alias
-          ? checker.getAliasedSymbol(symbol)
-          : symbol;
-      if (target) {annotated.add(target);}
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(file);
-  return annotated;
-}
-
-/**
- * Returns the local identifier the file already binds `defineDeps` to (the
- * import's local name — honoring `import { defineDeps as x }` aliases), or
- * `undefined` if the file does not import it. When present we reuse this real,
- * source-bound identifier rather than injecting a duplicate import.
- */
-function existingDefineDepsBinding(
-  file: ts.SourceFile,
-): ts.Identifier | undefined {
-  for (const statement of file.statements) {
-    if (!ts.isImportDeclaration(statement)) {continue;}
-    const named = statement.importClause?.namedBindings;
-    if (named && ts.isNamedImports(named)) {
-      for (const element of named.elements) {
-        // `propertyName` is the imported (remote) name when aliased; otherwise
-        // the local `name` is also the imported name.
-        const importedName = (element.propertyName ?? element.name).text;
-        if (importedName === DEFINE_DEPS) {
-          return ts.factory.createIdentifier(element.name.text);
-        }
-      }
-    }
-  }
-  return undefined;
-}
-
-/**
- * Prepend `import { defineDeps } from "@fnioc/di";` to the file. This is the
- * documented lowered-form contract (PRD §8): libraries compile with the
- * transformer and publish ESM, where this import + the bare `defineDeps(...)`
- * calls are exactly correct.
- *
- * CJS-output caveat: when emitting to CommonJS, TypeScript's module transformer
- * rewrites a named import to a namespace property access (`core_1.defineDeps`)
- * only for references it resolves through the binder. The transformer's emitted
- * `defineDeps(...)` calls are synthesized nodes that the binder never saw, so in
- * CJS output they stay bare and would dangle. The lowered form therefore targets
- * ESM output (the PRD §8 contract — libraries compile and publish ESM). Robust
- * CJS support (reconciling a generated-import-reference with the module
- * namespace) is a follow-up; until then, compile to ESM.
- */
-function injectDefineDepsImport(
-  file: ts.SourceFile,
-  factory: ts.NodeFactory,
-): ts.SourceFile {
-  const importDecl = factory.createImportDeclaration(
-    undefined,
-    factory.createImportClause(
-      false,
-      undefined,
-      factory.createNamedImports([
-        factory.createImportSpecifier(
-          false,
-          undefined,
-          factory.createIdentifier(DEFINE_DEPS),
-        ),
-      ]),
-    ),
-    factory.createStringLiteral(RUNTIME_MODULE),
-  );
-  return factory.updateSourceFile(file, [importDecl, ...file.statements]);
 }
 
 /** Best-effort project root: the program's common source directory. */

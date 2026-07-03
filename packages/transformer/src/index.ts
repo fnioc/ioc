@@ -1,10 +1,10 @@
 // @fnioc/transformer — the ioc ts-patch compiler transformer.
 //
 // Build-time only. It provides token generation, dependency
-// extraction via the TypeChecker, `defineDeps` emission, registration lowering
-// (`add<I>(C).as<"x">()` → string-token form), `nameof<T>()` rewriting, and the
-// edge-case behaviour (already-annotated skip + info diagnostic, dynamic-class
-// no-emission).
+// extraction via the TypeChecker, inline signature emission (the derived
+// signature rides as the `add`/`addFactory` call's third argument), registration
+// lowering (`add<I>(C).as<"x">()` → string-token form), `nameof<T>()` rewriting,
+// and the edge-case behaviour (dynamic-class no-emission).
 //
 // It also performs factory detection (`() => IFoo` ctor params become
 // `{ type: "<token>" }` slots) and emits the factory-signature /
