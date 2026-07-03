@@ -7,8 +7,8 @@
 // and the edge-case behaviour (dynamic-class no-emission).
 //
 // It also performs factory detection (`() => IFoo` ctor params become
-// `{ type: "<token>" }` slots) and emits the factory-signature /
-// async-mismatch / overload-ambiguity diagnostics (see `deps.ts` + `checks.ts`).
+// `{ type: "<token>" }` slots) and emits the factory-signature and
+// token-derivation diagnostics (see `deps.ts` + `checks.ts`).
 
 // The type-only authoring surface this transformer contributes to `@fnioc/di`
 // (`add<I>(C)`, `.as<"x">()`, `resolve<T>()`, …). Side-effect import: it carries

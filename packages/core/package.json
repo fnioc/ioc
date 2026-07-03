@@ -2,7 +2,7 @@
   "name": "@fnioc/core",
   "version": "1.0.0",
   "private": true,
-  "description": "ioc substrate (PRIVATE, unpublished): the dependency-metadata format, the global-symbol WeakMap, defineDeps, and the forCtor authoring surface. Inlined into @fnioc/di and @fnioc/transformer at build time.",
+  "description": "ioc substrate (PRIVATE, unpublished): the dependency-signature data format and the slot/token grammar (union, typeArg, token helpers, brand types). Inlined into @fnioc/di and @fnioc/transformer at build time.",
   "keywords": [
     "dependency-injection",
     "di",
