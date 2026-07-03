@@ -7,13 +7,12 @@ import {
   isUnionSlot,
   isLiteralRef,
   isTypeArgRef,
-} from "@fnioc/core";
+} from "@fnioc/di";
 import type { DepSlot } from "@fnioc/core";
 
-// Smoke test: the package is importable and the surviving public surface — the
-// pure slot constructors and type guards — is present and behaves. The global
-// metadata store (defineDeps / getDeps / forCtor) has been retired; signatures
-// now ride on the registration record in @fnioc/di.
+// The slot constructors + type guards — relocated here from @fnioc/core when core
+// became a pure-types package. They are runtime values that live with the engine
+// that runs them; a di consumer reaches them through the @fnioc/di import.
 
 test("union() helper is callable and returns a Union slot", () => {
   const u = union("smoke:A", "smoke:B");

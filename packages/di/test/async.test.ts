@@ -6,7 +6,7 @@ import {
   UnregisteredTokenError,
   NoSatisfiableSignatureError,
 } from "@fnioc/di";
-import { closeToken, union } from "@fnioc/core";
+import { closeToken, union } from "@fnioc/di";
 import type { Token } from "@fnioc/core";
 import { defineDeps } from "./fixtures.js";
 

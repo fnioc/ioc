@@ -20,8 +20,9 @@
 // one's cached instance — when no matching frame encloses the owner, the dep
 // resolves transiently (a fresh instance) instead.
 
-import { closeToken, isFactoryRef as coreIsFactoryRef, isLiteralRef as coreIsLiteralRef, isOpenToken, isScopeRef as coreIsScopeRef, isTypeArgRef as coreIsTypeArgRef, isUnionSlot, parseToken, substituteSignatures } from "@fnioc/core";
 import type { DepSlot, FactoryRef, LiteralRef, ParsedToken, ScopeRef, Token, TypeArgRef, Union } from "@fnioc/core";
+import { isFactoryRef as coreIsFactoryRef, isLiteralRef as coreIsLiteralRef, isScopeRef as coreIsScopeRef, isTypeArgRef as coreIsTypeArgRef, isUnionSlot } from "./guards.js";
+import { closeToken, isOpenToken, parseToken, substituteSignatures } from "./tokens.js";
 import type { Func } from "@rhombus-toolkit/func";
 import { assertNever } from "./assert.js";
 

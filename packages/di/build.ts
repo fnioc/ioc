@@ -1,12 +1,14 @@
 // Build @fnioc/di for publication.
 //
-// Two outputs, both with the private @fnioc/core INLINED (zero @fnioc/core
-// references in the shipped artifacts — core is never published):
+// Two outputs. @fnioc/core is now a PURE-TYPES package — di's runtime (the slot
+// builders, DepSlot guards, and token grammar) lives in di's OWN source, so the
+// JS bundle carries no @fnioc/core code at all; only core's TYPES are referenced,
+// and they are inlined into the rolled-up .d.ts so the published artifacts have
+// no @fnioc/core import.
 //
-//   1. dist/index.js   — `bun build` bundles the ESM entry. @fnioc/core resolves
-//      through the workspace to its TS source and is bundled in. The one runtime
-//      helper (`assertNever`) is a local 2-liner; @rhombus-toolkit/func is
-//      type-only and erases. Nothing is externalized.
+//   1. dist/index.js   — `bun build` bundles the ESM entry. di imports only TYPES
+//      from @fnioc/core (they erase); `assertNever` is a local 2-liner;
+//      @rhombus-toolkit/func is type-only and erases. Nothing is externalized.
 //   2. dist/index.d.ts — rollup-plugin-dts rolls the public type surface into one
 //      declaration file, inlining @fnioc/core's (and the type-only
 //      @rhombus-toolkit) types so the published d.ts has no external import.

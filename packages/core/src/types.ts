@@ -106,6 +106,17 @@ export interface DepRecord {
   readonly signatures: readonly (readonly DepSlot[])[];
 }
 
+/**
+ * The result of parsing a closed-generic token `base<arg1,arg2>` into its base
+ * and top-level args. A pure data shape (the parse routine that produces it is a
+ * runtime helper that lives in `@fnioc/di`); kept here so the type surface a
+ * consumer references stays in the types-only substrate.
+ */
+export interface ParsedToken {
+  readonly base: Token;
+  readonly args: readonly Token[];
+}
+
 // ── Inject brand ──────────────────────────────────────────────────────────────
 
 /**

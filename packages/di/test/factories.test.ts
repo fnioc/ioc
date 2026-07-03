@@ -1,7 +1,7 @@
 import { test, expect, describe } from "bun:test";
 import { ServiceManifest, FactoryTargetError } from "@fnioc/di";
 import { defineDeps } from "./fixtures.js";
-import { closeToken } from "@fnioc/core";
+import { closeToken } from "@fnioc/di";
 import type { FactoryRef, Token } from "@fnioc/core";
 import { T } from "./fixtures.js";
 
