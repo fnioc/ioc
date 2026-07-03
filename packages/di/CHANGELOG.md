@@ -1,5 +1,18 @@
 # Changelog
 
+## [8.0.0](https://github.com/fnioc/ioc/compare/di-v7.0.0...di-v8.0.0) (2026-07-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* async resolution + signatures-on-registration (core/di/transformer) ([#82](https://github.com/fnioc/ioc/issues/82))
+* the `@signature` class decorator and the `signature` export (from both `@fnioc/core` and `@fnioc/di`) are removed. Author constructor signatures with `forCtor(Class).signature(...)` instead.
+
+### Features
+
+* async resolution + signatures-on-registration (core/di/transformer) ([#82](https://github.com/fnioc/ioc/issues/82)) ([16bd184](https://github.com/fnioc/ioc/commit/16bd1843822767201778616c9f9bfa297f0a1a5c))
+* remove the [@signature](https://github.com/signature) class decorator ([#80](https://github.com/fnioc/ioc/issues/80)) ([75a58a2](https://github.com/fnioc/ioc/commit/75a58a222a83d611a4f9ef991056478ee889d266))
+
 ## [7.0.0](https://github.com/fnioc/ioc/compare/di-v6.0.0...di-v7.0.0) (2026-07-02)
 
 
