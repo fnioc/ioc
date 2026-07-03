@@ -10,7 +10,7 @@ and everything but the authoring mechanism is the same.
 | Example | Authoring | Build |
 | --- | --- | --- |
 | [`with-transformer`](./with-transformer) | type-driven: `add<IGreeter>(Greeter)`, tokenless `resolve<IGreeter>()`, `$<N>` / `Typeof<T>` placeholders | `tspc` (the [`@fnioc/transformer`](../packages/transformer) ts-patch plugin) |
-| [`without-transformer`](./without-transformer) | plugin-less: explicit tokens, `forCtor`, manual `closeToken` / `typeArg` | plain `tsc` |
+| [`without-transformer`](./without-transformer) | plugin-less: explicit tokens, hand-written signature arrays, manual `closeToken` / `typeArg` | plain `tsc` |
 
 ## The shared package
 
@@ -28,8 +28,8 @@ classes two different ways.
 
 | | No plugin (`without-transformer`) | With plugin (`with-transformer`) |
 | --- | --- | --- |
-| **Baseline DI** | explicit tokens + `forCtor` metadata; `union(...)`; the `Inject` brand replicated by a hand-written signature | `add<IGreeter>(Greeter)`; inline `A \| B` union; the `Inject<T,"tok">` brand derived automatically |
-| **Open generics** | manual template-token registration (`add("app/IRepository<$1>", SqlRepository, [[…, typeArg(1)]])`), a closed exact registration, a `forCtor` hole-template signature, `closeToken` / `typeArg` helpers | placeholder registration (`add<IRepository<$<1>>>(SqlRepository<$<1>>)`), a closed instantiation-expression registration, tokenless closing resolves, a `Typeof<T>` witness |
+| **Baseline DI** | explicit tokens + a hand-written signature array (the registration's third argument); `union(...)`; the `Inject` brand replicated by a hand-written signature | `add<IGreeter>(Greeter)`; inline `A \| B` union; the `Inject<T,"tok">` brand derived automatically |
+| **Open generics** | manual template-token registration (`add("app/IRepository<$1>", SqlRepository, [[…, typeArg(1)]])`), a closed exact registration, a hole-template signature for a generic dependent, `closeToken` / `typeArg` helpers | placeholder registration (`add<IRepository<$<1>>>(SqlRepository<$<1>>)`), a closed instantiation-expression registration, tokenless closing resolves, a `Typeof<T>` witness |
 
 **ABI unification.** The transformer's lowered output for an open or closed
 generic registration is exactly the plain-data `add(token, ctor, signatures)`
@@ -56,6 +56,7 @@ before/after table.
 
 The transformer removes the two pieces of boilerplate the manual example writes
 by hand: the string token (derived from the interface type) and the
-constructor-dependency metadata (injected as `defineDeps(...)`). Everything
-downstream — the `ServiceManifest`, scopes, lifetimes, resolution — is identical,
-right down to the shared classes both examples pull from `@fnioc-examples/shared`.
+constructor-dependency metadata (carried inline as the registration's third
+argument). Everything downstream — the `ServiceManifest`, scopes, lifetimes,
+resolution — is identical, right down to the shared classes both examples pull
+from `@fnioc-examples/shared`.

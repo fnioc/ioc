@@ -673,9 +673,9 @@ export function literalExpression(
 
 /**
  * Lower the registration expression: rewrite each planned `add`/`addValue` call
- * to its string-token form (routing factories to `addFactory` + the hoisted
- * const) and every `.as<"x">()` to `.as("x")`. Plans are keyed on ORIGINAL call
- * nodes — looked up before `visitEachChild` rebuilds them.
+ * to its string-token form (routing factories to `addFactory`) and every
+ * `.as<"x">()` to `.as("x")`. Plans are keyed on ORIGINAL call nodes — looked
+ * up before `visitEachChild` rebuilds them.
  */
 function lowerRegistrationExpression(
   expr: ts.Expression,
@@ -687,8 +687,8 @@ function lowerRegistrationExpression(
       const plan = plans.get(node);
       if (plan) {
         // A registration call: rewrite in place. Its sole value arg is kept
-        // (value / dynamic) or replaced by the hoisted const — nothing inside to
-        // recurse into.
+        // (value / dynamic) or replaced by the plain, un-parameterized ctor for
+        // a generic impl (`valueOverride`) — nothing inside to recurse into.
         return lowerRegistrationCall(node, plan, ctx.factory);
       }
     }

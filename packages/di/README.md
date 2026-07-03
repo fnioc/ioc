@@ -56,36 +56,37 @@ add<ICache>(RedisCache, ["pkg:IRedisClient", undefined, "pkg:ILogger"]);
 
 `sig` is `readonly (DepSlot | undefined)[]` — a positional sparse override over the transformer-generated signature. A `DepSlot` at a position overrides the generated token there; `undefined` keeps the generated token. Use explicit `undefined` rather than sparse elision (no-sparse-arrays).
 
-Pure token users (no transformer) supply a complete signature via `forCtor(C).signature(...)` instead.
+Pure token users (no transformer) supply a complete signature via the registration's own third argument (`add(token, C, signatures)`) instead.
 
 ### `add(token, Ctor, signatures?)` — registration-carried dep signatures
 
-Not to be confused with the sparse `sig` override above — that's a type-driven, compile-time-only feature consumed entirely by the transformer. This is the **runtime** form of `add`: it takes an optional third argument, `signatures`, a complete (non-sparse) multi-signature array carried on the registration itself rather than written into the ctor-keyed dep-metadata store.
+Not to be confused with the sparse `sig` override above — that's a type-driven, compile-time-only feature consumed entirely by the transformer. This is the **runtime** form of `add`: an optional third argument, `signatures`, a complete (non-sparse) multi-signature array carried directly on the registration record.
 
 ```ts
 add(token: Token, ctor: Ctor, signatures?: readonly (readonly DepSlot[])[]): AddBuilder
+addFactory(token: Token, factory: Factory, signatures?: readonly (readonly DepSlot[])[]): AddBuilder
 ```
 
-This exists for **open-generic registrations** — one implementation class can back many closings or templates, and the dep-metadata store is keyed on the ctor object, so two `defineDeps` calls for the same class would collide (same-length signatures, greedy selection can't distinguish them). A registration's own `signatures` wins over `getDeps(ctor)` at every read site — construction, injected-factory parameter resolution, greedy overload selection. (Factory registrations never carry signatures — open registrations are class-only and `addFactory` takes no third argument.) The transformer emits this form for every generic registration, open or closed via an instantiation expression; hand-write it directly for the plugin-less path. See [Open generics](#open-generics) below.
+There is no global, ctor-keyed metadata store — this array **is** the sole signature channel, for both classes (`add`) and factories (`addFactory`). Keying it on the registration rather than the constructor function is what lets one JS class back **any number of independent registrations** with different signatures — the mechanism open-generic registrations depend on, where the same erased class serves every closing of a template (see [Open generics](#open-generics) below). `@fnioc/transformer` emits this array inline for every registration it can statically extract a signature from — `add<IFoo>(Foo)` lowers to `add("pkg:IFoo", Foo, [[...]])`, with no separate prelude call and nothing hoisted. Hand-write it directly for the plugin-less path. Omitting the third argument leaves the registration signature-less: fine for a zero-arg constructor, but a constructor with parameters throws `MissingMetadataError` at resolve time.
 
-### `add(token, { useFactory })` and `add(token, { useValue })`
+### `addFactory(token, factory, signatures?)` and `addValue(token, value)`
 
-The same `add` surface also takes factory and value specs — registration paths that bypass the dep-metadata system entirely. Recommended for test doubles, third-party instances, and plugin-less consumers. Both return the builder for chaining.
+Two more registration surfaces alongside `add` — recommended for test doubles, third-party instances, and plugin-less consumers.
 
 ```ts
-// Factory: receives the scope, returns the instance.
-services.add("pkg:IDb", {
-  useFactory: (c) => new PostgresDb(c.resolve<IConfig>("pkg:IConfig")),
-  scope: "singleton",
-});
+// Signature-less factory: receives the live Resolver, resolves its own deps.
+services.addFactory("pkg:IDb", (sp) => new PostgresDb(sp.resolve<IConfig>("pkg:IConfig")))
+  .as("singleton");
+
+// Factory with a signature: each param is injected by its slot, like `add`.
+services.addFactory("pkg:IDb", (config) => new PostgresDb(config), [["pkg:IConfig"]])
+  .as("singleton");
 
 // Value: a pre-constructed instance (re-used as-is, no lifetime)
-services.add("pkg:ICache", {
-  useValue: new NullCache(),
-});
+services.addValue("pkg:ICache", new NullCache());
 ```
 
-A `useFactory` with `scope: "singleton"` runs once and caches the result; without a `scope` it runs on every resolve (transient). `useValue` is always the same reference.
+`addFactory` returns the `.as(scope?)` continuation, exactly like `add` — `.as("singleton")` caches the result in the nearest enclosing open `"singleton"` frame; no `.as()` call runs the factory fresh on every resolve (transient). A signature-less factory (no third argument) is called with the live `Resolver` as its sole argument and resolves its own deps by hand — the plugin-less escape hatch. `addValue` takes no lifetime — the value is always the same reference, and it returns `void`, not a builder.
 
 To override a registration for a specific context (e.g. a test double), register a later spec for the same token on the `ServiceManifest` before calling `build()`. The registration map is append-only and last-registration-wins. The map seals at `build()` — no post-build mutation is possible.
 
@@ -199,23 +200,23 @@ const userToken = closeToken("app:IRepository", "app:User");  // "app:IRepositor
 scope.resolve(userToken);
 ```
 
-`forCtor(ctor).signature(...)` also works with a hole-templated signature — but it writes into the same ctor-keyed store every other manual annotation uses, so it can carry **only one template per ctor**. If the same class backs two different open templates (or an open template and a closed override), `forCtor` calls for it collide; use the 3-argument `add(token, ctor, signatures)` form instead — its signatures live on the registration, not the ctor, so each registration is independent. The scoping invariant behind that split: the global ctor-keyed store holds **class-intrinsic** facts (derivable from the declaration, safely process-global), whereas a generic impl's signature-under-a-binding is **registration-intrinsic** — keying it globally would merely relocate the collision cross-manifest.
+Because the signature array lives on the **registration**, not on the ctor object, the same class can back any number of independent templates (or an open template alongside a closed override) without collision — each `add(...)` call carries its own array:
 
 ```ts
-// OK: SqlRepository backs exactly one template
-forCtor(SqlRepository).signature("app:IDbConnection", typeArg(1));
-services.add("app:IRepository<$1>", SqlRepository);
+// SqlRepository backs an open template...
+services.add("app:IRepository<$1>", SqlRepository, [["app:IDbConnection", typeArg(1)]]);
 
-// NOT OK: two templates for the same ctor collide in the ctor-keyed store —
-// use the registration-carried add(token, ctor, signatures) form for the
-// second one instead.
+// ...and a second, unrelated open template for a different service base,
+// with its own independent signature array. No collision: each registration
+// owns its own signatures.
+services.add("app:IAuditLog<$1>", SqlRepository, [["app:IAuditConnection", typeArg(1)]]);
 ```
 
 ---
 
 ## Greedy overload selection
 
-When a constructor has multiple registered signatures (chained `forCtor(...).signature()` calls), the engine selects by scanning **longest → shortest** and picking the first signature where every resolvable parameter token is satisfiable (registered in the container). Equal-arity ties break by registration order.
+When a registration's carried signature array holds multiple entries (one per constructor overload), the engine selects by scanning **longest → shortest** and picking the first signature where every resolvable parameter token is satisfiable (registered in the container). Equal-arity ties break by array order.
 
 ```ts
 // Two overloads: prefer the one with ILogger if available
@@ -223,9 +224,10 @@ class MyService {
   constructor(logOrDb: ILogger | IDb, db?: IDb) { ... }
 }
 
-forCtor(MyService)
-  .signature("pkg:IDb")
-  .signature("pkg:ILogger", "pkg:IDb");
+services.add("pkg:myService", MyService, [
+  ["pkg:IDb"],
+  ["pkg:ILogger", "pkg:IDb"],
+]);
 ```
 
 If ILogger is registered, the two-parameter signature wins. If not, the one-parameter signature is used.
@@ -267,32 +269,41 @@ Instances owned by ancestor scopes are disposed when those scopes close, not whe
 
 ---
 
-## Async as values
+## Async resolution
 
-The container never awaits. Async is expressed as `Promise<T>` values through the sync channel.
+`resolve()` never lies about what it returns — it's synchronous, full stop. Two entry points, two honesty guarantees:
+
+- **`resolve<T>(token)`** — synchronous. If satisfying `token` would require waiting on an in-flight async construction (a concurrent `resolveAsync` mid-build for the same cached instance), it throws `AsyncResolutionRequiredError` rather than block or hand back an unsettled value.
+- **`resolveAsync<T>(token)`** — always returns a `Promise<T>`. It is the **only** path that can satisfy a lookup miss via the token's honest `Promise<T>` counterpart.
+
+### Honest `Promise<T>` token-split
+
+An async dependency is tokenized at its **true** `Promise<X>` type — never unwrapped to `X`. Register the async factory under the `Promise<X>` token directly:
 
 ```ts
-// Register an async factory
-services.add("pkg:IDb", {
-  useFactory: async (c) => {
-    const pool = c.resolve<IConnectionPool>("pkg:IConnectionPool");
-    return new PostgresDb(await pool.connect());
-  },
-  scope: "singleton",
-});
-
-// Consume it — declare the dep as Promise<IDb>
-class UserRepo {
-  constructor(private db: Promise<IDb>) {}
-  async findUser(id: string) {
-    return (await this.db).query(`SELECT * FROM users WHERE id = $1`, [id]);
-  }
-}
+services.addFactory("Promise<pkg:IDb>", async (sp) => {
+  const pool = sp.resolve<IConnectionPool>("pkg:IConnectionPool");
+  return new PostgresDb(await pool.connect());
+}).as("singleton");
 ```
 
-The container caches the factory's return verbatim — the `Promise` itself. Every resolve of `"pkg:IDb"` gets the same `Promise`; the async factory runs exactly once. `Promise<T>` at the dep site is the honest contract: the container doesn't hide asynchrony.
+- `resolve<Promise<IDb>>("Promise<pkg:IDb>")` returns the **raw promise** — the honest, synchronous view of an async registration.
+- `resolveAsync<IDb>("pkg:IDb")` finds no direct `"pkg:IDb"` registration, falls back to `"Promise<pkg:IDb>"`, and awaits it — delivering the settled `IDb`. A constructor parameter typed as the bare interface (`IDb`, not `Promise<IDb>`) hits exactly this path: it's satisfiable only in async mode, and the value the constructor actually receives is the **awaited** result, never the promise itself.
 
-The transformer unwraps `Promise<X>` at dep-extraction: a parameter typed `Promise<IDb>` maps to the same token as `IDb` (`"pkg:IDb"`). Promise-ness lives in the factory's return, not in a separate token.
+```ts
+class UserRepo {
+  constructor(private db: IDb) {}
+  findUser(id: string) {
+    return this.db.query(`SELECT * FROM users WHERE id = $1`, [id]);
+  }
+}
+
+const repo = await root.resolveAsync<UserRepo>("pkg:UserRepo");
+```
+
+The container caches whatever a factory returns, verbatim — for an async factory, that's the `Promise` itself. Every resolve of the same cached token gets the same `Promise`; the factory runs exactly once. Single-flight applies across overlapping `resolveAsync` calls: the in-flight promise lands in the cache before it settles, so concurrent resolves for the same singleton share one construction instead of racing to build it twice.
+
+`@fnioc/transformer` derives tokens just as honestly: a constructor parameter or factory return typed `Promise<IDb>` derives the token `Promise<pkg:IDb>`, at any depth, never unwrapped. See [`@fnioc/transformer`](../transformer/README.md#async-dependencies) for the token-derivation side.
 
 ---
 
@@ -376,7 +387,7 @@ Thrown when the container tries to build the factory callable and cannot. Two re
 | Reason | Meaning |
 |---|---|
 | `"unregistered"` | The factory's target token has no registration. A factory parameter needs the target registered with `services.add(...)`. |
-| `"not-a-class"` | The target is registered as a `useValue` or `useFactory` override, not a class. A factory builds its target with `new`; only class registrations qualify. Resolve it directly or change the registration. |
+| `"not-a-class"` | The target is registered via `addValue` or `addFactory`, not a class. A factory builds its target with `new`; only class registrations qualify. Resolve it directly or change the registration. |
 
 Note: `FactoryTargetError` is thrown when the factory callable is constructed (at owning-class resolution time), not when the callable is invoked.
 
@@ -389,10 +400,10 @@ A `Union` dep slot tries each member in declaration order and resolves to the fi
 ```ts
 import { union } from "@fnioc/di";
 
-forCtor(Handler).signature(
+services.add("pkg:IHandler", Handler, [[
   union("pkg:IRedis", "pkg:IMemoryCache"),
   "pkg:ILogger",
-);
+]]);
 ```
 
 Token users construct `Union` slots with `union(...)`. Transformer users write an inline `A | B` annotation and the transformer lowers it automatically. See [`@fnioc/transformer`](../transformer/README.md) for the named-vs-inline distinction.
@@ -410,8 +421,8 @@ Zero-argument constructor — there is no `rootName`; scopes are just tags.
 | `add<I>(Concrete)` | `(ctor: new (...) => I) => AddBuilder` | Register a concrete class against interface `I`. |
 | `add<I>(Concrete, sig)` | `(ctor, sig: readonly (DepSlot \| undefined)[]) => AddBuilder` | Register with a positional signature override. |
 | `.as<S>()` | `(scope: S) => void` | Set the lifetime scope tag. No call → transient. |
-| `add(token, ctor, signatures?)` | `(token: string, ctor, signatures?: readonly (readonly DepSlot[])[]) => AddBuilder` | Class registration (lowered form). An open (holey) token routes to the open-registration table; `signatures`, when present, wins over the ctor-keyed store (open generics, §Open generics). |
-| `addFactory(token, factory)` | `(token: string, factory: (sp: Resolver) => T) => AddBuilder` | Factory registration. No dep metadata required — the factory receives the live `Resolver`. |
+| `add(token, ctor, signatures?)` | `(token: string, ctor, signatures?: readonly (readonly DepSlot[])[]) => AddBuilder` | Class registration (lowered form). An open (holey) token routes to the open-registration table; `signatures` is the sole signature channel (open generics, §Open generics). |
+| `addFactory(token, factory, signatures?)` | `(token: string, factory: Factory, signatures?: readonly (readonly DepSlot[])[]) => AddBuilder` | Factory registration. Without `signatures`, the factory receives the live `Resolver` as its sole argument; with `signatures`, each call param is injected by its slot, like `add`. |
 | `addValue(token, value)` | `(token: string, value: unknown) => void` | Value registration. A pre-built instance, re-used as-is. |
 | `build()` | `() => ServiceProvider<Scopes>` | Seal the registration map and return a **frameless** `ServiceProvider` (no scope pre-opened). No post-build mutation is possible. |
 
@@ -421,7 +432,8 @@ Implements `Resolver` + `ScopeFactory` + `Disposable` / `AsyncDisposable`.
 
 | Member | Signature | Description |
 |---|---|---|
-| `resolve<T>(token)` | `(token: string) => T` | Resolve an instance. A tagged registration with no enclosing open frame resolves transiently; throws on unregistered token or cycle. |
+| `resolve<T>(token)` | `(token: string) => T` | Resolve an instance synchronously. A tagged registration with no enclosing open frame resolves transiently; throws on unregistered token, a cycle, or a cached in-flight async construction (`AsyncResolutionRequiredError`). |
+| `resolveAsync<T>(token)` | `(token: string) => Promise<T>` | Resolve asynchronously. The only path that can satisfy a lookup miss via its honest `Promise<T>` registration (§Async resolution). |
 | `resolveFactory(type, params?)` | `(type: string, params?: readonly string[]) => (...args) => T` | Resolve a factory callable. Without `params`, strict zero-arg `() => T`; with `params`, `(...params) => T` matched by token. |
 | `createScope(name)` | `(name: Scopes) => ServiceProvider<Scopes>` | Create a nested child scope. |
 | `dispose()` | `() => void` | Sync close. Throws if any owned instance has async-only disposal. |

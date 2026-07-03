@@ -7,7 +7,13 @@
 > `@fnioc/transformer`); you never depend on `@fnioc/core` directly. The runtime
 > authoring surfaces below are re-exported from `@fnioc/di`.
 
-The substrate for `ioc`. It exports nothing that touches resolution or compilation — only the immutable types, the global dep-metadata store, and the authoring surfaces that write into it.
+The substrate for `ioc`. It exports nothing that touches resolution or
+compilation — only the immutable dependency-signature types (`DepSlot` and its
+variants), the open-generic token grammar, and the plain data-constructor
+helpers (`union`, `typeArg`) a hand-authored signature is built from. There is
+no metadata store here, or anywhere else: a constructor/factory's dependency
+signature rides on the registration itself — see
+[`@fnioc/di`](../di/README.md) for where it's read.
 
 ---
 
@@ -69,10 +75,10 @@ export function union(...slots: DepSlot[]): Union
 ```
 
 ```ts
-forCtor(Handler).signature(
+services.add("pkg:IHandler", Handler, [[
   union("pkg:IRedis", "pkg:IMemoryCache"),
   "pkg:ILogger",
-);
+]]);
 ```
 
 ---
@@ -187,7 +193,7 @@ An unregistered token slot is caller-supplied by definition; a `TypeArgRef` slot
 
 ## `DepRecord`
 
-Per-constructor metadata stored in the global-symbol Map.
+The shape of a registration's carried dependency metadata — not stored anywhere globally; it's the type of the array a registration passes as its own signature(s).
 
 ```ts
 export interface DepRecord {
@@ -195,65 +201,43 @@ export interface DepRecord {
 }
 ```
 
-`signatures` holds one or many signature arrays, supporting constructor overloads without an ABI break.
+`signatures` holds one or many signature arrays, supporting constructor overloads without an ABI break — the engine picks the first satisfiable one, scanned longest to shortest (see [`@fnioc/di`](../di/README.md#greedy-overload-selection)).
 
 ---
 
-## `defineDeps`
+## Authoring dependency signatures by hand
 
-The single write path into the dep-metadata store. Both the transformer-emitted output and the `forCtor` authoring surface funnel through this function.
-
-```ts
-export function defineDeps(
-  ctor: Function,
-  signatures: readonly (readonly DepSlot[])[],
-): void
-```
-
-If a `DepRecord` already exists for `ctor`, `defineDeps` merges by appending unique signatures — chained `forCtor(...).signature(...)` calls accumulate overloads rather than overwrite each other.
-
----
-
-## `getDeps`
-
-Read the stored dep record for a constructor, if any.
+There is no global metadata store and no decorator. A signature rides directly
+on the registration, passed as the optional **third argument** to
+`@fnioc/di`'s `add` / `addFactory`:
 
 ```ts
-export function getDeps(ctor: Function): DepRecord | undefined
+import { ServiceManifest } from "@fnioc/di";
+
+const services = new ServiceManifest();
+
+services.add("pkg:IHandler", Handler, [
+  ["pkg:ILogger", "pkg:IDb"], // overload 0 — one signature per constructor overload
+]);
 ```
 
-Used by `@fnioc/di` during resolution. Returns `undefined` if no record has been stored.
+`@fnioc/transformer` emits this array inline for every registration it can
+statically extract a signature from, rewriting the type-driven `add<IFoo>(Foo)`
+to `add("pkg:IFoo", Foo, [[...]])` — there is no separate prelude call and
+nothing hoisted; the signature travels with the registration itself. Hand
+authoring (no transformer) means writing the array yourself, using the slot
+builders above (`union`, `typeArg`) plus plain token strings, `FactoryRef` /
+`ScopeRef` / `LiteralRef` object literals, and the token-grammar helpers below
+for open generics. Omitting the third argument leaves the registration
+signature-less — fine for a zero-arg constructor, but resolution throws
+`MissingMetadataError` for any constructor with parameters.
 
----
-
-## `forCtor`
-
-The manual authoring surface: a fluent free-function that writes signatures into the global-symbol Map by calling `defineDeps`. Use it for classes the transformer can't see, classes you don't own (third-party, dynamically generated), or whenever you prefer to hand-annotate.
-
-```ts
-export function forCtor(ctor: Function): ForCtorBuilder
-
-interface ForCtorBuilder {
-  signature(...tokens: readonly DepSlot[]): ForCtorBuilder;
-}
-```
-
-Chain `.signature()` calls to register multiple overloads:
-
-```ts
-forCtor(MyService)
-  .signature("pkg:IDb")                 // overload 0 (appended first)
-  .signature("pkg:ILogger", "pkg:IDb"); // overload 1 (appended second)
-```
-
-Use a `Union` slot for alternative deps, a `FactoryRef` for factory-injected params:
-
-```ts
-forCtor(CacheAwareRepo)
-  .signature(union("pkg:IRedis", "pkg:IMemory"), "pkg:IDb");
-```
-
-For a third-party class where you need to override specific positions without rewriting the full signature, pass an override array to `add<I>(C, sig)` instead — see the registration override section in [`@fnioc/di`](../di/README.md).
+Because the array is keyed on the **registration record**, not on the
+constructor function, one JS class can back any number of independent
+registrations with different signatures — the mechanism open-generics
+registrations depend on, where the same erased class serves every closing of a
+template. See [Open-generic token grammar](#open-generic-token-grammar) below
+and [`@fnioc/di`](../di/README.md#open-generics).
 
 ---
 
@@ -327,33 +311,13 @@ export function typeArg(n: number): TypeArgRef
 export function isTypeArgRef(slot: DepSlot): slot is TypeArgRef
 ```
 
-`typeArg(n)` is the manual-authoring counterpart to `Typeof<T>` — build a `{ typeArg: n }` slot by hand for a `forCtor`-annotated hole template. `isTypeArgRef` is the type guard, alongside `isFactoryRef` / `isScopeRef` / `isUnionSlot` / `isLiteralRef`.
-
----
-
-## Global-symbol Map
-
-The dep-metadata store is a plain `Map<DepTarget, DepRecord>` anchored on `globalThis` under a fixed `Symbol.for` key:
-
-```ts
-const KEY: unique symbol = Symbol.for("fnioc:deps");
-const store: Map<DepTarget, DepRecord> =
-  (globalThis as any)[KEY] ??= new Map();
-```
-
-**Why a regular Map and not a WeakMap:** every key is a constructor or factory function that is pinned for the module's lifetime — a class is a module binding, a `forCtor` target is a named declaration, and a transformer-lowered factory is hoisted into a module-level `const`. No key ever becomes unreachable, so a WeakMap could never collect an entry — its weakness would be pure ceremony. DI metadata is registered once at startup and lives for the process by design, so a plain Map's non-collection is correct, not a leak.
-
-**Why `Symbol.for`, never `Symbol()`:** a unique symbol would create separate maps if two copies of `@fnioc/core` end up in the same runtime (the dual-package hazard — deduplication failures, monorepos, certain bundler configurations). `Symbol.for` keys are global-registry entries; two copies of `@fnioc/core` will find the same symbol and the same Map, so metadata written through either copy is visible to both.
-
-**What is globalized:** only the immutable, app-agnostic dep-metadata (the `DepRecord` entries keyed by constructor function). The container itself (`ServiceManifest`, scope instances) is per-instance — not globalized.
-
-**`@fnioc/core` as a peer dependency:** declare it as a peer dep (not a regular dep) in packages that depend on it. This keeps deduplication predictable and prevents version skew from silently fragmenting the Map.
+`typeArg(n)` is the manual-authoring counterpart to `Typeof<T>` — build a `{ typeArg: n }` slot by hand when writing an open registration's signature array directly (no transformer). `isTypeArgRef` is the type guard, alongside `isFactoryRef` / `isScopeRef` / `isUnionSlot` / `isLiteralRef`.
 
 ---
 
 ## Versioning
 
-`@fnioc/core` is versioned independently via release-please (semver). The global-symbol key (`Symbol.for("fnioc:deps")`) is fixed — it does not change between versions. The dep-metadata format (`DepRecord`) is kept backward-compatible across `core` semver minors; a breaking change to the wire format would require a coordinated update across all packages.
+`@fnioc/core` is versioned independently via release-please (semver). The dep-metadata format (`DepRecord`) is kept backward-compatible across `core` semver minors; a breaking change to the wire format would require a coordinated update across all packages.
 
 ---
 
@@ -373,11 +337,12 @@ const store: Map<DepTarget, DepRecord> =
 | `$` | Type alias | `$<N>` — unbounded unconstrained sugar for `Hole<N>`. |
 | `Typeof` | Type alias | Phantom brand — a ctor param receiving the token string of type argument `T` (`typeof(T)` analog). |
 | `DepSlot` | Type alias | `Token \| FactoryRef \| ScopeRef \| Union \| LiteralRef \| TypeArgRef` — one positional slot in a signature. |
-| `DepRecord` | Interface | `{ signatures }` — per-constructor metadata shape. |
-| `defineDeps` | Function | Write dep metadata into the global-symbol Map. |
-| `getDeps` | Function | Read dep metadata from the global-symbol Map. |
-| `forCtor` | Function | Fluent manual authoring surface — hand-annotate a class's signatures. |
-| `ForCtorBuilder` | Interface | Return type of `forCtor`. |
+| `DepTarget` | Type alias | `Ctor \| Func<never[], unknown>` — a ctor or factory function a signature describes. |
+| `DepRecord` | Interface | `{ signatures }` — per-registration signature-array shape. |
+| `isFactoryRef` | Function | Type guard for `FactoryRef` slots. |
+| `isScopeRef` | Function | Type guard for `ScopeRef` slots. |
+| `isUnionSlot` | Function | Type guard for `Union` slots. |
+| `isLiteralRef` | Function | Type guard for `LiteralRef` slots. |
 | `closeToken` | Function | Render the canonical closed-generic token `base<a,b>`. |
 | `parseToken` | Function | Parse a closed-generic token into `{ base, args }`, or `undefined`. |
 | `isOpenToken` | Function | True when a token contains a hole (`$N`) at any depth. |
