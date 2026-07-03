@@ -20,12 +20,14 @@
 // one's cached instance — when no matching frame encloses the owner, the dep
 // resolves transiently (a fresh instance) instead.
 
-import { getDeps, isFactoryRef as coreIsFactoryRef, isLiteralRef as coreIsLiteralRef, isOpenToken, isScopeRef as coreIsScopeRef, isTypeArgRef as coreIsTypeArgRef, isUnionSlot, parseToken, substituteSignatures } from "@fnioc/core";
+import { closeToken, isFactoryRef as coreIsFactoryRef, isLiteralRef as coreIsLiteralRef, isOpenToken, isScopeRef as coreIsScopeRef, isTypeArgRef as coreIsTypeArgRef, isUnionSlot, parseToken, substituteSignatures } from "@fnioc/core";
 import type { DepSlot, FactoryRef, LiteralRef, ParsedToken, ScopeRef, Token, TypeArgRef, Union } from "@fnioc/core";
 import type { Func } from "@rhombus-toolkit/func";
+import { assertNever } from "./assert.js";
 
 import {
   AsyncDisposalRequiredError,
+  AsyncResolutionRequiredError,
   CircularDependencyError,
   FactoryTargetError,
   MissingMetadataError,
@@ -36,8 +38,6 @@ import {
 } from "./errors.js";
 import type {
   ClassRegistration,
-  Ctor,
-  Factory,
   FactoryRegistration,
   OpenRegistration,
   Registration,
@@ -73,6 +73,37 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
     (typeof value === "object" || typeof value === "function") &&
     typeof (value as { then?: unknown }).then === "function"
   );
+}
+
+/**
+ * The private carrier for an in-flight async resolution. Wrapping (instead of
+ * passing a raw Promise) is what lets the resolver stay free of thenable
+ * sniffing: a raw Promise flowing through resolution is always an honest VALUE
+ * (a `Promise<X>` registration); a `Pending` is always the engine's own "not
+ * settled yet" marker. Never escapes the public API.
+ */
+class Pending<T> {
+  public constructor(
+    public readonly promise: Promise<T>,
+  ) {}
+}
+
+/** True when a spine result is the engine's in-flight carrier. */
+function isPending<T>(value: T | Pending<T>): value is Pending<T> {
+  return value instanceof Pending;
+}
+
+/**
+ * Collapses a spine result to a Promise: the carried promise, or the value
+ * resolved. Return type is `Promise<Awaited<T>>` (not `Promise<T>`) — honest
+ * about promise auto-flattening, which is exactly what makes the `Promise<T>`
+ * fallback deliver `T` on await. Both branches route through one `Promise.resolve`
+ * so the `result.promise` branch (`Promise<T>`) typechecks against the awaited
+ * return — a naive ternary does NOT (tsc: `T` is not assignable to `Awaited<T>`).
+ * `Promise.resolve` on a native promise returns it unchanged — zero cost.
+ */
+function settle<T>(result: T | Pending<T>): Promise<Awaited<T>> {
+  return Promise.resolve(isPending(result) ? result.promise : result);
 }
 
 /**
@@ -116,6 +147,29 @@ function rawTypeArgError(slot: TypeArgRef): TypeError {
       `closed token so the engine can close the template, or substitute the ` +
       `signatures before hand-feeding them.`,
   );
+}
+
+/** The closed kind-set of a `DepSlot` — the discriminant the ONE slot switch runs on. */
+type SlotKind = "scope" | "factory" | "union" | "literal" | "typearg" | "token";
+
+/** Classifies a slot. Guard order mirrors today's dispatch order exactly. */
+function slotKind(slot: DepSlot): SlotKind {
+  if (isScopeRef(slot)) {
+    return "scope";
+  }
+  if (isFactoryRef(slot)) {
+    return "factory";
+  }
+  if (isUnion(slot)) {
+    return "union";
+  }
+  if (isLiteralRef(slot)) {
+    return "literal";
+  }
+  if (isTypeArgRef(slot)) {
+    return "typearg";
+  }
+  return "token";
 }
 
 /**
@@ -246,8 +300,12 @@ export class ServiceProvider<S extends string = string>
   // ── Resolver ─────────────────────────────────────────────────────────────────
 
   /**
-   * Resolves a token to an instance, walking the scope chain for the owning
-   * frame. The public entry point starts a fresh cycle-detection stack.
+   * Resolves synchronously. Runs the spine in sync mode — async never enters
+   * (the `Promise<T>` fallback is gated off), so a miss is the honest
+   * `UnregisteredTokenError`. A cached in-flight async construction throws
+   * `AsyncResolutionRequiredError` (the guard here is defensive; sync mode
+   * provably never RETURNS a Pending — a cached one throws inside the spine).
+   * The public entry point starts a fresh cycle-detection stack.
    */
   public resolve<T>(token: Token): T;
   public resolve(token: Token): unknown;
@@ -259,7 +317,30 @@ export class ServiceProvider<S extends string = string>
           'resolve<T>("my:token").',
       );
     }
-    return this.#resolveWith<T>(token, this.#frame, []);
+    const result = this.#resolve<T>(token, this.#frame, [], false);
+    if (isPending(result)) {
+      throw new AsyncResolutionRequiredError(token);
+    }
+    return result;
+  }
+
+  /**
+   * Resolves asynchronously. Same spine, async mode: a lookup miss may be
+   * satisfied by an honest `Promise<T>` registration. Always returns a Promise;
+   * the Pending carrier never escapes. (`async` keyword: resolution errors
+   * surface as rejections, the natural channel for a Promise-returning API.)
+   */
+  public resolveAsync<T>(token: Token): Promise<T>;
+  public resolveAsync(token: Token): Promise<unknown>;
+  public async resolveAsync<T>(token?: Token): Promise<T> {
+    if (token === undefined) {
+      throw new TypeError(
+        "resolveAsync<T>() requires the @fnioc/transformer plugin (no token " +
+          'at runtime). Without it, resolve with an explicit token: ' +
+          'resolveAsync<T>("my:token").',
+      );
+    }
+    return settle(this.#resolve<T>(token, this.#frame, [], true)) as Promise<T>;
   }
 
   /**
@@ -287,7 +368,7 @@ export class ServiceProvider<S extends string = string>
    * → substitute → synthesize a `ClassRegistration` → memoize. Exact beats
    * open (this order IS the precedence rule). Never throws: a holey token
    * simply misses (so `#isResolvable` is false for it); the dedicated error is
-   * raised by `#resolveWith`.
+   * raised by `#resolve`.
    */
   #lookup(token: Token): Registration | undefined {
     const list = this.#registrations.get(token);
@@ -321,11 +402,10 @@ export class ServiceProvider<S extends string = string>
 
     // Synthesize the closed registration: the open registration's ctor + scope
     // tag, with the closing's arg tokens substituted through the template
-    // signatures. Carried signatures win; a signature-less open registration
-    // falls back to the ctor-keyed store — the manual `forCtor` hole-template
-    // path (one template per ctor: the store merges records, so two templates
-    // on one ctor would mix).
-    const template = match.open.signatures ?? getDeps(match.open.ctor)?.signatures;
+    // signatures carried on the open registration. A signature-less open
+    // registration has no template to substitute (a zero-arg ctor closes to a
+    // bare `new Ctor()`).
+    const template = match.open.signatures;
     // Substituting the carried signatures for this closing can fail when a
     // mis-authored template references a hole the service token never binds
     // (e.g. `IX<$1,$3>` carrying a dep on `$2`) — `substituteSignatures` throws
@@ -422,21 +502,44 @@ export class ServiceProvider<S extends string = string>
   // ── Resolution ──────────────────────────────────────────────────────────────
 
   /**
-   * The internal resolver. `vantage` is the scope frame the walk starts from.
-   * `stack` is the active resolution path (for cycle detection); it is shared
-   * across the whole `resolve()` call but never across separate calls.
+   * The spine. Owns the WHERE of resolution: cycle detection, lookup, the
+   * async fallback (the ONLY place async enters), scope ownership, caching,
+   * and single-flight. Construction mechanics live in `#instantiate`; slot
+   * dispatch lives in `#resolveSlot`, whose token arm is the spine's only
+   * re-entry point. Returns `T | Pending<T>` — the union is private and is
+   * collapsed by the two public methods.
+   *
+   * `vantage` is the scope frame the walk starts from. `stack` is the active
+   * resolution path (for cycle detection); it is shared across the whole
+   * `resolve()`/`resolveAsync()` call but never across separate calls. `async`
+   * gates whether the `Promise<T>` fallback can satisfy a lookup miss.
    */
-  #resolveWith<T>(
+  #resolve<T>(
     token: Token,
     vantage: Scope | undefined,
     stack: Token[],
-  ): T {
+    async: boolean,
+  ): T | Pending<T> {
     if (stack.includes(token)) {
       throw new CircularDependencyError([...stack, token]);
     }
 
     const registration = this.#lookup(token);
-    if (registration === undefined) {
+    if (!registration) {
+      // ── The async fallback — the only mint-site of a Pending from a raw
+      // promise. A missing T satisfied by its honest Promise<T> registration:
+      // resolve THAT (an ordinary direct hit — its cache entry is what makes
+      // overlapping resolveAsync calls share one construction) and carry it.
+      // Typing the inner resolve as T matches runtime truth: settle hands back
+      // a promise that fulfills with T (promise auto-flattening).
+      if (async) {
+        const promiseToken = closeToken("Promise", token);
+        if (this.#lookup(promiseToken)) {
+          return new Pending(
+            settle(this.#resolve<T>(promiseToken, vantage, stack, async)),
+          );
+        }
+      }
       // A holey token can never resolve — it is a template naming a FAMILY of
       // tokens. Distinguish that from a plain miss so the fix is actionable.
       if (isOpenToken(token)) {
@@ -445,50 +548,62 @@ export class ServiceProvider<S extends string = string>
       throw new UnregisteredTokenError(token);
     }
 
-    // useValue: the instance already exists; ownership/caching is moot.
+    // useValue: the instance already exists; ownership/caching is moot. A raw
+    // Promise<X> registered as a value returns here as an ordinary value.
     if (registration.kind === "value") {
       return registration.useValue as T;
     }
 
-    // Transient (no scope): never cached. Build relative to current vantage and
-    // return a fresh instance every time.
-    if (registration.scope === undefined) {
-      stack.push(token);
-      try {
-        return this.#instantiate<T>(token, registration, vantage, stack);
-      } finally {
-        stack.pop();
-      }
-    }
-
-    // Scoped: find the nearest enclosing OPEN frame tagged with this scope.
-    // No match ⇒ resolve TRANSIENTLY — fresh instance, no cache, no error.
-    // Scopes are uniform tags; a tag whose frame is not open is simply absent,
-    // and absence of a scope is transient (the same as an untagged registration).
+    // THE CENTRAL PRINCIPLE, as an expression: a scope tag with no matching
+    // OPEN frame yields no owner, and no owner means transient — fresh
+    // instance, no cache, no error. Untagged registrations take the same path.
     // The construct-relative-to-owner rule still holds: a longer-lived service
     // resolving a shorter-lived dep whose frame is not an ancestor gets a fresh
     // transient, never a captured cached instance.
-    const owner = ServiceProvider.#findOwner(vantage, registration.scope);
-    if (owner === undefined) {
-      stack.push(token);
-      try {
-        return this.#instantiate<T>(token, registration, vantage, stack);
-      } finally {
-        stack.pop();
+    const owner = registration.scope
+      ? ServiceProvider.#findOwner(vantage, registration.scope)
+      : undefined;
+
+    if (owner?.cache.has(token)) {
+      const hit = owner.cache.get(token) as T | Pending<T>;
+      if (isPending(hit) && !async) {
+        // A concurrent async construction is in flight; sync cannot wait.
+        throw new AsyncResolutionRequiredError(token);
       }
+      return hit;
     }
 
-    // Cache hit on the owner ⇒ return the cached instance (or Promise).
-    if (owner.cache.has(token)) {
-      return owner.cache.get(token) as T;
-    }
-
-    // Cache miss ⇒ construct relative to the OWNER, cache on the owner.
     stack.push(token);
     try {
-      const instance = this.#instantiate<T>(token, registration, owner, stack);
-      owner.cache.set(token, instance);
-      owner.owned.push(instance);
+      // Construct relative to the OWNER when one exists — the critical rule —
+      // otherwise relative to the current vantage (the transient path).
+      const instance = this.#instantiate<T>(
+        token,
+        registration,
+        owner ?? vantage,
+        stack,
+        async,
+      );
+      if (owner) {
+        // Single-flight: the entry (a Pending included) lands in the cache
+        // synchronously, before anything settles — overlapping resolveAsync
+        // calls share one construction. `owned` keeps the Pending itself so
+        // disposal sees what was actually produced.
+        owner.cache.set(token, instance);
+        owner.owned.push(instance);
+        if (isPending(instance)) {
+          // Self-upgrade on settle. The rejection no-op keeps this bookkeeping
+          // channel from raising an unhandled rejection — consumers hold the
+          // same promise and see the failure on their own channel. A rejected
+          // Pending stays cached: single-flight shares outcomes, failures too.
+          instance.promise.then(
+            (value) => {
+              owner.cache.set(token, value);
+            },
+            () => {},
+          );
+        }
+      }
       return instance;
     } finally {
       stack.pop();
@@ -496,20 +611,81 @@ export class ServiceProvider<S extends string = string>
   }
 
   /**
-   * Builds an instance for `registration`. `owningFrame` is the scope frame
-   * whose chain the dependencies are resolved against — THE critical rule.
+   * Owns the HOW of construction: metadata precedence, the no-metadata escape
+   * hatches, greedy (async-aware) signature selection, slot fill, and the
+   * fast/slow build. Collapses the former `#construct` / `#invokeFactory`.
+   * Never touches the cache or the stack — that is the spine's job.
+   * `owningFrame` is the scope frame whose chain the dependencies are resolved
+   * against — THE critical rule.
    */
   #instantiate<T>(
     token: Token,
     registration: ClassRegistration | FactoryRegistration,
     owningFrame: Scope | undefined,
     stack: Token[],
-  ): T {
-    if (registration.kind === "factory") {
-      return this.#invokeFactory<T>(token, registration.factory, owningFrame, stack);
+    async: boolean,
+  ): T | Pending<T> {
+    // Signatures ride solely on the registration record now — the global store
+    // is retired. Both class and factory registrations carry them.
+    const source =
+      registration.kind === "class" ? registration.ctor : registration.factory;
+    const signatures = registration.signatures;
+
+    if (!signatures?.length) {
+      if (registration.kind === "factory") {
+        // The plugin-less escape hatch: the live provider view is the sole
+        // argument.
+        return registration.factory(
+          this.#makeProviderView(owningFrame, stack),
+        ) as T;
+      }
+      if (registration.ctor.length) {
+        throw new MissingMetadataError(token, registration.ctor.name);
+      }
+      return new registration.ctor() as T;
     }
 
-    return this.#construct<T>(token, registration, owningFrame, stack);
+    const signature = this.#selectSignature(
+      token,
+      source.name,
+      signatures,
+      async,
+    );
+    const args = signature.map((slot) =>
+      this.#resolveSlot<unknown>(slot, owningFrame, stack, async),
+    );
+
+    const build: Func<[readonly unknown[]], T> = (builtArgs) => {
+      switch (registration.kind) {
+        case "class": {
+          return new registration.ctor(...(builtArgs as never[])) as T;
+        }
+        case "factory": {
+          return registration.factory(...builtArgs) as T;
+        }
+        default: {
+          return assertNever(registration);
+        }
+      }
+    };
+
+    // FAST path: no pending arg — build synchronously, identical to today.
+    if (!args.some(isPending)) {
+      return build(args);
+    }
+
+    // SLOW path: settle args SEQUENTIALLY (constructor/owned ordering is part
+    // of the contract — never Promise.all), then build. Only a Pending is
+    // awaited; a raw Promise arg is an honest value and passes through intact.
+    return new Pending(
+      (async () => {
+        const settled: unknown[] = [];
+        for (const arg of args) {
+          settled.push(isPending(arg) ? await arg.promise : arg);
+        }
+        return build(settled);
+      })(),
+    );
   }
 
   /**
@@ -527,7 +703,17 @@ export class ServiceProvider<S extends string = string>
               "runtime).",
           );
         }
-        return sp.#resolveWith<U>(depToken, owningFrame, stack);
+        // Sync mode never yields a Pending — the spine throws on a cached one.
+        return sp.#resolve<U>(depToken, owningFrame, stack, false) as U;
+      },
+      resolveAsync: async <U>(depToken?: Token): Promise<U> => {
+        if (depToken === undefined) {
+          throw new TypeError(
+            "resolveAsync<T>() requires the @fnioc/transformer plugin (no " +
+              "token at runtime).",
+          );
+        }
+        return settle(sp.#resolve<U>(depToken, owningFrame, stack, true)) as Promise<U>;
       },
       resolveFactory: (depToken: Token, depParams?: readonly Token[]): unknown =>
         sp.#makeFactory({ type: depToken, params: depParams }, owningFrame),
@@ -542,112 +728,6 @@ export class ServiceProvider<S extends string = string>
         );
       },
     } as Resolver & ScopeFactory<S>;
-  }
-
-  /**
-   * Invokes a factory registration under the metadata-vs-scope rule:
-   *   - factory WITH a `defineDeps` record → resolve each slot (token →
-   *     resolved instance, `ScopeRef` → the live provider view, `FactoryRef` →
-   *     an injected callable) and call `factory(...args)`;
-   *   - factory WITHOUT a record (the plugin-less escape hatch) → call
-   *     `factory(providerView)` with the live provider view as its sole argument.
-   * Deps resolve relative to `owningFrame` (the owning scope) — §5.4.
-   */
-  #invokeFactory<T>(
-    token: Token,
-    factory: Factory,
-    owningFrame: Scope | undefined,
-    stack: Token[],
-  ): T {
-    const providerView = this.#makeProviderView(owningFrame, stack);
-    const record = getDeps(factory);
-    if (record === undefined || !record.signatures.length) {
-      return factory(providerView) as T;
-    }
-
-    const signature = this.#selectSignature(
-      token,
-      factory.name,
-      record.signatures,
-      owningFrame,
-    );
-    const args = signature.map((slot) => {
-      if (isScopeRef(slot)) {return providerView;}
-      if (isFactoryRef(slot)) {return this.#makeFactory(slot, owningFrame);}
-      if (isUnion(slot)) {return this.#resolveUnion(slot, owningFrame, stack);}
-      if (isLiteralRef(slot)) {return slot.value;}
-      if (isTypeArgRef(slot)) {throw rawTypeArgError(slot);}
-      // Selection guarantees every remaining slot is a resolvable string token.
-      return this.#resolveWith<unknown>(slot as Token, owningFrame, stack);
-    });
-    return factory(...args) as T;
-  }
-
-  /**
-   * Constructs a class instance, resolving its constructor dependencies
-   * relative to `owningFrame`. Performs greedy signature selection over the
-   * ctor's DepRecord, then fills each slot:
-   *
-   *   - a string token → resolved through the owning frame's chain (selection
-   *     guarantees every string-token slot here is resolvable);
-   *   - a `FactoryRef` → injected as a callable (see `makeFactory`);
-   *   - a `ScopeRef` → the live provider view.
-   */
-  #construct<T>(
-    token: Token,
-    registration: ClassRegistration,
-    owningFrame: Scope | undefined,
-    stack: Token[],
-  ): T {
-    const ctor = registration.ctor;
-    // Registration-carried signatures win over the ctor-keyed store: a generic
-    // impl's one JS class object may be registered under many closings, each
-    // carrying its own (substituted) signatures.
-    const signatures = registration.signatures ?? getDeps(ctor)?.signatures;
-
-    // No metadata: a zero-arg ctor is `new`ed directly; a ctor with parameters
-    // and no record is a hard error with actionable guidance.
-    if (signatures === undefined || !signatures.length) {
-      if (ctor.length) {
-        throw new MissingMetadataError(token, ctor.name);
-      }
-      return new ctor() as T;
-    }
-
-    const signature = this.#selectSignature(token, ctor.name, signatures, owningFrame);
-
-    const providerView = this.#makeProviderView(owningFrame, stack);
-    const args = signature.map((slot) => {
-      if (isScopeRef(slot)) {
-        // A `Resolver`/`ScopeFactory`/`ResolveScope`-typed parameter: inject the
-        // live provider view (frame-bound to the owning scope).
-        return providerView;
-      }
-      if (isFactoryRef(slot)) {
-        // A factory-injected parameter: a callable that builds the target on demand,
-        // resolving the target's own deps relative to the owning frame so §5.4
-        // still holds at call time.
-        return this.#makeFactory(slot, owningFrame);
-      }
-      if (isUnion(slot)) {
-        // A union slot: try members in declaration order, return first resolvable.
-        return this.#resolveUnion(slot, owningFrame, stack);
-      }
-      if (isLiteralRef(slot)) {
-        // A singular literal (Rule 2): supply its value directly, no lookup.
-        return slot.value;
-      }
-      if (isTypeArgRef(slot)) {
-        // A raw TypeArgRef is an unclosed template slot — selection never
-        // accepts one, so reaching it here is a loud invariant break.
-        throw rawTypeArgError(slot);
-      }
-      // A string token — resolve it through the owning frame's chain. Selection
-      // guarantees every string-token slot here is resolvable.
-      return this.#resolveWith<unknown>(slot as Token, owningFrame, stack);
-    });
-
-    return new ctor(...(args as never[])) as T;
   }
 
   /**
@@ -689,7 +769,7 @@ export class ServiceProvider<S extends string = string>
     // A value target has no construction step — the "factory" is a thunk that
     // returns the stored instance (its lifetime is moot: a value is itself).
     if (target.kind === "value") {
-      return () => sp.#resolveWith<unknown>(ref.type, owningFrame, []);
+      return () => sp.#resolve<unknown>(ref.type, owningFrame, [], false);
     }
 
     const callerParams = ref.params !== undefined && ref.params.length
@@ -699,17 +779,14 @@ export class ServiceProvider<S extends string = string>
     if (callerParams === undefined) {
       // Strict zero-arg mode: every slot must resolve. Route through the normal
       // resolve path so the registered lifetime is respected.
-      return () => sp.#resolveWith<unknown>(ref.type, owningFrame, []);
+      return () => sp.#resolve<unknown>(ref.type, owningFrame, [], false);
     }
 
-    // Parameterized mode: the dep-metadata target is the ctor (class) or the
-    // factory function. Registration-carried signatures win over the ctor-keyed
-    // store (a synthesized closed-generic target carries its substituted
+    // Parameterized mode: the target's signatures ride on its registration
+    // record (a synthesized closed-generic target carries its substituted
     // signatures). Select the target signature and partition slots against the
     // caller-supplied params list.
-    const signatures = target.kind === "class"
-      ? target.signatures ?? getDeps(target.ctor)?.signatures
-      : getDeps(target.factory)?.signatures;
+    const signatures = target.signatures;
     const targetSignature =
       signatures === undefined || !signatures.length
         ? undefined
@@ -779,33 +856,26 @@ export class ServiceProvider<S extends string = string>
     const remainingParamIndices: number[] = callerParams.map((_, i) => i);
 
     const args = signature.map((slot) => {
-      if (isScopeRef(slot)) {return providerView;}
-      if (isFactoryRef(slot)) {return this.#makeFactory(slot, owningFrame);}
-      if (isUnion(slot)) {return this.#resolveUnion(slot, owningFrame, stack);}
-      if (isLiteralRef(slot)) {return slot.value;}
-      if (isTypeArgRef(slot)) {throw rawTypeArgError(slot);}
-
-      // String token slot: check if it is claimed by callerParams (caller wins,
-      // even if the token is also registered).
-      const token = slot as Token;
-      const matchIdx = remainingParamIndices.findIndex(
-        (pi) => callerParams[pi] === token,
-      );
-      if (matchIdx !== -1) {
-        const paramIdx = remainingParamIndices[matchIdx]!;
-        remainingParamIndices.splice(matchIdx, 1); // consume this param entry
-        return callArgs[paramIdx];
-      }
-
-      // Not claimed by callerParams. Must resolve from the container.
-      if (!this.#isResolvable(token)) {
-        throw new NoSatisfiableSignatureError(
-          token,
-          token,
-          [token],
+      if (typeof slot === "string") {
+        // String token slot: check if it is claimed by callerParams (caller
+        // wins, even if the token is also registered).
+        const matchIdx = remainingParamIndices.findIndex(
+          (pi) => callerParams[pi] === slot,
         );
+        if (matchIdx !== -1) {
+          const paramIdx = remainingParamIndices[matchIdx]!;
+          remainingParamIndices.splice(matchIdx, 1); // consume this param entry
+          return callArgs[paramIdx];
+        }
+
+        // Not claimed by callerParams. Must resolve from the container.
+        if (!this.#isResolvable(slot, false)) {
+          throw new NoSatisfiableSignatureError(slot, slot, [slot]);
+        }
+        return this.#resolve<unknown>(slot, owningFrame, stack, false);
       }
-      return this.#resolveWith<unknown>(token, owningFrame, stack);
+      // Every non-token kind delegates to THE switch, sync mode.
+      return this.#resolveSlot<unknown>(slot, owningFrame, stack, false);
     });
 
     return (
@@ -825,14 +895,16 @@ export class ServiceProvider<S extends string = string>
    *   - a `Union` — satisfiable iff at least one member is resolvable; or
    *   - a string token whose registration exists in the sealed map.
    *
-   * An unregistered string token is not satisfiable. Equal-arity ties break by
-   * registration order. None satisfiable ⇒ throw naming the unsatisfiable tokens.
+   * An unregistered string token is not satisfiable — unless `async` and its
+   * honest `Promise<T>` registration exists (the fallback the spine will take).
+   * Equal-arity ties break by registration order. None satisfiable ⇒ throw
+   * naming the unsatisfiable tokens.
    */
   #selectSignature(
     token: Token,
     targetName: string,
     signatures: readonly (readonly DepSlot[])[],
-    _owningFrame: Scope | undefined,
+    async: boolean,
   ): readonly DepSlot[] {
     // Stable sort by descending length; index keeps equal-arity ties in
     // registration order.
@@ -859,13 +931,13 @@ export class ServiceProvider<S extends string = string>
           // A union slot is satisfiable iff at least one member is resolvable.
           // When none is, surface its string-token members so the error names
           // exactly what to register.
-          if (!this.#isResolvableSlot(slot)) {
+          if (!this.#isResolvableSlot(slot, async)) {
             satisfiable = false;
             for (const token of unionTokenMembers(slot)) {unsatisfiable.add(token);}
           }
           continue;
         }
-        if (!this.#isResolvable(slot)) {
+        if (!this.#isResolvable(slot, async)) {
           satisfiable = false;
           if (typeof slot === "string") {unsatisfiable.add(slot);}
         }
@@ -896,48 +968,73 @@ export class ServiceProvider<S extends string = string>
   }
 
   /**
-   * True when `slot` is a registered string token in the sealed map. A
+   * True when `slot` is a registered string token — or, in `async` mode,
+   * satisfiable via the honest `Promise<T>` fallback the spine would take. A
    * `FactoryRef`, `ScopeRef`, or `Union` is not tested here — use
    * `isResolvableSlot` for a full slot check.
    */
-  #isResolvable(slot: DepSlot): boolean {
-    return typeof slot === "string" && this.#lookup(slot) !== undefined;
+  #isResolvable(slot: DepSlot, async: boolean): boolean {
+    if (typeof slot !== "string") {
+      return false;
+    }
+    if (this.#lookup(slot)) {
+      return true;
+    }
+    return async && !!this.#lookup(closeToken("Promise", slot));
   }
 
   /**
    * True when a slot is resolvable in ANY form:
    *   - `FactoryRef` / `ScopeRef` / `LiteralRef` — always satisfiable (injected);
    *   - `Union` — satisfiable iff at least one member is resolvable (recursive);
-   *   - string token — registered in the sealed map.
+   *   - string token — registered in the sealed map, or (async) via the
+   *     `Promise<T>` fallback.
    */
-  #isResolvableSlot(slot: DepSlot): boolean {
+  #isResolvableSlot(slot: DepSlot, async: boolean): boolean {
     if (isFactoryRef(slot) || isScopeRef(slot) || isLiteralRef(slot)) {return true;}
     if (isTypeArgRef(slot)) {return false;}
     if (isUnion(slot)) {
-      return slot.union.some((member) => this.#isResolvableSlot(member as DepSlot));
+      return slot.union.some((member) =>
+        this.#isResolvableSlot(member as DepSlot, async),
+      );
     }
-    return this.#isResolvable(slot);
+    return this.#isResolvable(slot, async);
   }
 
   /**
-   * Resolves a `Union` slot: tries each member in declaration order and returns
-   * the first one that resolves. A member that is statically not resolvable
-   * (`#isResolvableSlot` is false — an unregistered token, or a FactoryRef whose
-   * target is unregistered) is skipped immediately. A member that IS resolvable
-   * but THROWS at resolution time — a cycle, a missing nested dep, or any other
-   * failure to actually build it — is caught and treated as "did not resolve",
-   * so the union falls through to the next member. Only when every member is
-   * exhausted does it throw `NoSatisfiableUnionError`.
+   * First-resolvable union. ONE loop serves both modes. In sync mode a member
+   * either returns or throws (a Pending is impossible — the sync spine throws
+   * on a cached one), so the loop degenerates to today's exact skip/try/catch.
+   * In async mode a pending member wins only by SETTLING: on rejection the
+   * carried promise re-enters this same method on the REMAINING members —
+   * per-member sequential await+catch, expressed as recursion instead of a
+   * second loop. The deferred re-entry runs against a snapshot of the path (the
+   * live stack has unwound by the time a rejection lands).
    */
   #resolveUnion<T>(
     slot: Union,
     owningFrame: Scope | undefined,
     stack: Token[],
-  ): T {
-    for (const member of slot.union) {
-      if (!this.#isResolvableSlot(member as DepSlot)) {continue;}
+    async: boolean,
+    members: readonly DepSlot[] = slot.union as readonly DepSlot[],
+  ): T | Pending<T> {
+    for (let i = 0; i < members.length; i++) {
+      const member = members[i]!;
+      if (!this.#isResolvableSlot(member, async)) {
+        continue;
+      }
       try {
-        return this.#resolveSlot<T>(member as DepSlot, owningFrame, stack);
+        const result = this.#resolveSlot<T>(member, owningFrame, stack, async);
+        if (!isPending(result)) {
+          return result;
+        }
+        const rest = members.slice(i + 1);
+        const snapshot = [...stack];
+        return new Pending(
+          result.promise.catch(() =>
+            settle(this.#resolveUnion<T>(slot, owningFrame, snapshot, true, rest)),
+          ),
+        );
       } catch {
         // Member resolvable in principle but failed to build (cycle, missing
         // nested dep, …) — fall through to the next candidate.
@@ -948,20 +1045,41 @@ export class ServiceProvider<S extends string = string>
   }
 
   /**
-   * Resolves a single `DepSlot` to its value, dispatching on slot kind.
-   * Used by `resolveUnion` to recurse into members.
+   * THE slot dispatch — the single copy of the 6-way switch, shared by the
+   * spine's arg fill, union member resolution, and `#buildPartitioned`. The
+   * token arm is the only canonical recursion re-entry into `#resolve`.
+   * (TS cannot narrow through the external classifier, hence the per-arm casts.)
    */
   #resolveSlot<T>(
     slot: DepSlot,
     owningFrame: Scope | undefined,
     stack: Token[],
-  ): T {
-    if (isScopeRef(slot)) {return this.#makeProviderView(owningFrame, stack) as T;}
-    if (isFactoryRef(slot)) {return this.#makeFactory(slot, owningFrame) as T;}
-    if (isUnion(slot)) {return this.#resolveUnion<T>(slot, owningFrame, stack);}
-    if (isLiteralRef(slot)) {return slot.value as T;}
-    if (isTypeArgRef(slot)) {throw rawTypeArgError(slot);}
-    return this.#resolveWith<T>(slot as Token, owningFrame, stack);
+    async: boolean,
+  ): T | Pending<T> {
+    const kind = slotKind(slot);
+    switch (kind) {
+      case "scope": {
+        return this.#makeProviderView(owningFrame, stack) as T;
+      }
+      case "factory": {
+        return this.#makeFactory(slot as FactoryRef, owningFrame) as T;
+      }
+      case "union": {
+        return this.#resolveUnion<T>(slot as Union, owningFrame, stack, async);
+      }
+      case "literal": {
+        return (slot as LiteralRef).value as T;
+      }
+      case "typearg": {
+        throw rawTypeArgError(slot as TypeArgRef);
+      }
+      case "token": {
+        return this.#resolve<T>(slot as Token, owningFrame, stack, async);
+      }
+      default: {
+        return assertNever(kind);
+      }
+    }
   }
 
   // ── Disposal ────────────────────────────────────────────────────────────────
@@ -981,7 +1099,10 @@ export class ServiceProvider<S extends string = string>
     const owned = this.#frame?.owned ?? [];
 
     for (const instance of owned) {
-      if (isThenable(instance)) {
+      // A Pending (in-flight or settled — `owned` is never upgraded) and a raw
+      // owned promise both demand disposeAsync. isThenable lives ONLY here in
+      // disposal — the resolver proper has no thenable sniffing.
+      if (isPending(instance) || isThenable(instance)) {
         throw new AsyncDisposalRequiredError();
       }
     }
@@ -1008,11 +1129,29 @@ export class ServiceProvider<S extends string = string>
 
     const owned = this.#frame?.owned ?? [];
 
-    // Resolve any Promise-valued instances to their settled values so the
-    // disposer sees the real object, not the wrapper.
+    // Resolve any in-flight (Pending) or Promise-valued instances to their
+    // settled values so the disposer sees the real object, not the wrapper.
     const settled: unknown[] = [];
     for (const instance of owned) {
-      settled.push(isThenable(instance) ? await instance : instance);
+      // Guard each owned settle: a REJECTED owned Pending/thenable produced
+      // nothing to dispose, and must not abort teardown of its siblings
+      // (#disposed is already set, so an unguarded throw would leak every other
+      // owned Disposable).
+      if (isPending(instance)) {
+        try {
+          settled.push(await instance.promise);
+        } catch {
+          /* build rejected; nothing to dispose */
+        }
+      } else if (isThenable(instance)) {
+        try {
+          settled.push(await instance);
+        } catch {
+          /* build rejected; nothing to dispose */
+        }
+      } else {
+        settled.push(instance);
+      }
     }
 
     for (let i = settled.length - 1; i >= 0; i--) {

@@ -1,6 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { ServiceManifest, forCtor, union } from "@fnioc/di";
-import { getDeps } from "@fnioc/core";
+import { ServiceManifest, union } from "@fnioc/di";
 import { T } from "./fixtures.js";
 
 // Builder edge cases + the one-import re-export ergonomics.
@@ -38,27 +37,18 @@ describe("re-exports from @fnioc/core", () => {
     expect(slot).toEqual({ union: ["pkg:IA", "pkg:IB"] });
   });
 
-  test("forCtor writes a DepRecord for a class you don't own", () => {
-    class ThirdParty {
-      public constructor(public readonly db: unknown) {}
-    }
-    forCtor(ThirdParty).signature(T.Db);
-    const rec = getDeps(ThirdParty);
-    expect(rec?.signatures).toContainEqual([T.Db]);
-  });
-
-  test("a forCtor-annotated class resolves through the engine end to end", () => {
+  test("a hand-fed inline signature resolves through the engine end to end", () => {
     class DbImpl {
       public readonly kind = "db";
     }
     class Consumer {
       public constructor(public readonly db: DbImpl) {}
     }
-    forCtor(Consumer).signature(T.Db);
 
     const services = new ServiceManifest<"singleton">();
     services.add(T.Db, DbImpl).as("singleton");
-    services.add(T.Service, Consumer).as("singleton");
+    // Signature ride on the registration (third `add` argument).
+    services.add(T.Service, Consumer, [[T.Db]]).as("singleton");
 
     const c = services.build().resolve<Consumer>(T.Service);
     expect(c.db).toBeInstanceOf(DbImpl);

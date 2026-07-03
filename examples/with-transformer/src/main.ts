@@ -7,8 +7,9 @@
 // (`services.add<IGreeter>(Greeter)`, no runtime token), resolution is tokenless
 // (`resolve<IGreeter>()`), and open generics use `$<N>` / `Typeof<T>`
 // placeholders. At build time @fnioc/transformer rewrites each call to its
-// explicit-token form and injects the `defineDeps(...)` prelude. Inspect
-// `dist/with-transformer/src/main.js` after building to see the lowered output.
+// explicit-token form, carrying the derived dep signature INLINE as the `add`
+// call's third argument. Inspect `dist/with-transformer/src/main.js` after
+// building to see the lowered output.
 //
 // The transformer lowers TOP-LEVEL `.add(...)` / `.resolve(...)` statements, so
 // every registration and resolve below sits at module scope or reads a

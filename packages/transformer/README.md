@@ -4,7 +4,7 @@ The build-time `ts-patch` transformer for `ioc`. It accesses the TypeScript `Typ
 
 1. **Token generation** — derives a stable string token from each TypeScript interface type.
 2. **Dep extraction** — reads constructor parameter types and converts them to token arrays.
-3. **Registration lowering** — rewrites `services.add<IFoo>(Foo).as<"scope">()` to its plain-data runtime equivalent, emitting `defineDeps(Foo, [[...tokens]])` immediately before each registration.
+3. **Registration lowering** — rewrites `services.add<IFoo>(Foo).as<"scope">()` to its plain-data runtime equivalent, emitting the derived dependency signature inline as the registration call's third argument (`add("token", Foo, [[...tokens]])`).
 
 The result is the portable substrate: libraries compile once with the transformer and publish the lowered JS. Consumers without the transformer use that output directly.
 
@@ -127,7 +127,7 @@ pkg:IFoo<pkg:IBar<./src/Baz>>
 ```
 
 - **Generic types always tokenize fully applied.** A bare mention of `IFoo` where `interface IFoo<T = string>` resolves via the checker to `IFoo<string>` and tokenizes closed: `pkg:IFoo<string>`. Type-parameter defaults arrive pre-applied — you don't need to write `IFoo<string>` explicitly.
-- **`Promise<X>` unwrap is preserved exactly as today** — at the top level (a constructor parameter or factory return typed `Promise<IDb>` maps to the `IDb` token) and nowhere else. **Inside a type argument, there is no unwrap**: `IFoo<Promise<X>>` tokenizes `Promise<...>` applied like any other generic — `pkg:IFoo<Promise<pkg:X>>`.
+- **`Promise<X>` tokenizes honestly, at every depth — there is no unwrap, anywhere.** A constructor parameter or factory return typed `Promise<IDb>` derives the token `Promise<pkg:IDb>`, distinct from `pkg:IDb`; this holds uniformly whether `Promise<X>` is the top-level dep type or nested inside a type argument (`IFoo<Promise<X>>` tokenizes as `pkg:IFoo<Promise<pkg:X>>`). See [`@fnioc/di`](../di/README.md#async-resolution) for how `resolve`/`resolveAsync` bridge a bare-`X` dependency to its `Promise<X>` registration.
 - **Default-lib types tokenize by their bare name.** A type argument whose primary declaration lives in a TypeScript default-lib file (`Promise`, `Map`, …) tokenizes as the bare symbol name rather than an absolute path — `Promise<pkg:X>`, not a machine-dependent lib path.
 - **Alias-wins is preserved.** `type UserRepo = IRepository<User>` tokenizes as the alias (`./src/UserRepo`), **not** the closed form `pkg:IRepository<pkg:User>` — consistent with the named-vs-inline union rule (see the wiki). This applies whenever the reference carries an alias symbol with no directly-applied type arguments of its own; loudly documented because it's easy to expect the opposite.
 
@@ -202,13 +202,13 @@ For an **open** binding (`T` is a hole), the transformer emits a `{ typeArg: N }
 
 ### Registration-carried dep signatures
 
-Generic implementations — open templates and closed registrations made via an instantiation expression alike — can't use the usual ctor-keyed `defineDeps` emission: the dep-metadata store is keyed on the ctor **object**, and the same class backing two closings (or two templates) would collide there. Instead, the transformer emits the signatures literal directly as a **third argument to `add()`**, and skips both the `defineDeps` call and the `const ɵregN = …` hoist entirely:
+Every registration's dependency signature — generic or not — rides directly on the registration as the **third argument to `add()`** (or `addFactory()`); there's no separate metadata call and nothing hoisted. Keying the signature on the registration record rather than the shared, erased ctor function is what lets one generic implementation back any number of independent closings or templates without collision:
 
 ```ts
 // Author
 services.add<IRepository<$<1>>>(SqlRepository<$<1>>);
 
-// Lowered — no hoist, no defineDeps; the signature lives on the registration
+// Lowered — the signature rides inline on the registration
 services.add("pkg:IRepository<$1>", SqlRepository, [
   ["pkg:IDbConnection", { typeArg: 1 }],
 ]);
@@ -224,7 +224,7 @@ services.add("pkg:IRepository<pkg:User>", SqlRepository, [
 ]);
 ```
 
-**Non-generic registrations are unaffected** — they keep today's hoist + `defineDeps` emission, byte-for-byte. This is a regression-gated guarantee, not an incidental side effect. See [`@fnioc/di`](../di/README.md#open-generics) for how the runtime resolves and closes these against resolve-time type arguments.
+**Non-generic registrations use exactly the same mechanism** — see [What gets lowered](#what-gets-lowered) below for a plain (non-generic) example lowered the identical way. See [`@fnioc/di`](../di/README.md#open-generics) for how the runtime resolves and closes these against resolve-time type arguments.
 
 ---
 
@@ -235,11 +235,11 @@ For each `services.add<IFoo>(Foo).as<"scope">()` call the transformer finds, it:
 1. Reads `Foo`'s constructor parameter types via the TypeChecker.
 2. Derives a slot per parameter:
    - Interfaces, class types, named type aliases, and named built-ins (`string`, `number`, `boolean`, `symbol`, `bigint`, `any`, `unknown`, `never`) → string token per the derivation rule above (named built-ins tokenize by keyword name). An unregistered token is a runtime miss, not a compile error.
-   - `Promise<X>` → token for `X` (not a `Promise<X>` token — see below).
+   - `Promise<X>` → the honest token `Promise<...X>`, never unwrapped — see below.
    - **Inline function types** (`() => IFoo`, `(a: B) => IFoo`) → `{ type: "pkg:IFoo" }` (a `FactoryRef` — see factory detection below).
    - **Inline union types** (`A | B` written directly at the annotation site) → `{ union: ["pkg:A", "pkg:B"] }` (a `Union` slot — see named vs inline unions below).
    - **Anonymous inline structural types** (no name, no `Inject` brand) → **hard compile error** (990006 `UnderivableToken`): "name this type or brand it with `Inject<T, 'token'>`."
-3. Emits `defineDeps(Foo, [[...slots]])` immediately before the registration call.
+3. Emits the derived signature array inline as the registration call's third argument — no separate prelude call, nothing hoisted.
 4. Rewrites the call from the type-driven form to the plain-data form.
 
 ```ts
@@ -250,25 +250,28 @@ services.add<IUserRepo>(SqlUserRepo).as<"request">();
 // use Inject<string, "app:tableName"> to pin a custom token, or supply a registration override
 
 // Lowered output (with table branded as Inject<string, "app:tableName">)
-defineDeps(SqlUserRepo, [["pkg:ILogger", "pkg:IDbConnection", "app:tableName"]]);
-services.add("pkg:IUserRepo", SqlUserRepo).as("request");
+services.add("pkg:IUserRepo", SqlUserRepo, [
+  ["pkg:ILogger", "pkg:IDbConnection", "app:tableName"],
+]).as("request");
 ```
 
 For a class with a single constructor, the transformer emits exactly one signature. For a class with declared overloads, it emits one signature per bodyless overload declaration in order — the implementation signature is ignored (it is not caller-visible).
 
-### `Promise<X>` unwrap
+### `Promise<X>` — the honest token split
 
-A constructor parameter typed `Promise<IDb>` maps to the same token as `IDb`: `"pkg:IDb"`. The container caches whatever the factory returns, which may be a `Promise`. The consumer's dep is `Promise<IDb>`, but the token is `"pkg:IDb"` — Promise-ness lives in the factory's return, not in the token.
+A constructor parameter or factory return typed `Promise<IDb>` derives the token `Promise<pkg:IDb>` — Promise-ness is part of the type identity, never unwrapped away, at any depth. A bare `IDb`-typed dep and a `Promise<IDb>`-typed dep are therefore two distinct tokens with two distinct registrations. See [`@fnioc/di`](../di/README.md#async-resolution) for how `resolve` / `resolveAsync` bridge the two — a bare-`IDb` dependency can still be satisfied through its `Promise<IDb>` registration, but only via `resolveAsync`.
 
 ---
 
 ## Factory detection
 
-A constructor parameter whose type annotation is an **inline function-type literal** (`ts.FunctionTypeNode`) is detected as a factory and emitted as `{ type: "<token>" }` in the `defineDeps` signature. The token is derived from the return type after unwrapping any `Promise<X>`. An optional `params` field lists the inline factory's caller-supplied parameter tokens in authored order.
+A constructor parameter whose type annotation is an **inline function-type literal** (`ts.FunctionTypeNode`) is detected as a factory and emitted as `{ type: "<token>" }` in the registration's inline signature array. The token is derived from the return type honestly — a `Promise<X>` return is **not** unwrapped, so an async factory type keys on the `Promise<X>` token, not `X`. An optional `params` field lists the inline factory's caller-supplied parameter tokens in authored order.
 
 ```ts
 // Inline function-type annotation → factory ref keyed on "pkg:IDb"
 constructor(makeDb: () => IDb) { ... }
+
+// Async inline function-type → factory ref keyed on "Promise<pkg:IDb>", not "pkg:IDb"
 constructor(makeDb: (id: string) => Promise<IDb>) { ... }
 
 // Named type reference → normal token "pkg:IDbFactory", NOT a factory
@@ -289,8 +292,10 @@ class RequestHandler {
   ) {}
 }
 
-// Lowered output
-defineDeps(RequestHandler, [["pkg:ILogger", { type: "pkg:IDb" }]]);
+// Lowered output — the signature rides on the registration itself
+services.add("pkg:RequestHandler", RequestHandler, [
+  ["pkg:ILogger", { type: "pkg:IDb" }],
+]);
 ```
 
 With caller-supplied params:
@@ -305,7 +310,9 @@ class RequestHandler {
 }
 
 // Lowered output — params lists the caller-supplied token(s)
-defineDeps(RequestHandler, [["pkg:ILogger", { type: "pkg:IUserRepo", params: ["app:tableName"] }]]);
+services.add("pkg:RequestHandler", RequestHandler, [
+  ["pkg:ILogger", { type: "pkg:IUserRepo", params: ["app:tableName"] }],
+]);
 ```
 
 ---
@@ -338,26 +345,22 @@ Registering `IRedis` or `IMemoryCache` separately does nothing for a `CacheProvi
 
 ---
 
-## Already-annotated classes
+## Manual escape hatch
 
-When the transformer encounters a class that already has a `forCtor` annotation, it treats the manual annotation as **authoritative**:
-
-- It skips dep extraction and `defineDeps` emission for that class.
-- It emits an **info diagnostic** — never silent, never double-writes.
-
-This is the opt-out path. Hand-annotate a class with `forCtor` to take full control of its signature, and the transformer will step aside.
+There's no annotation that makes the transformer skip a class, because there's nothing left to opt out of centrally — a signature lives on the registration that emits it, not on the class. The transformer only ever rewrites the **type-driven** authoring forms (`add<I>(...)`, `addValue<I>(...)`, the per-scope `add${Scope}<I>(...)` methods, `.as<"x">()`). Write the already-lowered, explicit-token form directly — `add("my:token", MyClass, [[...]])` — and the transformer leaves the call alone: it only matches a registration call whose value argument is a type-driven expression, never one whose first argument is already a string literal.
 
 ---
 
 ## Fully-dynamic classes
 
-If the transformer cannot statically inspect a constructor (a class reference passed through a variable, a dynamically-constructed class), it emits no `defineDeps` call. At resolve time, `@fnioc/di` checks the global-symbol Map and throws with guidance if the constructor has parameters but no record:
+If the transformer cannot statically inspect a constructor (a class reference passed through a variable, a dynamically-constructed class), it emits no signature array — the registration lowers with just its required `token`/`ctor` arguments. At resolve time, `@fnioc/di` throws with guidance if the constructor has parameters but no signature on its registration:
 
 ```
 No dep metadata found for <ClassName> (resolving "<token>"). The
-constructor has parameters but no forCtor or transformer-generated
-defineDeps call was found. Use forCtor(...).signature(...) or register
-it with useFactory to wire it manually.
+constructor has parameters but no dep signature was found on its
+registration. Pass the signature as the third add argument
+(add(token, ctor, [[...]])), compile with @fnioc/transformer, or
+register it with a factory.
 ```
 
 A genuine zero-argument constructor is `new`ed directly without a dep lookup.
@@ -379,29 +382,6 @@ constructor. List exactly those, in order.
 ```
 
 This is the primary value-add of running the transformer: compile-time feedback when a factory's declared arity doesn't match what the container will actually expose at runtime.
-
-### Async mismatch (code 990004)
-
-A constructor parameter typed as a bare interface (`IDb`) when the token is registered via an async `useFactory` (one returning `Promise<IDb>`). The container hands back the `Promise` verbatim, so the parameter must be declared `Promise<IDb>` and awaited by the consumer:
-
-```
-Dependency "db" is registered async, so the container returns a Promise.
-Declare it as Promise<IDb> and await it where you use it.
-```
-
-This check fires only when the `useFactory` for the same token is visibly `async` or has an annotated `Promise<...>` return type in the same file.
-
-### Equal-arity overload ambiguity (code 990005)
-
-Two manually-registered constructor signatures (via chained `forCtor(...).signature(...)` calls) have the same length. The engine's greedy selection picks overloads by argument count, so two same-length signatures cannot be distinguished:
-
-```
-MyService has two constructor signatures of the same length (2). The
-container picks an overload by argument count, so it cannot tell them
-apart. Give them different lengths.
-```
-
-This check runs on all registrations, including manually-annotated ones.
 
 ### Underivable token (code 990006)
 
@@ -471,4 +451,4 @@ Fix: add the missing hole to the service token, or replace the dependency's refe
 The transformer is not required to *use* `@fnioc/di`. It automates annotation for classes you own. When you don't have the transformer configured:
 
 - Libraries compiled with the transformer publish plain-data lowered JS — their registrations work without any plugin on the consumer side.
-- For your own classes, use `useFactory`/`useValue`, or `forCtor`. See [`@fnioc/di`](../di/README.md) and [`@fnioc/core`](../core/README.md) for those APIs.
+- For your own classes, use `addFactory`/`addValue`, or hand-write the registration's own signature array (`add(token, ctor, [[...]])`). See [`@fnioc/di`](../di/README.md) and [`@fnioc/core`](../core/README.md) for those APIs.

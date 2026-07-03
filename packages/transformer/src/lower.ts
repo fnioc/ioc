@@ -1,24 +1,20 @@
-// Registration lowering + `defineDeps` emission (PRD §8).
+// Registration lowering + inline signature emission (PRD §8).
 //
 // Three registration methods are lowered, all type-arg → string-token:
-//   - `add<I>(C)`      [constructable] → `add("<token>", …)`        (class)
-//   - `add<I>(fn)`     [callable]      → `addFactory("<token>", …)`  (factory)
-//   - `addValue<I>(v)`                 → `addValue("<token>", v)`     (value)
+//   - `add<I>(C)`      [constructable] → `add("<token>", C, [[...]])`         (class)
+//   - `add<I>(fn)`     [callable]      → `addFactory("<token>", fn, [[...]])`  (factory)
+//   - `addValue<I>(v)`                 → `addValue("<token>", v)`              (value)
 // Plus every `.as<"x">()` → `.as("x")` in the chain.
 //
-// HOISTING (the safety invariant): whenever a registration emits a
-// `defineDeps(...)` (a class or factory with a derivable signature), the arg is
-// FIRST hoisted into a `const ɵregN = <arg>` and BOTH the `defineDeps(ɵregN, …)`
-// and the `add`/`addFactory("token", ɵregN)` reference that one const. This
-// guarantees the arg is evaluated exactly once and that metadata is keyed on the
-// SAME object the registration uses — for ANY arg shape (inline lambda, named
-// function/class reference, `fn.bind(x)`, `getCtor()`, …). We never try to
-// decide which args are "safe to reference twice"; if we emit deps, we hoist.
+// SIGNATURES RIDE ON THE REGISTRATION: whenever a class/factory registration has
+// a statically derivable signature, it is emitted INLINE as the registration
+// call's THIRD argument (`add(token, ctor, [[...sig...]])`). The global metadata
+// store is retired — there is no separate `defineDeps(...)` prelude and no hoist:
+// the signature travels with the registration, keyed on the registration record
+// rather than the ctor object, so one JS class closes differently per registration.
 //
-// A dynamic arg with no statically derivable signature gets no dep array and no
-// hoist (a single use) — the runtime throws with guidance if it needs metadata.
-// An already-`forCtor`-annotated class is left to its own metadata
-// (skip emission + info diagnostic).
+// A dynamic arg with no statically derivable signature gets no signature array —
+// the runtime throws with guidance if it needs metadata (a nonzero-arg ctor).
 
 import ts from "typescript";
 import { isOpenToken, parseToken } from "@fnioc/core";
@@ -40,15 +36,12 @@ import {
   type Slot,
 } from "./deps.js";
 import {
-  checkAnnotatedFactoryParams,
   checkExtractedRegistration,
-  checkOverloads,
   type CheckContext,
 } from "./checks.js";
 import {
   DiagnosticCode,
   error,
-  info,
   type DiagnosticSink,
 } from "./diagnostics.js";
 
@@ -56,29 +49,6 @@ export interface LowerContext extends CheckContext, DepContext {
   readonly factory: ts.NodeFactory;
   readonly sink: DiagnosticSink;
   readonly sourceFile: ts.SourceFile;
-  /** Class declarations annotated via a `forCtor(C)` call in this file. */
-  readonly forCtorAnnotated: ReadonlySet<ts.Symbol>;
-  /**
-   * Mint a fresh identifier for an emitted `defineDeps(...)` call. Each call
-   * gets its OWN identifier node (a node may appear once in the tree). The
-   * lowered form targets ESM output, where a bare `defineDeps(...)` call paired
-   * with the injected named import is exactly correct. CJS output is NOT
-   * supported: TypeScript's module transformer rewrites a named import to a
-   * namespace property access (`core_1.defineDeps`) only for references it
-   * resolved through the binder, and these synthesized calls were never bound,
-   * so they would dangle. See transformer.ts (`injectDefineDepsImport`) for the
-   * full caveat — until that is resolved, compile to ESM.
-   */
-  makeDefineDepsRef(): ts.Identifier;
-  /** Set true whenever a registration is lowered (so we inject the import). */
-  markUsedDefineDeps(): void;
-  /**
-   * A fresh, stable identifier NAME for a hoisted registration const (`ɵreg0`,
-   * `ɵreg1`, …) — unique per source file. Callers mint a fresh identifier node
-   * per use site (the const declaration and the registration reference), so no
-   * node is shared across the tree.
-   */
-  nextHoistName(): string;
 }
 
 /** A method that the transformer lowers, keyed by its callee name. */
@@ -129,11 +99,6 @@ interface RegPlan {
   /** The runtime method to emit (`add` may be rewritten from an `add<I>(fn)`). */
   readonly calleeMethod: "add" | "addFactory" | "addValue";
   /**
-   * When set, the registration's single value arg becomes this hoisted const's
-   * identifier instead of the original expression.
-   */
-  readonly hoistName?: string;
-  /**
    * A per-scope authoring tag (`addRequest` → `"request"`). When set, the lowered
    * call is wrapped in `.as(scope)` — the scope was baked into the source method
    * name rather than written as a fluent `.as<"request">()` continuation.
@@ -142,25 +107,22 @@ interface RegPlan {
   /**
    * When set, the registration's value arg becomes this expression — the plain
    * ctor of an instantiation expression (`SqlRepository<$<1>>` → `SqlRepository`,
-   * type args stripped). Mutually exclusive with `hoistName` (a generic impl
-   * carries its deps on the registration, so nothing keys on the ctor object
-   * and no hoist is needed).
+   * type args stripped). Otherwise the original value arg is kept verbatim.
    */
   readonly valueOverride?: ts.Expression;
   /**
    * Registration-carried dep signatures — emitted as the THIRD argument of the
-   * lowered `add(token, ctor, signatures)` call, with NO `defineDeps` prelude.
-   * Set for generic impls (open or closed via an instantiation expression),
-   * whose ctor-keyed metadata would collide across closings/templates.
+   * lowered `add(token, ctor, signatures)` / `addFactory(token, fn, signatures)`
+   * call. The sole signature channel now that the global store is retired.
    */
   readonly signatures?: Signature[];
 }
 
 /**
  * If `statement` is an expression statement containing one or more registration
- * chains, return the lowered statement plus any hoisted-const + `defineDeps(...)`
- * statements to insert before it. Returns `undefined` when the statement is not
- * a registration (the caller leaves it untouched).
+ * chains, return the lowered statement. Signatures ride inline on each lowered
+ * registration call (no separate prelude). Returns `undefined` when the statement
+ * is not a registration (the caller leaves it untouched).
  */
 export function lowerStatement(
   statement: ts.Statement,
@@ -171,7 +133,6 @@ export function lowerStatement(
   const registrations = findRegistrationCalls(statement.expression);
   if (!registrations.length) {return undefined;}
 
-  const preludes: ts.Statement[] = [];
   const plans = new Map<ts.CallExpression, RegPlan>();
 
   for (const reg of registrations) {
@@ -201,7 +162,7 @@ export function lowerStatement(
         ),
       );
     }
-    const plan = planAddRegistration(reg, token, shape, ctx, preludes);
+    const plan = planAddRegistration(reg, token, shape, ctx);
     // A per-scope authoring method (`addRequest(C)`) bakes its scope into the
     // method name; carry it so the lowered call gains a trailing `.as(scope)`.
     plans.set(reg.call, reg.scope === undefined ? plan : { ...plan, scope: reg.scope });
@@ -217,7 +178,7 @@ export function lowerStatement(
     loweredExpr,
   );
 
-  return [...preludes, loweredStatement];
+  return [loweredStatement];
 }
 
 /**
@@ -358,12 +319,9 @@ function applyOverrides(
     if (ts.isStringLiteralLike(elem)) {
       result[i] = elem.text;
     } else if (ts.isObjectLiteralExpression(elem)) {
-      // Pass through verbatim as a slot string — the caller emits via slotLiteral,
-      // but we don't parse complex object literals at compile time. Instead we
-      // leave the base derived token at position i and let the runtime-time
-      // `forCtor(C).signature(...)` override path handle complex cases.
-      // This is a best-effort merge for the common string-token override case.
-      // For the test contract, we document that string overrides are supported.
+      // We don't parse complex object literals at compile time. Leave the base
+      // derived token at position i; this is a best-effort merge for the common
+      // string-token override case.
     }
     // For other expression types (variables, calls), we can't statically resolve.
   }
@@ -501,20 +459,18 @@ function emitOpenTokenError(
 /**
  * Plan an `add` / `addFactory` registration: pick the runtime method
  * (constructable → `add`, callable → `addFactory`) and, when a dep signature is
- * statically derivable, hoist the arg + emit `defineDeps` against the const.
+ * statically derivable, carry it ON THE REGISTRATION as the inline third
+ * argument (`add(token, ctor, [[...]])` / `addFactory(token, fn, [[...]])`).
  *
  * A GENERIC impl — an instantiation expression (`SqlRepository<$<1>>`,
- * `Foo<string>`) — instead carries its dep signatures ON THE REGISTRATION (the
- * third `add()` argument): its ctor-keyed metadata would collide across
- * closings/templates, so no `defineDeps` and no hoist are emitted, and the
- * lowered call passes the plain ctor with type args stripped.
+ * `Foo<string>`) — passes the plain ctor with type args stripped (via
+ * `valueOverride`); every other class/factory keeps its original value arg.
  */
 function planAddRegistration(
   reg: FoundReg,
   token: string | undefined,
   shape: ServiceTokenShape,
   ctx: LowerContext,
-  preludes: ts.Statement[],
 ): RegPlan {
   const arg = reg.arg;
   const overrideArg = reg.overrideArg;
@@ -525,7 +481,7 @@ function planAddRegistration(
     if (openToken) {emitOpenTokenError(token, "addFactory", reg, ctx);}
     const signatures = extractSignatureFromFunction(arg, ctx);
     checkDepHoles(signatures, token, shape, arg, ctx);
-    return emitHoisted(arg, token, signatures, "addFactory", ctx, preludes);
+    return { token, calleeMethod: "addFactory", signatures };
   }
 
   // Instantiation expression (TS 4.7+): a generic impl, open or closed. The
@@ -555,7 +511,7 @@ function planAddRegistration(
   if (type.getConstructSignatures().length) {
     const extraction = extractFromExpression(arg, ctx);
     let signatures = extraction
-      ? classSignatureFromExtraction(extraction, arg, ctx)
+      ? classSignatureFromExtraction(extraction, ctx)
       : extractCtorReferenceSignature(arg, ctx);
     // Apply the registration-time override array (design §6) if present.
     if (signatures && overrideArg) {
@@ -567,9 +523,7 @@ function planAddRegistration(
     if (signatures) {
       checkDepHoles(signatures, token, shape, arg, ctx);
     }
-    return signatures
-      ? emitHoisted(arg, token, signatures, "add", ctx, preludes)
-      : { token, calleeMethod: "add" };
+    return { token, calleeMethod: "add", signatures: signatures ?? undefined };
   }
 
   // Callable (not constructable) → a factory.
@@ -579,112 +533,28 @@ function planAddRegistration(
     if (signatures) {
       checkDepHoles(signatures, token, shape, arg, ctx);
     }
-    return signatures
-      ? emitHoisted(arg, token, signatures, "addFactory", ctx, preludes)
-      : { token, calleeMethod: "addFactory" };
+    return { token, calleeMethod: "addFactory", signatures: signatures ?? undefined };
   }
 
   // Neither callable nor constructable (a dynamic / opaque value): assume a
-  // class. No dep array — the runtime throws with guidance if it has params.
+  // class. No signature array — the runtime throws with guidance if it has params.
   return { token, calleeMethod: "add" };
 }
 
 /**
- * Hoist `arg` into a `const ɵregN = <arg>`, emit `defineDeps(ɵregN, signatures)`,
- * and return the plan that rewrites the registration to reference `ɵregN`.
- */
-function emitHoisted(
-  arg: ts.Expression,
-  token: string | undefined,
-  signatures: Signature[],
-  calleeMethod: "add" | "addFactory",
-  ctx: LowerContext,
-  preludes: ts.Statement[],
-): RegPlan {
-  const hoistName = ctx.nextHoistName();
-  preludes.push(hoistConstStatement(hoistName, arg, ctx.factory));
-  ctx.markUsedDefineDeps();
-  preludes.push(
-    defineDepsStatement(
-      ctx.factory.createIdentifier(hoistName),
-      signatures,
-      ctx.factory,
-      ctx.makeDefineDepsRef(),
-    ),
-  );
-  return { token, calleeMethod, hoistName };
-}
-
-/**
  * The class signature to emit for a statically-resolved class, running the PRD
- * §8 checks (equal-arity overload ambiguity, factory-param §4.5, async
- * mismatch). Returns `undefined` — skip `defineDeps` — when the class is already
- * manually annotated (`forCtor` is authoritative); an info diagnostic is emitted
- * so the skip is never silent.
+ * §8 factory-param (§4.5) check. Always returns the extracted signatures — the
+ * transformer is the sole signature channel.
  */
 function classSignatureFromExtraction(
   extraction: ConstructorExtraction,
-  concreteArg: ts.Expression,
   ctx: LowerContext,
-): Signature[] | undefined {
-  checkOverloads(extraction.classSymbol, concreteArg, ctx);
-
-  const annotated = ctx.forCtorAnnotated.has(extraction.classSymbol);
-  if (annotated) {
-    checkAnnotatedFactoryParams(extraction.classSymbol, ctx);
-    ctx.sink.addDiagnostic(
-      info(
-        ctx.sourceFile,
-        concreteArg,
-        DiagnosticCode.AlreadyAnnotated,
-        `${extraction.classSymbol.getName()} already has a manual forCtor annotation; ` +
-          `skipping transformer-generated defineDeps (manual annotation is authoritative).`,
-      ),
-    );
-    return undefined;
-  }
-
+): Signature[] {
   checkExtractedRegistration(extraction, ctx);
   return extraction.signatures;
 }
 
-/** Render `const <name> = <expr>;` — the hoisted registration const. */
-function hoistConstStatement(
-  name: string,
-  expr: ts.Expression,
-  factory: ts.NodeFactory,
-): ts.Statement {
-  return factory.createVariableStatement(
-    undefined,
-    factory.createVariableDeclarationList(
-      [
-        factory.createVariableDeclaration(
-          factory.createIdentifier(name),
-          undefined,
-          undefined,
-          expr,
-        ),
-      ],
-      ts.NodeFlags.Const,
-    ),
-  );
-}
-
-/** Render `<defineDepsRef>(<targetExpr>, [[...sig], ...]);` as a statement. */
-function defineDepsStatement(
-  targetExpr: ts.Expression,
-  signatures: Signature[],
-  factory: ts.NodeFactory,
-  defineDepsRef: ts.Identifier,
-): ts.Statement {
-  const call = factory.createCallExpression(defineDepsRef, undefined, [
-    targetExpr,
-    signaturesLiteral(signatures, factory),
-  ]);
-  return factory.createExpressionStatement(call);
-}
-
-/** Render `[[...sig], ...]` — a signatures array literal (defineDeps 2nd arg / add 3rd arg). */
+/** Render `[[...sig], ...]` — a signatures array literal (the `add`/`addFactory` 3rd arg). */
 function signaturesLiteral(
   signatures: Signature[],
   factory: ts.NodeFactory,
@@ -803,9 +673,9 @@ export function literalExpression(
 
 /**
  * Lower the registration expression: rewrite each planned `add`/`addValue` call
- * to its string-token form (routing factories to `addFactory` + the hoisted
- * const) and every `.as<"x">()` to `.as("x")`. Plans are keyed on ORIGINAL call
- * nodes — looked up before `visitEachChild` rebuilds them.
+ * to its string-token form (routing factories to `addFactory`) and every
+ * `.as<"x">()` to `.as("x")`. Plans are keyed on ORIGINAL call nodes — looked
+ * up before `visitEachChild` rebuilds them.
  */
 function lowerRegistrationExpression(
   expr: ts.Expression,
@@ -817,8 +687,8 @@ function lowerRegistrationExpression(
       const plan = plans.get(node);
       if (plan) {
         // A registration call: rewrite in place. Its sole value arg is kept
-        // (value / dynamic) or replaced by the hoisted const — nothing inside to
-        // recurse into.
+        // (value / dynamic) or replaced by the plain, un-parameterized ctor for
+        // a generic impl (`valueOverride`) — nothing inside to recurse into.
         return lowerRegistrationCall(node, plan, ctx.factory);
       }
     }
@@ -842,13 +712,10 @@ function lowerRegistrationCall(
       ? factory.createNull()
       : factory.createStringLiteral(plan.token);
   const callee = call.expression as ts.PropertyAccessExpression;
-  const valueArg =
-    plan.hoistName !== undefined
-      ? factory.createIdentifier(plan.hoistName)
-      : plan.valueOverride ?? call.arguments[0]!;
+  const valueArg = plan.valueOverride ?? call.arguments[0]!;
 
   // The runtime call: `(token, value)` — plus registration-carried signatures as
-  // a third argument for a generic impl (no defineDeps prelude keys on the ctor).
+  // a third argument (the sole signature channel; the global store is retired).
   const args: ts.Expression[] = [tokenLiteral, valueArg];
   if (plan.signatures) {
     args.push(signaturesLiteral(plan.signatures, factory));

@@ -6,10 +6,10 @@
 // `dist`). Diff this file against the with-transformer main.ts and the ONLY
 // difference is the WIRING STYLE: without the transformer there is no type-driven
 // authoring — every registration names an explicit string token, every class
-// with ctor dependencies has its metadata written by hand (`forCtor`), and open
-// generics are closed manually with `closeToken` / `typeArg`.
+// with ctor dependencies has its signature written by hand (the third `add`
+// argument), and open generics are closed manually with `closeToken` / `typeArg`.
 
-import { closeToken, forCtor, ServiceManifest, typeArg, union } from "@fnioc/di";
+import { closeToken, ServiceManifest, typeArg, union } from "@fnioc/di";
 
 import type { IAuditor, IRepository } from "../../shared/src/index.js";
 import {
@@ -49,19 +49,6 @@ const USER = "app/User";
 const INVOICE = "app/Invoice";
 const ORDER = "app/Order";
 
-// Hand-written dependency metadata — the `forCtor(...).signature(...)` fluent
-// equivalent of the `defineDeps(...)` the transformer would emit. Greeter's two
-// params map positionally to the logger + clock tokens.
-forCtor(Greeter).signature(LOGGER, CLOCK);
-
-// Union slot: UnionConsumer's `sink` accepts either LOGGER or METRICS. Members
-// are tried in declaration order; LOGGER is registered, so it wins.
-forCtor(UnionConsumer).signature(union(LOGGER, METRICS));
-
-// The Inject brand replicated by hand: DiagnosticsService's `clock` param pins
-// PRIMARY_CLOCK (the with-transformer example derives this automatically).
-forCtor(DiagnosticsService).signature(PRIMARY_CLOCK, LOGGER);
-
 // `singleton` and `request` are the two scope tags this app opens. There is no
 // root: scopes are uniform tags, and `singleton` is just the one we open once at
 // the top (below, via `createScope("singleton")`) for app-lifetime instances.
@@ -69,12 +56,19 @@ const services = new ServiceManifest<"singleton" | "request">();
 
 services.add(LOGGER, ConsoleLogger).as("singleton");
 services.add(CLOCK, SystemClock).as("singleton");
-services.add(GREETER, Greeter).as("singleton");
+// Hand-written dependency signature — the inline third `add` argument, the same
+// array the transformer would emit. Greeter's two params map positionally to the
+// logger + clock tokens.
+services.add(GREETER, Greeter, [[LOGGER, CLOCK]]).as("singleton");
 services.add(REQUEST_ID, RequestId).as("request");
 services.add(METRICS, InMemoryMetrics).as("singleton");
-services.add(UNION_CONSUMER, UnionConsumer).as("singleton");
+// Union slot: UnionConsumer's `sink` accepts either LOGGER or METRICS. Members
+// are tried in declaration order; LOGGER is registered, so it wins.
+services.add(UNION_CONSUMER, UnionConsumer, [[union(LOGGER, METRICS)]]).as("singleton");
 services.add(PRIMARY_CLOCK, SystemClock);
-services.add(DIAGNOSTICS, DiagnosticsService).as("singleton");
+// The Inject brand replicated by hand: DiagnosticsService's `clock` param pins
+// PRIMARY_CLOCK (the with-transformer example derives this automatically).
+services.add(DIAGNOSTICS, DiagnosticsService, [[PRIMARY_CLOCK, LOGGER]]).as("singleton");
 
 // Open template registration: the third `add` argument carries the dep
 // signatures ON the registration (a generic class can't use the ctor-keyed store
@@ -87,12 +81,10 @@ services.add(REPOSITORY_TEMPLATE, SqlRepository, [[LOGGER, typeArg(1)]]).as("sin
 // that closing. Its `Typeof<T>` witness is supplied as a literal value slot.
 services.add(closeToken(REPOSITORY, ORDER), InMemoryRepository, [[{ value: ORDER }]]).as("singleton");
 
-// The forCtor alternative for a generic-on-generic: a HOLE template in the
-// ctor-keyed store. The auditor's dep template `app/IRepository<$1>` is
-// substituted per closing — resolving `app/IAuditor<app/User>` wires in the
-// User repository closing.
-forCtor(RepositoryAuditor).signature(REPOSITORY_TEMPLATE);
-services.add(AUDITOR_TEMPLATE, RepositoryAuditor).as("singleton");
+// A generic-on-generic open template: the auditor's dep template
+// `app/IRepository<$1>` rides on the registration and is substituted per closing
+// — resolving `app/IAuditor<app/User>` wires in the User repository closing.
+services.add(AUDITOR_TEMPLATE, RepositoryAuditor, [[REPOSITORY_TEMPLATE]]).as("singleton");
 
 // build() returns a frameless provider — nothing is pre-opened. Open the
 // "singleton" scope explicitly so singleton-tagged registrations cache for the
@@ -136,7 +128,7 @@ const userSave = userRepo.save({ name: "Ada" });
 const invoiceSave = invoiceRepo.save({ id: 7 });
 const orderSave = orderRepo.save({ id: 42 });
 
-// The auditor's forCtor hole template closes recursively: its repo dep is the
+// The auditor's hole-template dep closes recursively: its repo dep is the
 // SAME instance as the User repository closing above.
 const auditor = root.resolve<IAuditor<unknown>>(closeToken(AUDITOR, USER));
 

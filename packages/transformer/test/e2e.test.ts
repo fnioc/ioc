@@ -127,29 +127,23 @@ describe("ts-patch production e2e (ESM)", () => {
 
     const emitted = readFileSync(join(projDir, "dist", "main.js"), "utf8");
 
-    // The injected import + always-hoisted defineDeps calls (ESM contract).
-    // Registrations are ordered: ɵreg0=ConsoleLogger, ɵreg1=SqlUserRepo,
-    // ɵreg2=WidgetHost (declaration order in main.ts).
-    expect(emitted).toContain('import { defineDeps } from "@fnioc/di"');
-    expect(emitted).toContain("defineDeps(ɵreg0, [[]]);");
+    // Signatures ride INLINE as the third `add` argument (ESM contract) — no
+    // injected import, no hoisted const, no `defineDeps` prelude.
+    expect(emitted).not.toContain("defineDeps");
+    expect(emitted).not.toContain("ɵreg");
     expect(emitted).toContain(
-      'defineDeps(ɵreg1, [["./services/ILogger", "./services/IDbConnection"]]);',
-    );
-    // The lowered registrations reference the hoisted consts, not the raw classes.
-    expect(emitted).toContain(
-      'services.add("./services/ILogger", ɵreg0).as("singleton");',
+      'services.add("./services/ILogger", ConsoleLogger, [[]]).as("singleton");',
     );
     expect(emitted).toContain(
-      'services.add("./services/IUserRepo", ɵreg1).as("request");',
+      'services.add("./services/IUserRepo", SqlUserRepo, ' +
+        '[["./services/ILogger", "./services/IDbConnection"]]).as("request");',
     );
 
     // An inline `() => IUserRepo` ctor param lowers to a FactoryRef slot keyed
     // on the return type's token (PRD §7). Field renamed: `type` (was `factory`).
     expect(emitted).toContain(
-      'defineDeps(ɵreg2, [[{ type: "./services/IUserRepo" }]]);',
-    );
-    expect(emitted).toContain(
-      'services.add("./services/IWidget", ɵreg2).as("singleton");',
+      'services.add("./services/IWidget", WidgetHost, ' +
+        '[[{ type: "./services/IUserRepo" }]]).as("singleton");',
     );
   }, 30_000);
 

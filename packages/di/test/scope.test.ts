@@ -3,8 +3,7 @@ import {
   ServiceManifest,
   UnregisteredTokenError,
 } from "@fnioc/di";
-import { defineDeps } from "@fnioc/core";
-import { T } from "./fixtures.js";
+import { T, defineDeps } from "./fixtures.js";
 
 // ServiceProvider / Scope chain + hierarchical lookup, transient fallback when
 // no matching frame is open, and THE critical rule (§"construct relative to the

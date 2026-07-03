@@ -1,7 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import { ServiceManifest, NoSatisfiableSignatureError } from "@fnioc/di";
-import { defineDeps } from "@fnioc/core";
-import { T } from "./fixtures.js";
+import { T, defineDeps } from "./fixtures.js";
 
 // Greedy signature selection over Token|FactoryRef|ScopeRef|Union signatures
 // from getDeps. Scan longest → shortest; first SATISFIABLE wins. A FactoryRef

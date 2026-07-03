@@ -1,9 +1,80 @@
-// Shared test fixtures. The tests hand-feed dep metadata via `defineDeps`
-// (NO transformer) — the engine only ever sees string tokens and positional
-// signatures, exactly as it would post-lowering.
+// Shared test fixtures. The tests hand-feed dep metadata (NO transformer) — the
+// engine only ever sees string tokens and positional signatures, exactly as it
+// would post-lowering.
+//
+// The global metadata store is retired: signatures now ride ON the registration
+// (`add(token, ctor, [[...]])`). To keep the plentiful `defineDeps(C, sig); …
+// add(tok, C)` fixtures readable, this module provides a TEST-ONLY ergonomic:
+// `defineDeps`/`forCtor` stash signatures in a per-process WeakMap, and
+// `ServiceManifestClass.prototype.add`/`.addFactory` are patched to thread a
+// stashed signature in as the third argument when a call passes only
+// `(token, target)`. The engine still sees exactly `registration.signatures` —
+// this is pure authoring sugar over the inline third-argument form.
 
-import { defineDeps } from "@fnioc/core";
-import type { Token } from "@fnioc/core";
+import { ServiceManifestClass } from "@fnioc/di";
+import type { DepSlot, Token } from "@fnioc/core";
+
+type Signatures = readonly (readonly DepSlot[])[];
+
+/** The test-only signature stash — keyed by the ctor / factory function. */
+const testStore = new WeakMap<object, DepSlot[][]>();
+
+/** Stash one-or-more signatures for `target`, appending to any prior stash. */
+export function defineDeps(target: object, signatures: Signatures): void {
+  const copies = signatures.map((sig) => [...sig]);
+  const existing = testStore.get(target);
+  if (existing !== undefined) {
+    existing.push(...copies);
+  } else {
+    testStore.set(target, copies);
+  }
+}
+
+/** Reads back a stashed record — mirrors the retired `getDeps` for assertions. */
+export function getDeps(target: object): { signatures: Signatures } | undefined {
+  const signatures = testStore.get(target);
+  return signatures === undefined ? undefined : { signatures };
+}
+
+/** Chainable fluent stash — one `.signature(...)` call per overload. */
+export interface ForCtorBuilder {
+  signature(...slots: DepSlot[]): ForCtorBuilder;
+}
+export function forCtor(ctor: object): ForCtorBuilder {
+  const builder: ForCtorBuilder = {
+    signature(...slots: DepSlot[]): ForCtorBuilder {
+      defineDeps(ctor, [slots]);
+      return builder;
+    },
+  };
+  return builder;
+}
+
+// Patch `add` / `addFactory` to thread a stashed signature into the third-arg
+// channel when the caller passed only `(token, target)`. A no-op when the target
+// has no stash or a signature was passed explicitly.
+type AddFn = (...args: unknown[]) => unknown;
+function patchThirdArg(method: "add" | "addFactory"): void {
+  const proto = ServiceManifestClass.prototype as unknown as Record<string, AddFn>;
+  const original = proto[method]!;
+  proto[method] = function (this: unknown, ...args: unknown[]): unknown {
+    const target = args[1];
+    if (
+      args.length === 2 &&
+      typeof args[0] === "string" &&
+      (typeof target === "object" || typeof target === "function") &&
+      target !== null
+    ) {
+      const stashed = testStore.get(target);
+      if (stashed !== undefined) {
+        return original.call(this, args[0], target, stashed);
+      }
+    }
+    return original.apply(this, args);
+  };
+}
+patchThirdArg("add");
+patchThirdArg("addFactory");
 
 // ── Tokens ──────────────────────────────────────────────────────────────────
 
@@ -95,5 +166,3 @@ export class Unannotated {
   public constructor(public readonly a: unknown) {}
 }
 
-/** Re-export for convenience in tests that build metadata inline. */
-export { defineDeps };

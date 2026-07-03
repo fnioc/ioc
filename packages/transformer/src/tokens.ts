@@ -19,8 +19,10 @@
 // isolated containers — the standard semver-peer-dep mitigation applies (keep
 // compatible versions). See PRD §8.
 //
-// `Promise<X>` unwraps to the token for `X`: Promise-ness is a property of the
-// registration's factory, not a separate token.
+// `Promise<X>` derives the HONEST closed-generic token `Promise<X>` — Promise-ness
+// is part of the type identity (the token-split), NOT unwrapped away. A ctor param
+// typed `Promise<IConfig>` depends on the token `Promise<...IConfig>`, and the
+// async registration is keyed at that same token.
 
 import ts from "typescript";
 import type { Func } from "@rhombus-toolkit/func";
@@ -114,20 +116,8 @@ export function intrinsicToken(type: ts.Type): string | undefined {
   return typeof name === "string" && name.length ? name : undefined;
 }
 
-/** Unwrap a single `Promise<X>` layer, returning `X`'s type (or the input). */
-function unwrapPromise(type: ts.Type, checker: ts.TypeChecker): ts.Type {
-  const symbol = type.getSymbol();
-  if (symbol?.getName() === "Promise") {
-    const ref = type as ts.TypeReference;
-    const args = checker.getTypeArguments(ref);
-    if (args.length === 1) {return args[0]!;}
-  }
-  return type;
-}
-
 /**
- * Classify a constructor-parameter type into a token result. Unwraps a single
- * `Promise<X>` layer first.
+ * Classify a constructor-parameter type into a token result.
  *
  * Returns `{ kind: "resolvable", token }` when a token can be derived, or
  * `undefined` only for an ANONYMOUS inline structure with no name (a `__type`
@@ -144,8 +134,7 @@ export function tokenForType(
   ctx: TokenContext,
   failure?: DeriveFailure,
 ): TokenResult | undefined {
-  const unwrapped = unwrapPromise(type, ctx.checker);
-  const token = deriveToken(unwrapped, ctx, failure);
+  const token = deriveToken(type, ctx, failure);
   return token === undefined ? undefined : { kind: "resolvable", token };
 }
 
@@ -268,19 +257,19 @@ export function holeNumberFor(
 
 /**
  * The token for an inline function type's RETURN type — the factory's product.
- * Used for factory params (`() => IFoo` → token for `IFoo`). Unwraps a single
- * `Promise<X>` layer exactly as the normal path does (an `async () => IFoo`
- * factory returns `Promise<IFoo>`). Returns `undefined` when the return type has
- * no derivable token (e.g. a primitive return), in which case the caller treats
- * the param as a normal hole rather than a factory.
+ * Used for factory params (`() => IFoo` → token for `IFoo`). The return type is
+ * tokenized honestly: an `async () => IFoo` factory returns `Promise<IFoo>` and
+ * derives the token `Promise<...IFoo>` (the token-split — Promise-ness is part of
+ * the identity). Returns `undefined` when the return type has no derivable token
+ * (e.g. a primitive return), in which case the caller treats the param as a
+ * normal hole rather than a factory.
  */
 export function tokenForReturnType(
   signature: ts.Signature,
   ctx: TokenContext,
 ): string | undefined {
   const returnType = ctx.checker.getReturnTypeOfSignature(signature);
-  const unwrapped = unwrapPromise(returnType, ctx.checker);
-  return deriveToken(unwrapped, ctx);
+  return deriveToken(returnType, ctx);
 }
 
 /**

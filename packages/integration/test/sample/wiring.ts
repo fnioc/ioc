@@ -1,8 +1,8 @@
 // The type-driven wiring surface — the form the transformer lowers FROM.
 //
 // `services.add<I>(C).as<"tag">()` carries no runtime token; the transformer
-// rewrites each call to the string-token `.add("token", C).as("tag")` form and
-// injects a `defineDeps(C, [...])` for every constructed class. The transformer
+// rewrites each call to the string-token `.add("token", C, [[...]]).as("tag")`
+// form, carrying the derived dep signature inline. The transformer
 // only lowers TOP-LEVEL registration statements (it walks `sourceFile.statements`),
 // so every `.add(...)` here sits at module scope. This module is compiled WITH
 // the plugin in the ABI / factory / overload tests; its behaviour is reproduced
@@ -37,8 +37,13 @@ import {
 /** The declarable scope tags — the single `Scopes` type arg to `ServiceManifest`. */
 export type SampleScopes = "singleton" | "request";
 
-/** The token the di engine uses for the async config registration. */
-export const CONFIG_TOKEN = "./sample/contracts/IConfig";
+/**
+ * The token the di engine uses for the async config registration. It is the
+ * HONEST Promise<IConfig> closed-generic token: ConfigConsumer's ctor param is
+ * typed `Promise<IConfig>`, so it depends on this exact token (the token-split —
+ * Promise-ness is part of the identity), and the async factory is keyed here.
+ */
+export const CONFIG_TOKEN = "Promise<./sample/contracts/IConfig>";
 
 /** The token the di engine uses for the named-callable IThunk service. */
 export const THUNK_TOKEN = "./sample/contracts/IThunk";
@@ -63,7 +68,7 @@ export function makeConfig(): Promise<IConfig> {
 export const services = new ServiceManifest<SampleScopes>();
 
 // Type-driven registrations — TOP-LEVEL so the transformer lowers each type arg
-// to a string token and injects a `defineDeps(C, [...])` prelude per class.
+// to a string token and carries the derived signature inline (add's third arg).
 services.add<ILogger>(ConsoleLogger).as<"singleton">();
 services.add<IDbConnection>(SqlDb).as<"singleton">();
 services.add<IUserRepo>(SqlUserRepo).as<"request">();
@@ -89,7 +94,7 @@ services.add<IReportService>(ReportService).as<"request">();
 services.add<IReportFactory>(ReportFactory).as<"request">();
 
 // Plugin-less path: async config via a Promise-returning factory, cached as a
-// singleton. addFactory with a scope-less factory (no defineDeps record) → called
+// singleton. addFactory with a scope-less factory (no carried signature) → called
 // with the live scope; this factory ignores it and calls makeConfig() directly.
 services.addFactory(CONFIG_TOKEN, () => makeConfig()).as("singleton");
 

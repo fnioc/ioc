@@ -52,7 +52,7 @@
     },
     "packages/di": {
       "name": "@fnioc/di",
-      "version": "6.0.0",
+      "version": "7.0.0",
       "devDependencies": {
         "@fnioc/core": "workspace:*",
         "@rhombus-toolkit/func": "3.5.3",
@@ -70,7 +70,7 @@
     },
     "packages/transformer": {
       "name": "@fnioc/transformer",
-      "version": "5.0.0",
+      "version": "6.0.0",
       "dependencies": {
         "@rhombus-toolkit/func": "3.5.3",
       },

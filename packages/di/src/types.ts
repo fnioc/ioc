@@ -11,10 +11,10 @@ export type { Ctor };
 /**
  * A registration-level factory function. Its parameters are filled by the
  * engine at resolve time, the same way a class constructor's are: a factory
- * WITH a `defineDeps` record has each parameter resolved by its slot (token →
- * resolved instance, `ScopeRef` → the live provider, hole → caller-supplied); a
- * factory WITHOUT a record is the plugin-less escape hatch and is called with
- * the live provider as its single argument (`(sp) => …`).
+ * WITH registration-carried signatures has each parameter resolved by its slot
+ * (token → resolved instance, `ScopeRef` → the live provider, hole →
+ * caller-supplied); a factory WITHOUT signatures is the plugin-less escape hatch
+ * and is called with the live provider as its single argument (`(sp) => …`).
  *
  * May be async — it can return a `Promise<T>`. The container never awaits; the
  * Promise flows through the sync resolution channel as a value (§"Async as
@@ -32,11 +32,11 @@ export interface ClassRegistration {
    */
   readonly scope: string | undefined;
   /**
-   * Registration-carried dep signatures. When present, they win over the
-   * ctor-keyed `defineDeps` store at resolve time. Carried by generic impls
-   * (open templates and closed instantiation expressions), whose one JS class
-   * object would otherwise collide in the ctor-keyed store when registered
-   * under multiple closings/templates.
+   * Registration-carried dep signatures — the sole signature channel now that
+   * the global metadata store is retired. Emitted inline by the transformer
+   * (`add(token, ctor, [[...]])`) and hand-fed by the plugin-less caller. A
+   * signature-less class with a nonzero-arg ctor throws `MissingMetadataError`;
+   * a zero-arg ctor builds via `new Ctor()`.
    */
   readonly signatures?: readonly (readonly DepSlot[])[];
 }
@@ -51,6 +51,13 @@ export interface FactoryRegistration {
    * exactly like a class registration.
    */
   readonly scope: string | undefined;
+  /**
+   * Registration-carried dep signatures for the factory's call parameters.
+   * Emitted inline by the transformer (`addFactory(token, fn, [[...]])`); a
+   * record-less factory (the plugin-less escape hatch) carries none and is
+   * called with the live provider as its sole argument.
+   */
+  readonly signatures?: readonly (readonly DepSlot[])[];
 }
 
 /** A value registration — an already-built instance, no lifetime. */
@@ -89,8 +96,8 @@ export interface OpenRegistration {
   readonly scope: string | undefined;
   /**
    * The template dep signatures (holes and `TypeArgRef`s still open) —
-   * substituted per closing. When absent, the ctor-keyed store is consulted at
-   * resolve time (the manual `forCtor` hole-template path).
+   * substituted per closing. When absent, the closing has no template to
+   * substitute (a zero-arg ctor closes to a bare `new Ctor()`).
    */
   readonly signatures?: readonly (readonly DepSlot[])[];
 }
@@ -117,6 +124,13 @@ export type Lifetime<U extends string = "scoped"> = "singleton" | "transient" | 
 export interface Resolver {
   resolve<T>(token: Token): T;
   resolve(token: Token): unknown;
+  /**
+   * Resolves asynchronously — the only path that may satisfy `T` via a
+   * `Promise<T>` registration. Always returns a Promise; a lookup miss whose
+   * honest `Promise<T>` registration exists is awaited and delivers `T`.
+   */
+  resolveAsync<T>(token: Token): Promise<T>;
+  resolveAsync(token: Token): Promise<unknown>;
   /**
    * Returns a FACTORY for `type` rather than an instance. When `params` is
    * absent or empty, returns a strict zero-arg `() => T` — every ctor slot must

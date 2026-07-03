@@ -7,10 +7,10 @@ import { compileWithTransformer, type CompiledProject } from "./harness.js";
 // enhancement parity), 3 (factory e2e + named-callable opt-out).
 //
 // The sample under `test/sample/` is compiled ONCE with the real ts-patch
-// transformer; we assert the emitted shape (string tokens, null holes,
-// `{factory}` slots) and then LOAD the lowered output to run it against the live
-// `@fnioc/di` engine. The parity test rebuilds the identical graph by hand
-// (string tokens via `defineDeps` + the plugin-less `add` path) and asserts
+// transformer; we assert the emitted shape (string tokens + inline signature
+// third-arg, `{ type }` factory slots) and then LOAD the lowered output to run it
+// against the live `@fnioc/di` engine. The parity test rebuilds the identical
+// graph by hand (string tokens + inline `add(token, ctor, [[...]])`) and asserts
 // behavioural equivalence.
 
 const SAMPLE_DIR = join(import.meta.dir, "sample");
@@ -37,21 +37,38 @@ afterAll(() => {
 
 // ── Coverage 1: ABI contract ────────────────────────────────────────────────
 
-// The transformer HOISTS every class arg to a `const ɵregN = Cls` declaration
-// and uses the identifier in both `defineDeps(ɵregN, ...)` and the `add` call.
-// Tests check (a) the hoist and (b) the dep signature content separately.
+// Signatures ride INLINE on the registration: `add("token", Ctor, [[...]])`.
+// The global metadata store is retired — no hoisted const, no `defineDeps`
+// prelude, no injected import.
 //
-// Helper: find the ɵregN name for a class in the emitted wiring JS.
-function hoistName(wiring: string, className: string): string {
-  const m = wiring.match(new RegExp(`const (ɵreg\\d+) = ${className};`));
-  if (!m) {throw new Error(`No hoist const found for ${className} in emitted wiring`);}
-  return m[1]!;
+// Helper: pull the `[[...]]` inline signature array text out of the registration
+// call for `ctor`, balanced-scanning from the `, ${ctor}, ` boundary.
+function sigFor(wiring: string, ctor: string): string {
+  // The signature array always opens `[[` immediately after `, Ctor, ` in the
+  // registration call — anchor on that so the ctor's name in the import list
+  // (`{ ..., Ctor, ... }`) never matches.
+  const marker = `, ${ctor}, [`;
+  const at = wiring.indexOf(marker);
+  if (at < 0) {throw new Error(`No inline signature for ${ctor} in emitted wiring`);}
+  const start = at + marker.length - 1;
+  let depth = 0;
+  for (let i = start; i < wiring.length; i++) {
+    const ch = wiring[i];
+    if (ch === "[") {
+      depth += 1;
+    } else if (ch === "]") {
+      depth -= 1;
+      if (depth === 0) {return wiring.slice(start, i + 1);}
+    }
+  }
+  throw new Error(`Unbalanced signature for ${ctor} in emitted wiring`);
 }
 
 describe("emit contract — transformer-emitted lowered output (PRD §8)", () => {
-  test("emits the defineDeps import from @fnioc/di + bare calls (ESM contract)", () => {
+  test("no injected defineDeps import — signatures ride inline (ESM contract)", () => {
     const wiring = project.emitted("sample/wiring.js");
-    expect(wiring).toContain('import { defineDeps } from "@fnioc/di"');
+    expect(wiring).not.toContain("defineDeps");
+    expect(wiring).not.toContain("ɵreg");
   });
 
   test("class with two registered deps + optional primitive emits one union-fallback signature", () => {
@@ -60,57 +77,51 @@ describe("emit contract — transformer-emitted lowered output (PRD §8)", () =>
     // their interface tokens; the optional `table?: string` lowers to
     // `union("string", { value: undefined })` — the "string" token wins if
     // registered, else `undefined` is supplied. One signature, no expansion.
-    const n = hoistName(wiring, "SqlUserRepo");
-    expect(wiring).toContain(
-      `defineDeps(${n}, [["./sample/contracts/ILogger", "./sample/contracts/IDbConnection", { union: ["string", { value: void 0 }] }]]);`,
+    expect(sigFor(wiring, "SqlUserRepo")).toBe(
+      '[["./sample/contracts/ILogger", "./sample/contracts/IDbConnection", { union: ["string", { value: void 0 }] }]]',
     );
     expect(wiring).toContain(
-      `services.add("./sample/contracts/IUserRepo", ${n}).as("request");`,
+      'services.add("./sample/contracts/IUserRepo", SqlUserRepo, ',
     );
   });
 
   test("zero-arg classes lower to an empty signature", () => {
     const wiring = project.emitted("sample/wiring.js");
-    // Each zero-arg class is hoisted to a const; defineDeps uses the const identifier.
     for (const cls of ["ConsoleLogger", "SqlDb", "RequestContext"]) {
-      const n = hoistName(wiring, cls);
-      expect(wiring).toContain(`defineDeps(${n}, [[]]);`);
+      expect(sigFor(wiring, cls)).toBe("[[]]");
     }
   });
 
   test("inline `() => I` ctor param lowers to a `{ type: token }` slot", () => {
     const wiring = project.emitted("sample/wiring.js");
-    const n = hoistName(wiring, "ReportService");
-    // ReportService now has one factory param: `makeCtx: () => IRequestContext`.
+    // ReportService has one factory param: `makeCtx: () => IRequestContext`.
     // The transformer emits the return type as the slot token.
-    expect(wiring).toContain(
-      `defineDeps(${n}, [[{ type: "./sample/contracts/IRequestContext" }]]);`,
+    expect(sigFor(wiring, "ReportService")).toBe(
+      '[[{ type: "./sample/contracts/IRequestContext" }]]',
     );
   });
 
   test("inline `(log: ILogger) => IReport` lowers to `{ type, params: [ILogger-token] }`", () => {
     const wiring = project.emitted("sample/wiring.js");
-    const n = hoistName(wiring, "ReportFactory");
     // ReportFactory ctor: `makeReport: (log: ILogger) => IReport`.
     // The declared `log: ILogger` param becomes the params array on the FactoryRef.
-    expect(wiring).toContain(
-      `defineDeps(${n}, [[{ type: "./sample/contracts/IReport", params: ["./sample/contracts/ILogger"] }]]);`,
+    expect(sigFor(wiring, "ReportFactory")).toBe(
+      '[[{ type: "./sample/contracts/IReport", params: ["./sample/contracts/ILogger"] }]]',
     );
   });
 
   test("the type-driven type arg lowers to a string token; `.as<\"x\">()` → `.as(\"x\")`", () => {
     const wiring = project.emitted("sample/wiring.js");
-    const n = hoistName(wiring, "ConsoleLogger");
     expect(wiring).toContain(
-      `services.add("./sample/contracts/ILogger", ${n}).as("singleton");`,
+      'services.add("./sample/contracts/ILogger", ConsoleLogger, [[]]).as("singleton");',
     );
   });
 
-  test("Promise<IConfig> ctor dep unwraps to the bare IConfig token (async-as-values)", () => {
+  test("Promise<IConfig> ctor dep → the honest closed-generic token Promise<IConfig>", () => {
     const wiring = project.emitted("sample/wiring.js");
-    const n = hoistName(wiring, "ConfigConsumer");
-    expect(wiring).toContain(
-      `defineDeps(${n}, [["./sample/contracts/IConfig"]]);`,
+    // Honest token-split: the dep is NOT unwrapped — it keys on the Promise token.
+    expect(sigFor(wiring, "ConfigConsumer")).toBe(
+      '[["Promise<./sample/contracts/IConfig>"]]',
     );
   });
 
@@ -118,9 +129,8 @@ describe("emit contract — transformer-emitted lowered output (PRD §8)", () =>
     const wiring = project.emitted("sample/wiring.js");
     // ThunkConsumer(thunk: IThunk) — IThunk is `interface IThunk { (): string }`.
     // It must be a string-token slot, never `{ factory: ... }`.
-    const n = hoistName(wiring, "ThunkConsumer");
-    expect(wiring).toContain(
-      `defineDeps(${n}, [["./sample/contracts/IThunk"]]);`,
+    expect(sigFor(wiring, "ThunkConsumer")).toBe(
+      '[["./sample/contracts/IThunk"]]',
     );
     expect(wiring).not.toContain('factory: "./sample/contracts/IThunk"');
   });

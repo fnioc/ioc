@@ -29,8 +29,8 @@ export class UnregisteredTokenError extends DiError {
 }
 
 /**
- * A constructor with parameters has no DepRecord in the global-symbol Map — the
- * transformer never saw it and it was never hand-annotated.
+ * A constructor with parameters carries no dep signature on its registration —
+ * the transformer never saw it and no signature was hand-fed.
  */
 export class MissingMetadataError extends DiError {
   public constructor(
@@ -39,17 +39,17 @@ export class MissingMetadataError extends DiError {
   ) {
     super(
       `No dep metadata found for ${ctorName} (resolving "${token}"). The ` +
-        `constructor has parameters but no forCtor or ` +
-        `transformer-generated defineDeps call was found. Use ` +
-        `forCtor(...).signature(...) or register it with useFactory to wire ` +
-        `it manually.`,
+        `constructor has parameters but no dep signature was found on its ` +
+        `registration. Pass the signature as the third add argument ` +
+        `(add(token, ctor, [[...]])), compile with @fnioc/transformer, or ` +
+        `register it with a factory.`,
     );
   }
 }
 
 /**
- * A constructor has DepRecord signatures, but none of them is directly
- * satisfiable in the owning scope (every signature names at least one token
+ * A constructor has registration-carried signatures, but none of them is
+ * directly satisfiable in the owning scope (every signature names at least one token
  * that is not registered, or contains a hole this phase cannot fill).
  */
 export class NoSatisfiableSignatureError extends DiError {
@@ -176,6 +176,21 @@ export class AsyncDisposalRequiredError extends DiError {
       `Cannot dispose synchronously: this scope owns a Promise-valued ` +
         `instance (an async useFactory result). Awaiting it is required ` +
         `before disposal — call disposeAsync() instead of dispose().`,
+    );
+  }
+}
+
+/**
+ * Sync `resolve()` met an async result: a cached in-flight async construction
+ * (a concurrent `resolveAsync` is mid-build). The instance cannot be produced
+ * synchronously — use `resolveAsync()`.
+ */
+export class AsyncResolutionRequiredError extends DiError {
+  public constructor(public readonly token: Token) {
+    super(
+      `"${token}" is resolving asynchronously (an async construction is in ` +
+        `flight for it). It cannot be returned synchronously — use ` +
+        `resolveAsync() instead of resolve().`,
     );
   }
 }

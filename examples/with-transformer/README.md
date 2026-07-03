@@ -37,12 +37,12 @@ mechanism is the same.
 The shared source is imported by a relative path (`../../shared/src/index.js`),
 so `tspc` compiles it into this example's own `dist` — plugin-less source
 inlining, no bundler. Inspect `dist/with-transformer/src/main.js` afterwards to
-see the lowered output: every `add<I>(C)` becomes `add("token", C)` and each
-non-generic class gets a `defineDeps(...)` prelude; generic registrations instead
-carry their dep signatures as `add()`'s third argument
-(`add("./shared/src/contracts/IRepository<$1>", SqlRepository, [[...]])`). The
-emitted `import { defineDeps } from "@fnioc/di"` resolves at runtime through the
-`workspace:*` symlink.
+see the lowered output: every `add<I>(C)` becomes `add("token", C, [[...]])`,
+with the derived dependency signature carried inline as the third argument —
+no separate prelude call, nothing hoisted. Non-generic and generic
+registrations lower the identical way; a generic registration's signature just
+carries a `{ typeArg: N }` slot in place of a plain token
+(`add("./shared/src/contracts/IRepository<$1>", SqlRepository, [[...]])`).
 
 The tokenless authored form (`resolve<IRepository<User>>()`) lowers to the
 derived closed token (`./shared/src/contracts/IRepository<./shared/src/contracts/User>`).

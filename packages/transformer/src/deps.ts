@@ -35,8 +35,8 @@ import {
 /**
  * A factory slot in an extracted signature — the transformer's in-memory mirror
  * of the runtime `FactoryRef` shape. Emitted as `{ type: "<token>" }` (or
- * `{ type: "<token>", params: [...] }` when params are present) in the
- * `defineDeps(...)` signature array.
+ * `{ type: "<token>", params: [...] }` when params are present) in the inline
+ * signature array (the registration's third argument).
  */
 export interface FactorySlot {
   readonly type: string;
@@ -56,7 +56,7 @@ export interface ScopeSlot {
  * A union slot — the transformer's in-memory mirror of the runtime `Union` shape.
  * Produced when a parameter's type annotation is an inline union type node
  * (`A | B`), NOT a named type alias referencing a union. Emitted as
- * `{ union: [slotA, slotB, ...] }` in the `defineDeps(...)` signature array.
+ * `{ union: [slotA, slotB, ...] }` in the inline signature array.
  * Detection is purely syntactic (the annotation node shape).
  */
 export interface UnionSlot {
@@ -68,7 +68,7 @@ export interface UnionSlot {
  * `LiteralRef`. Produced for a SINGULAR (Rule-2) parameter: a literal (`"dev"`,
  * `42`, `true`, `1n`) OR a whole-type `void`/`undefined`/`null`. The value is
  * supplied directly, no container lookup. Emitted as `{ value: ... }` in the
- * `defineDeps(...)` signature array. A literal/nullish UNION (`"a" | "b"`,
+ * inline signature array. A literal/nullish UNION (`"a" | "b"`,
  * `Foo | undefined`) is NOT a literal slot. `value` may itself be `undefined`,
  * so the slot is identified by the PRESENCE of the `value` key.
  */
@@ -296,8 +296,8 @@ export function extractSignatureFromClass(
  * registered)` — expansion degrades to `[]` and loses `b`, whereas the per-param
  * union yields `new Ctor(undefined, y)`. JS makes an explicit `undefined`
  * argument equivalent to omission for a default initializer, so `= default`
- * still fires. The multi-signature `Token[][]` ABI is retained for MANUAL
- * `forCtor` overloads.
+ * still fires. The signature array stays a `Token[][]` (an array of signatures)
+ * even though the transformer now emits exactly one.
  */
 function paramsToSignatures(
   params: readonly ts.ParameterDeclaration[],

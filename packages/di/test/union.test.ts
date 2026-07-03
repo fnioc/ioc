@@ -1,6 +1,7 @@
 import { test, expect, describe } from "bun:test";
 import { ServiceManifest, NoSatisfiableUnionError, NoSatisfiableSignatureError } from "@fnioc/di";
-import { defineDeps, union } from "@fnioc/core";
+import { union } from "@fnioc/core";
+import { defineDeps } from "./fixtures.js";
 import type { FactoryRef } from "@fnioc/core";
 import { T } from "./fixtures.js";
 

@@ -1,5 +1,5 @@
 import type { DepSlot, Token } from "./types.js";
-import { isFactoryRef, isTypeArgRef, isUnionSlot } from "./defineDeps.js";
+import { isFactoryRef, isTypeArgRef, isUnionSlot } from "./guards.js";
 
 /**
  * Closed-generic token grammar (canonical, recursive):
