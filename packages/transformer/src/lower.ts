@@ -17,7 +17,7 @@
 // the runtime throws with guidance if it needs metadata (a nonzero-arg ctor).
 
 import ts from "typescript";
-import { isOpenToken, parseToken } from "@fnioc/core";
+import { isOpenToken, parseToken } from "./grammar.js";
 import { deriveToken, type LiteralValue, type TokenContext } from "./tokens.js";
 import {
   extractCtorReferenceSignature,

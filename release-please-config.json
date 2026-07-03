@@ -7,10 +7,15 @@
     {
       "type": "linked-versions",
       "groupName": "fnioc",
-      "components": ["di", "transformer"]
+      "components": ["core", "di", "transformer"]
     }
   ],
   "packages": {
+    "packages/core": {
+      "release-type": "node",
+      "package-name": "@fnioc/core",
+      "changelog-path": "CHANGELOG.md"
+    },
     "packages/di": {
       "release-type": "node",
       "package-name": "@fnioc/di",

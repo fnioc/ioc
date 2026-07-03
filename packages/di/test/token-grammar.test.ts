@@ -7,8 +7,12 @@ import {
   substituteSignatures,
   typeArg,
   union,
-} from "@fnioc/core";
+} from "@fnioc/di";
 import type { DepSlot } from "@fnioc/core";
+
+// The closed-generic token grammar — relocated here from @fnioc/core when core
+// became a pure-types package. These are runtime helpers the engine uses to close
+// open registrations, so they live with the engine.
 
 // ── closeToken ────────────────────────────────────────────────────────────────
 

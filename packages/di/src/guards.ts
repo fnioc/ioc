@@ -1,4 +1,8 @@
-import type { DepSlot, FactoryRef, LiteralRef, TypeArgRef, Union } from "./types.js";
+// DepSlot type guards — the runtime discriminators the resolver uses to tell
+// slot kinds apart. Relocated from @fnioc/core (now a pure-types package): the
+// guards are runtime values, so they belong with the engine that runs them.
+
+import type { DepSlot, FactoryRef, LiteralRef, TypeArgRef, Union } from "@fnioc/core";
 
 /** True when `slot` is a `FactoryRef` (carries a `.type` token). */
 export function isFactoryRef(slot: DepSlot): slot is FactoryRef {

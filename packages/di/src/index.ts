@@ -19,15 +19,21 @@
 // `Resolver` + `ScopeFactory` + Disposable.
 
 export { ServiceManifest, ServiceManifestClass } from "./builder.js";
+export type { ServiceManifestCtor } from "./builder.js";
+
+// The authoring TYPE-machinery lives in the pure-types @fnioc/core package (the
+// abstractions surface a library author depends on). Re-exported here so a di
+// consumer reaches the whole authoring surface through the single @fnioc/di
+// import, exactly as before the split.
 export type {
   AddBuilder,
-  ServiceManifestCtor,
   ProperCase,
   ScopeAddAuthoring,
   ScopeAddMethods,
   ScopeGuard,
+  ServiceManifestBase,
   ValidScopes,
-} from "./builder.js";
+} from "@fnioc/core";
 
 export { ServiceProvider, Scope } from "./scope.js";
 
@@ -60,23 +66,29 @@ export {
   OpenTokenRegistrationError,
 } from "./errors.js";
 
-// Re-exported from @fnioc/core for one-import authoring ergonomics — AND
-// because core is private (source-only, inlined at build): di is the public
-// gateway to the ABI surface. The slot builders (`union`/`typeArg`) are pure
-// data constructors; the token-grammar helpers (closeToken/parseToken
-// /isOpenToken/substituteToken/substituteSignatures) and the open-generics
-// authoring types (Hole/$/Typeof/TypeArgRef) live in core to keep the
-// ABI self-contained, but users reach them from here.
+// The slot/token RUNTIME helpers now live in di's own source (relocated from the
+// pure-types @fnioc/core). di re-exports them for one-import authoring ergonomics
+// — a di consumer reaches the slot builders (`union`/`typeArg`), the DepSlot type
+// guards, and the token-grammar helpers from here. A core-only library author
+// authors the same slot shapes as plain data literals instead.
+export { union, typeArg } from "./slots.js";
 export {
-  union,
-  typeArg,
+  isFactoryRef,
+  isScopeRef,
+  isUnionSlot,
+  isLiteralRef,
   isTypeArgRef,
+} from "./guards.js";
+export {
   closeToken,
   parseToken,
   isOpenToken,
   substituteToken,
   substituteSignatures,
-} from "@fnioc/core";
+} from "./tokens.js";
+
+// The ABI TYPES stay in @fnioc/core (pure types); di re-exports them so the whole
+// surface is reachable through one @fnioc/di import.
 export type {
   Token,
   DepRecord,

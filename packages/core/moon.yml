@@ -4,23 +4,22 @@ $schema: 'https://moonrepo.dev/schemas/project.json'
 layer: 'library'
 language: 'typescript'
 
-# @fnioc/core is PRIVATE and source-only — it emits no `dist`. `build` is a
-# typecheck (`tsc --noEmit`) so the workspace still validates core's types; its
-# source is inlined into @fnioc/di and @fnioc/transformer at their build time.
+# @fnioc/core is a PURE-TYPES package. `build` rolls a single self-contained
+# dist/index.d.ts (rollup-plugin-dts, func types inlined) for publication and
+# asserts no runtime .js is emitted; `lint` typechecks the source. There is no
+# `test` task — core ships no runtime, so the token-grammar / slot-constructor
+# behaviour tests live in @fnioc/di alongside the relocated implementations.
 tasks:
   build:
-    command: 'bun x tsc --noEmit -p tsconfig.json'
+    command: 'bun build.ts'
     inputs:
       - 'src/**/*'
+      - 'build.ts'
+      - 'rollup.dts.mjs'
       - 'tsconfig.json'
       - '/tsconfig.base.json'
-  test:
-    command: 'bun test'
-    inputs:
-      - 'src/**/*'
-      - 'test/**/*'
-      - 'tsconfig.json'
-      - 'package.json'
+    outputs:
+      - 'dist'
   lint:
     command: 'bun x tsc --noEmit -p tsconfig.json'
     options:

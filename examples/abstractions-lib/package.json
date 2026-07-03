@@ -1,0 +1,19 @@
+{
+  "name": "@fnioc-examples/abstractions-lib",
+  "private": true,
+  "version": "0.0.0",
+  "description": "The abstractions smoke test: a library that contributes DI registrations depending ONLY on @fnioc/core (import type) — no @fnioc/di runtime. Proves a lib author needs only the .d.ts abstractions.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "moon run examples-abstractions-lib:lint"
+  },
+  "devDependencies": {
+    "@fnioc/core": "workspace:*"
+  }
+}

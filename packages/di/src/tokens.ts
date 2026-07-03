@@ -1,28 +1,24 @@
-import type { DepSlot, Token } from "./types.js";
-import { isFactoryRef, isTypeArgRef, isUnionSlot } from "./guards.js";
+// The closed-generic token grammar — the runtime helpers the engine uses to
+// close open registrations. Relocated from @fnioc/core (now a pure-types
+// package): these are runtime values, so they live with the engine.
+//
+// Grammar (canonical, recursive):
+//
+//     base<arg1,arg2>
+//
+// No whitespace around the `<` `>` `,` separators; each arg is itself a token
+// (possibly closed-generic, recursively). Literal-type args keep their interior
+// spaces and quotes (`"a" | "b"` — the parser is quote-aware, so commas and
+// angle brackets inside double quotes never count as separators).
+//
+// A hole is a token node that is exactly `$N` (decimal N ≥ 1); a token
+// containing a hole in any arg position is an *open template*.
 
-/**
- * Closed-generic token grammar (canonical, recursive):
- *
- *     base<arg1,arg2>
- *
- * No whitespace around the `<` `>` `,` separators; each arg is itself a token
- * (possibly closed-generic, recursively). Literal-type args keep their interior
- * spaces and quotes (`"a" | "b"` — the parser is quote-aware, so commas and
- * angle brackets inside double quotes never count as separators).
- *
- * A hole is a token node that is exactly `$N` (decimal N ≥ 1); a token
- * containing a hole in any arg position is an *open template*.
- */
+import type { DepSlot, ParsedToken, Token } from "@fnioc/core";
+import { isFactoryRef, isTypeArgRef, isUnionSlot } from "./guards.js";
 
 /** A token node that is exactly a hole: `$N`, decimal N ≥ 1. */
 const HOLE_PATTERN = /^\$[1-9][0-9]*$/;
-
-/** The result of parsing a closed-generic token: `base<arg1,arg2>`. */
-export interface ParsedToken {
-  readonly base: Token;
-  readonly args: readonly Token[];
-}
 
 /**
  * Renders the canonical closed-generic form `base<arg1,arg2>`. With no args,

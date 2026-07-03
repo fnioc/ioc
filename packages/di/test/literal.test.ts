@@ -1,6 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import { ServiceManifest, NoSatisfiableSignatureError } from "@fnioc/di";
-import { union, isLiteralRef } from "@fnioc/core";
+import { union, isLiteralRef } from "@fnioc/di";
 import { defineDeps } from "./fixtures.js";
 import type { LiteralRef } from "@fnioc/core";
 import { T } from "./fixtures.js";
