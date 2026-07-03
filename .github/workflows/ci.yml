@@ -147,11 +147,13 @@ jobs:
         run: moon run :build
 
       # Topo-sort `paths_released` so dependencies publish before dependents.
-      # @fnioc/core is PRIVATE and inlined at build time — it is never released
-      # or published, so it never appears in `paths_released`. di and transformer
-      # are independent at publish time (transformer's @fnioc/di reference is a
-      # peer the consumer installs, not a publish-order constraint), so any order
-      # is valid; the sort is a stable passthrough.
+      # @fnioc/core is a PUBLISHED pure-types package (a library author depends on
+      # it via `import type`), but di and transformer INLINE core's types into
+      # their own dist and carry no @fnioc/core dependency — so core is not a
+      # publish-order constraint for them. transformer's @fnioc/di reference is a
+      # peer the consumer installs, not a publish-order constraint either. Every
+      # package is thus independent at publish time; any order is valid and the
+      # sort is a stable passthrough.
       - name: Topo-sort paths_released (dependencies first)
         id: sorted
         if: ${{ steps.release.outputs.releases_created == 'true' }}
@@ -164,14 +166,16 @@ jobs:
           echo "Sorted order:   $sorted"
           echo "sorted=${sorted}" >> "$GITHUB_OUTPUT"
 
-      # Strip the private @fnioc/core devDependency before packing. core is
-      # inlined into di's and transformer's dist at build time (its source is
-      # bundled into the JS and its types rolled into the .d.ts), so the published
-      # packages never reference it. Committed package.json keeps it for local
-      # builds; pnpm pack would rewrite the workspace:* protocol to a real version
-      # but that version is never on npm. Strip it before pack so it never appears
-      # in the tarball manifest.
-      - name: Strip private @fnioc/core dep before publish
+      # Strip the workspace @fnioc/core devDependency before packing. Although
+      # @fnioc/core is now itself published (as pure types), di and transformer do
+      # NOT depend on it: they INLINE core's types into their own dist (rolled into
+      # the .d.ts), so their published packages must not reference @fnioc/core.
+      # Their committed package.json keeps the `workspace:*` devDependency for
+      # local builds; pnpm pack would rewrite that protocol to a concrete version,
+      # so strip it before pack so it never appears in the tarball manifest. On
+      # core's own package.json this is a harmless no-op (core has no @fnioc/core
+      # dep of its own).
+      - name: Strip workspace @fnioc/core dep before publish
         if: ${{ steps.release.outputs.releases_created == 'true' }}
         env:
           SORTED: ${{ steps.sorted.outputs.sorted }}
