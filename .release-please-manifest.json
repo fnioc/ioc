@@ -1,5 +1,5 @@
 {
-  "packages/core": "8.0.0",
-  "packages/di": "8.0.0",
-  "packages/transformer": "8.0.0"
+  "packages/core": "9.0.0",
+  "packages/di": "9.0.0",
+  "packages/transformer": "9.0.0"
 }

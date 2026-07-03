@@ -1,5 +1,16 @@
 # Changelog
 
+## [9.0.0](https://github.com/fnioc/ioc/compare/di-v8.0.0...di-v9.0.0) (2026-07-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* **core:** publish @fnioc/core as a pure .d.ts abstractions package ([#83](https://github.com/fnioc/ioc/issues/83))
+
+### Features
+
+* **core:** publish @fnioc/core as a pure .d.ts abstractions package ([#83](https://github.com/fnioc/ioc/issues/83)) ([82ab3e7](https://github.com/fnioc/ioc/commit/82ab3e7581db481e0051d30136430a7869a4a0f5))
+
 ## [8.0.0](https://github.com/fnioc/ioc/compare/di-v7.0.0...di-v8.0.0) (2026-07-03)
 
 
