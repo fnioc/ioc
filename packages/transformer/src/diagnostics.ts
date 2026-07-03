@@ -22,14 +22,8 @@ export interface DiagnosticSink {
  * transformer's observable surface — tests assert on them.
  */
 export const enum DiagnosticCode {
-  /** A registration's concrete argument could not be statically resolved. */
-  DynamicRegistration = 990002,
   /** A factory param's call signature doesn't match the target ctor's holes. */
   FactorySignatureMismatch = 990003,
-  /** A bare dep that should be declared `Promise<T>` (async-registered value). */
-  AsyncMismatch = 990004,
-  /** Two overload signatures of equal length for the same constructor. */
-  OverloadAmbiguity = 990005,
   /**
    * A constructor / factory parameter whose type has no derivable token and
    * carries no `Inject<T, "tok">` brand — a hard compile error.

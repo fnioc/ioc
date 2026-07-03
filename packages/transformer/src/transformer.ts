@@ -29,7 +29,6 @@ import {
   DiagnosticCode,
   error,
 } from "./diagnostics.js";
-import { collectAsyncTokens } from "./checks.js";
 import type { DiagnosticSink } from "./diagnostics.js";
 import { NAMEOF_NAME } from "./nameof.js";
 
@@ -68,12 +67,9 @@ function transformSourceFile(
   sourceFile: ts.SourceFile,
   ctx: FileContext,
 ): ts.SourceFile {
-  const asyncTokens = collectAsyncTokens(sourceFile, ctx.checker);
-
   const lowerCtx: LowerContext = {
     ...ctx,
     sourceFile,
-    asyncTokens,
   };
 
   // Lower registration statements (carrying the inline signature 3rd arg), and

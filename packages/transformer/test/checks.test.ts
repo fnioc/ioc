@@ -3,9 +3,8 @@ import { transform, fixture } from "./harness.js";
 import { DiagnosticCode } from "../src/index.js";
 
 // Statically-visible registration diagnostics (PRD §4.5 / §8): the factory
-// call-signature mismatch, the bare-`IDb`-vs-`Promise<IDb>` async mismatch, and
-// equal-arity overload ambiguity. Each is conservative — it fires only when the
-// mismatch is statically certain, never on an un-resolvable shape.
+// call-signature mismatch. Conservative — it fires only when the mismatch is
+// statically certain, never on an un-resolvable shape.
 
 function codes(diags: readonly { code: number }[]): number[] {
   return diags.map((d) => d.code);
@@ -167,93 +166,5 @@ describe("factory-signature diagnostic (§4.5)", () => {
     expect(codes(diagnostics)).not.toContain(
       DiagnosticCode.FactorySignatureMismatch,
     );
-  });
-});
-
-describe("async-mismatch diagnostic", () => {
-  test("fires for a bare dep whose token is registered async", () => {
-    const src = `
-      interface IDb {}
-      interface IRepo {}
-      class Repo implements IRepo {
-        constructor(db: IDb) {}
-      }
-      declare const services: any;
-      declare const container: any;
-      container.add("./app/IDb", { useFactory: async () => ({}) });
-      services.add<IRepo>(Repo).as<"singleton">();
-    `;
-    const { diagnostics } = transform(fixture(src));
-    const diag = diagnostics.find(
-      (d) => d.code === DiagnosticCode.AsyncMismatch,
-    );
-    expect(diag).toBeDefined();
-    expect(String(diag!.messageText)).toContain("Promise<IDb>");
-    expect(String(diag!.messageText)).not.toContain("lower");
-  });
-
-  test("no diagnostic when the dep is already declared Promise<IDb>", () => {
-    const src = `
-      interface IDb {}
-      interface IRepo {}
-      class Repo implements IRepo {
-        constructor(db: Promise<IDb>) {}
-      }
-      declare const services: any;
-      declare const container: any;
-      container.add("./app/IDb", { useFactory: async () => ({}) });
-      services.add<IRepo>(Repo).as<"singleton">();
-    `;
-    const { diagnostics } = transform(fixture(src));
-    expect(codes(diagnostics)).not.toContain(DiagnosticCode.AsyncMismatch);
-  });
-
-  test("no diagnostic when the token is registered with a SYNC factory", () => {
-    const src = `
-      interface IDb {}
-      interface IRepo {}
-      class Repo implements IRepo {
-        constructor(db: IDb) {}
-      }
-      declare const services: any;
-      declare const container: any;
-      container.add("./app/IDb", { useFactory: () => ({}) });
-      services.add<IRepo>(Repo).as<"singleton">();
-    `;
-    const { diagnostics } = transform(fixture(src));
-    expect(codes(diagnostics)).not.toContain(DiagnosticCode.AsyncMismatch);
-  });
-});
-
-describe("equal-arity overload-ambiguity diagnostic", () => {
-  test("fires for two chained forCtor signatures of the same length", () => {
-    const src = `
-      import { forCtor } from "@fnioc/core";
-      interface ISvc {}
-      class Svc implements ISvc { constructor(x: any, y: any) {} }
-      forCtor(Svc).signature("a", "b").signature("c", "d");
-      declare const services: any;
-      services.add<ISvc>(Svc).as<"singleton">();
-    `;
-    const { diagnostics } = transform(fixture(src));
-    const diag = diagnostics.find(
-      (d) => d.code === DiagnosticCode.OverloadAmbiguity,
-    );
-    expect(diag).toBeDefined();
-    expect(String(diag!.messageText)).toContain("same length");
-    expect(String(diag!.messageText)).not.toContain("lower");
-  });
-
-  test("no diagnostic when overload arities differ", () => {
-    const src = `
-      import { forCtor } from "@fnioc/core";
-      interface ISvc {}
-      class Svc implements ISvc { constructor(x: any, y?: any) {} }
-      forCtor(Svc).signature("a", "b").signature("c");
-      declare const services: any;
-      services.add<ISvc>(Svc).as<"singleton">();
-    `;
-    const { diagnostics } = transform(fixture(src));
-    expect(codes(diagnostics)).not.toContain(DiagnosticCode.OverloadAmbiguity);
   });
 });

@@ -1,7 +1,8 @@
 import { test, expect, describe } from "bun:test";
 import { ServiceManifest, FactoryTargetError } from "@fnioc/di";
 import { defineDeps } from "./fixtures.js";
-import type { FactoryRef } from "@fnioc/core";
+import { closeToken } from "@fnioc/core";
+import type { FactoryRef, Token } from "@fnioc/core";
 import { T } from "./fixtures.js";
 
 // Factory injection + caller-supplied params.
@@ -347,5 +348,79 @@ describe("factory target errors", () => {
     const holder = root.resolve<Holder>(T.Repo);
     expect(holder.getFoo()).toBe(storedFoo); // thunk returns the exact registered value
     expect(holder.getFoo()).toBe(storedFoo); // same reference every call
+  });
+});
+
+// A factory REGISTRATION that itself carries a signature (the real 3-arg
+// `addFactory(token, fn, [[...slots]])` form the transformer emits for every
+// inline `add<I>((dep) => new Impl(dep))`). Distinct from the FactoryRef-slot
+// tests above: here the container SLOT-INJECTS the factory's own params from the
+// signature and invokes `factory(...resolvedArgs)` — the factory is NOT handed a
+// provider view (that is only the signature-less escape hatch).
+describe("factory registration carrying a signature (inline addFactory 3rd arg)", () => {
+  class Logger {
+    public readonly tag = "logger";
+  }
+
+  class Report {
+    public constructor(public readonly log: unknown) {}
+  }
+
+  /** The honest `Promise<T>` token — where an async-only registration lives. */
+  function promiseOf(token: Token): Token {
+    return closeToken("Promise", token);
+  }
+
+  test("sync fast path: the factory receives the resolved slot instance, not a provider view", () => {
+    const services = new ServiceManifest<"singleton">();
+    services.add(T.Logger, Logger).as("singleton");
+    // Real 3-arg addFactory — a NON-empty signature, so the single param is
+    // slot-injected from T.Logger.
+    services
+      .addFactory(
+        T.Repo,
+        (log: unknown) => new Report(log),
+        [[T.Logger]],
+      )
+      .as("singleton");
+
+    const report = services
+      .build()
+      .createScope("singleton")
+      .resolve<Report>(T.Repo);
+
+    expect(report).toBeInstanceOf(Report);
+    // The slot was resolved to the actual Logger instance...
+    expect(report.log).toBeInstanceOf(Logger);
+    // ...NOT the live provider view (which would carry a `resolve` method).
+    expect((report.log as { resolve?: unknown }).resolve).toBeUndefined();
+  });
+
+  test("async slow path: a pending slot arg settles before the factory is invoked", async () => {
+    class AsyncReport {
+      public constructor(public readonly config: { n: number }) {}
+    }
+
+    const services = new ServiceManifest<"singleton">();
+    // The slot's dep resolves ONLY via the async Promise<T> fallback, so under
+    // resolveAsync it arrives as a Pending → the factory build takes the slow path.
+    services.addFactory(promiseOf(T.Config), () => Promise.resolve({ n: 42 }));
+    services
+      .addFactory(
+        T.Repo,
+        (config: { n: number }) => new AsyncReport(config),
+        [[T.Config]],
+      )
+      .as("singleton");
+
+    const scope = services.build().createScope("singleton");
+
+    // Sync cannot settle the pending slot — no satisfiable signature.
+    expect(() => scope.resolve(T.Repo)).toThrow();
+
+    const report = await scope.resolveAsync<AsyncReport>(T.Repo);
+    expect(report).toBeInstanceOf(AsyncReport);
+    // The factory saw the SETTLED value, not a Pending/Promise.
+    expect(report.config).toEqual({ n: 42 });
   });
 });

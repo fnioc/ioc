@@ -56,7 +56,7 @@ export {
   type ConstructorExtraction,
   type DepContext,
 } from "./deps.js";
-export { collectAsyncTokens, type CheckContext } from "./checks.js";
+export { type CheckContext } from "./checks.js";
 export {
   DiagnosticCode,
   type Diagnostic,

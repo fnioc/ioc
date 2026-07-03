@@ -37,7 +37,6 @@ import {
 } from "./deps.js";
 import {
   checkExtractedRegistration,
-  checkOverloads,
   type CheckContext,
 } from "./checks.js";
 import {
@@ -320,12 +319,9 @@ function applyOverrides(
     if (ts.isStringLiteralLike(elem)) {
       result[i] = elem.text;
     } else if (ts.isObjectLiteralExpression(elem)) {
-      // Pass through verbatim as a slot string — the caller emits via slotLiteral,
-      // but we don't parse complex object literals at compile time. Instead we
-      // leave the base derived token at position i and let the runtime-time
-      // `forCtor(C).signature(...)` override path handle complex cases.
-      // This is a best-effort merge for the common string-token override case.
-      // For the test contract, we document that string overrides are supported.
+      // We don't parse complex object literals at compile time. Leave the base
+      // derived token at position i; this is a best-effort merge for the common
+      // string-token override case.
     }
     // For other expression types (variables, calls), we can't statically resolve.
   }
@@ -515,7 +511,7 @@ function planAddRegistration(
   if (type.getConstructSignatures().length) {
     const extraction = extractFromExpression(arg, ctx);
     let signatures = extraction
-      ? classSignatureFromExtraction(extraction, arg, ctx)
+      ? classSignatureFromExtraction(extraction, ctx)
       : extractCtorReferenceSignature(arg, ctx);
     // Apply the registration-time override array (design §6) if present.
     if (signatures && overrideArg) {
@@ -547,16 +543,13 @@ function planAddRegistration(
 
 /**
  * The class signature to emit for a statically-resolved class, running the PRD
- * §8 checks (equal-arity overload ambiguity, factory-param §4.5, async
- * mismatch). Always returns the extracted signatures — the transformer is now
- * the sole signature channel.
+ * §8 factory-param (§4.5) check. Always returns the extracted signatures — the
+ * transformer is the sole signature channel.
  */
 function classSignatureFromExtraction(
   extraction: ConstructorExtraction,
-  concreteArg: ts.Expression,
   ctx: LowerContext,
 ): Signature[] {
-  checkOverloads(extraction.classSymbol, concreteArg, ctx);
   checkExtractedRegistration(extraction, ctx);
   return extraction.signatures;
 }
