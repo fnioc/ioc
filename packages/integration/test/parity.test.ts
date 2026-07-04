@@ -195,14 +195,17 @@ describe("Union slot — inline-union semantics (manual token surface)", () => {
     expect(() => root.resolve(TConsumer)).toThrow(NoSatisfiableSignatureError);
   });
 
-  // NOTE: NoSatisfiableUnionError is a safety-net in resolveUnion that fires when
-  // NO member is resolvable during the resolution phase. In practice, selectSignature
-  // already checked satisfiability — if it selected the signature, at least one
-  // member IS resolvable. And resolveUnion does NOT catch errors from member
-  // construction (it doesn't try-catch and fallthrough). So NoSatisfiableUnionError
-  // cannot be triggered through the current di implementation's normal paths.
-  // The exhaustion case (ALL members unregistered) throws NoSatisfiableSignatureError
-  // at the signature-selection level before resolveUnion is ever entered.
+  // NOTE: resolveUnion (scope.ts) DOES try/catch around each member build and
+  // falls through to the next candidate on failure (see di's union.test.ts
+  // GAP2) — a statically-resolvable member (registered) can still throw at
+  // build time (e.g. its own ctor dep is unresolvable), and that failure is
+  // caught rather than propagated. NoSatisfiableUnionError fires once every
+  // member has been tried and failed that way; it IS reachable through normal
+  // di usage (see union.test.ts's "NoSatisfiableUnionError is thrown during
+  // buildPartitioned…" and "…includes the member list" cases). The exhaustion
+  // case exercised above (ALL members unregistered) instead throws
+  // NoSatisfiableSignatureError at the signature-selection level, before
+  // resolveUnion is ever entered — a different, earlier gate.
 });
 
 describe("Named alias — single-token semantics (manual token surface)", () => {
