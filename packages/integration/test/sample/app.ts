@@ -25,14 +25,14 @@ import type {
 } from "./services.js";
 
 const T = {
-  logger: "./sample/contracts/ILogger",
-  db: "./sample/contracts/IDbConnection",
-  repo: "./sample/contracts/IUserRepo",
-  ctx: "./sample/contracts/IRequestContext",
-  report: "./sample/contracts/IReport",
-  reportService: "./sample/contracts/IReportService",
-  thunkConsumer: "./sample/contracts/IThunkConsumer",
-  configConsumer: "./sample/contracts/IConfigConsumer",
+  logger: "fnioc-integration-sample/src/sample/contracts:ILogger",
+  db: "fnioc-integration-sample/src/sample/contracts:IDbConnection",
+  repo: "fnioc-integration-sample/src/sample/contracts:IUserRepo",
+  ctx: "fnioc-integration-sample/src/sample/contracts:IRequestContext",
+  report: "fnioc-integration-sample/src/sample/contracts:IReport",
+  reportService: "fnioc-integration-sample/src/sample/contracts:IReportService",
+  thunkConsumer: "fnioc-integration-sample/src/sample/contracts:IThunkConsumer",
+  configConsumer: "fnioc-integration-sample/src/sample/contracts:IConfigConsumer",
   config: CONFIG_TOKEN,
   thunk: THUNK_TOKEN,
 } as const;

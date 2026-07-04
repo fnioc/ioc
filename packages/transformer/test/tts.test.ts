@@ -213,7 +213,7 @@ describe("Inject brand detection (§3 / §5)", () => {
       diagnostics.filter((d) => d.code === DiagnosticCode.UnderivableToken).length,
     ).toBe(0);
     expect(depsArrayFor(out, "Svc")).toBe(
-      '[[{ union: ["pkg:x", "./app/IBar"] }]]',
+      '[[{ union: ["pkg:x", "./app:IBar"] }]]',
     );
   });
 
@@ -246,10 +246,10 @@ describe("Inject brand detection (§3 / §5)", () => {
     const { outputs } = transform(files, { entry: ["/proj/src/app.ts"] });
     const out = outputs["/proj/src/app.ts"]!;
     // First param: branded → "pkg:redis-cache"
-    // Second param: normal derivation → "./app/ILogger" source-relative token
+    // Second param: normal derivation → "./app:ILogger" source-relative token
     const arr = depsArrayFor(out, "Svc");
     expect(arr).toContain('"pkg:redis-cache"');
-    expect(arr).toContain('"./app/ILogger"');
+    expect(arr).toContain('"./app:ILogger"');
   });
 });
 
@@ -269,7 +269,7 @@ describe("inline union lowering (§8)", () => {
     `;
     const { output } = transform(fixture(src));
     expect(depsArrayFor(output, "Handler")).toBe(
-      '[[{ union: ["./app/IRedis", "./app/IMemoryCache"] }]]',
+      '[[{ union: ["./app:IRedis", "./app:IMemoryCache"] }]]',
     );
   });
 
@@ -287,7 +287,7 @@ describe("inline union lowering (§8)", () => {
     `;
     const { output } = transform(fixture(src));
     expect(depsArrayFor(output, "Handler")).toBe(
-      '[[{ union: ["./app/IA", "./app/IB", "./app/IC"] }]]',
+      '[[{ union: ["./app:IA", "./app:IB", "./app:IC"] }]]',
     );
   });
 
@@ -305,7 +305,7 @@ describe("inline union lowering (§8)", () => {
     `;
     const { output } = transform(fixture(src));
     expect(depsArrayFor(output, "Handler")).toBe(
-      '[[{ union: ["./app/IRedis", "./app/IMemoryCache"] }, "./app/ILogger"]]',
+      '[[{ union: ["./app:IRedis", "./app:IMemoryCache"] }, "./app:ILogger"]]',
     );
   });
 
@@ -348,7 +348,7 @@ describe("inline union lowering (§8)", () => {
     `;
     const { output } = transform(fixture(src));
     expect(depsArrayFor(output, "Handler")).toBe(
-      '[[{ union: ["./app/IFoo", { value: void 0 }] }]]',
+      '[[{ union: ["./app:IFoo", { value: void 0 }] }]]',
     );
   });
 });
@@ -416,7 +416,7 @@ describe("resolveFactory lowering with params (§2)", () => {
     const { output } = transform(fixture(src));
     // The return-type token is the first arg; param tokens follow.
     expect(output).toContain(
-      'scope.resolveFactory("./app/IT", ["./app/IA", "./app/IB"])',
+      'scope.resolveFactory("./app:IT", ["./app:IA", "./app:IB"])',
     );
   });
 
@@ -428,8 +428,8 @@ describe("resolveFactory lowering with params (§2)", () => {
     `;
     const { output } = transform(fixture(src));
     // Zero-param form: no params array.
-    expect(output).toContain('scope.resolveFactory("./app/IT")');
-    expect(output).not.toContain("resolveFactory(\"./app/IT\", [");
+    expect(output).toContain('scope.resolveFactory("./app:IT")');
+    expect(output).not.toContain("resolveFactory(\"./app:IT\", [");
   });
 
   test("resolve<(a: A) => T>() → single-param form", () => {
@@ -441,7 +441,7 @@ describe("resolveFactory lowering with params (§2)", () => {
     `;
     const { output } = transform(fixture(src));
     expect(output).toContain(
-      'scope.resolveFactory("./app/IT", ["./app/IA"])',
+      'scope.resolveFactory("./app:IT", ["./app:IA"])',
     );
   });
 
@@ -456,7 +456,7 @@ describe("resolveFactory lowering with params (§2)", () => {
     const { output, diagnostics } = transform(fixture(src));
     const errs = diagnostics.filter((d) => d.code === DiagnosticCode.UnderivableToken);
     expect(errs.length).toBe(0);
-    expect(output).toContain('scope.resolveFactory("./app/IT", ["string"])');
+    expect(output).toContain('scope.resolveFactory("./app:IT", ["string"])');
   });
 });
 
@@ -479,11 +479,11 @@ describe("registration-time override merge (§6)", () => {
     const { output } = transform(fixture(src));
     const arr = depsArrayFor(output, "RedisCache");
     // Position 0: derived token for IRedisClient.
-    expect(arr).toContain('"./app/IRedisClient"');
+    expect(arr).toContain('"./app:IRedisClient"');
     // Position 1: overridden to "pkg:ILogger".
     expect(arr).toContain('"pkg:ILogger"');
-    // The derived "./app/ILogger" must NOT appear (it was overridden).
-    expect(arr).not.toContain('"./app/ILogger"');
+    // The derived "./app:ILogger" must NOT appear (it was overridden).
+    expect(arr).not.toContain('"./app:ILogger"');
   });
 
   test("non-undefined override replaces the derived token at that position", () => {
@@ -502,7 +502,7 @@ describe("registration-time override merge (§6)", () => {
     expect(arr).toContain('"pkg:IRedisClient"');
     expect(arr).toContain('"pkg:ILogger"');
     // The derived tokens must NOT appear.
-    expect(arr).not.toContain('"./app/IRedisClient"');
-    expect(arr).not.toContain('"./app/ILogger"');
+    expect(arr).not.toContain('"./app:IRedisClient"');
+    expect(arr).not.toContain('"./app:ILogger"');
   });
 });

@@ -15,7 +15,7 @@ describe("statically-resolved classes always carry an inline signature", () => {
       services.add<IFoo>(Foo).as<"singleton">();
     `;
     const { output } = transform(fixture(src));
-    expect(output).toContain('services.add("./app/IFoo", Foo, [[]]).as("singleton")');
+    expect(output).toContain('services.add("./app:IFoo", Foo, [[]]).as("singleton")');
     expect(output).not.toContain("defineDeps");
   });
 });
@@ -35,7 +35,7 @@ describe("fully-dynamic classes", () => {
     // guidance at resolve time — that is @fnioc/di's job).
     expect(output).not.toContain("defineDeps(");
     // The registration is still lowered to the string-token form.
-    expect(output).toContain('services.add("./app/IFoo", Ctor).as("singleton")');
+    expect(output).toContain('services.add("./app:IFoo", Ctor).as("singleton")');
   });
 
   test("concrete that is a call expression → no dep array", () => {
@@ -47,6 +47,6 @@ describe("fully-dynamic classes", () => {
     `;
     const { output } = transform(fixture(src));
     expect(output).not.toContain("defineDeps(");
-    expect(output).toContain('services.add("./app/IFoo", makeCtor()).as("singleton")');
+    expect(output).toContain('services.add("./app:IFoo", makeCtor()).as("singleton")');
   });
 });

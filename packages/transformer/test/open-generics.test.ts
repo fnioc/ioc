@@ -36,14 +36,14 @@ describe("closed-generic token derivation", () => {
     const { output, diagnostics } = transform(fixture(src));
     expect(codes(diagnostics)).toEqual([]);
     expect(output).toContain(
-      'services.add("./app/IRepo<./app/User>", UserRepo, [[]]).as("singleton");',
+      'services.add("./app:IRepo<./app:User>", UserRepo, [[]]).as("singleton");',
     );
     // Signatures ride inline on the registration — no hoist, no defineDeps.
     expect(output).not.toContain("ɵreg");
     expect(output).not.toContain("defineDeps");
   });
 
-  test("package-public type arg → base<pkg:subpath/Symbol>", () => {
+  test("package-public type arg → base<importSpecifier:Symbol>", () => {
     const files: VirtualFiles = {
       "/proj/node_modules/your-lib/package.json": JSON.stringify({
         name: "your-lib",
@@ -67,7 +67,7 @@ describe("closed-generic token derivation", () => {
     });
     expect(codes(diagnostics)).toEqual([]);
     expect(outputs["/proj/src/app.ts"]!).toContain(
-      'services.add("./src/app/IWrap<your-lib:contracts/IFoo>", Wrap, ',
+      'services.add("./src/app:IWrap<your-lib/contracts:IFoo>", Wrap, ',
     );
   });
 
@@ -80,7 +80,7 @@ describe("closed-generic token derivation", () => {
       const t = nameof<IRepo<IBox<User>>>();
     `;
     const { output } = transform(fixture(src));
-    expect(output).toContain('"./app/IRepo<./app/IBox<./app/User>>"');
+    expect(output).toContain('"./app:IRepo<./app:IBox<./app:User>>"');
   });
 
   test("type-parameter defaults arrive fully applied: bare IFoo<T = string>", () => {
@@ -90,7 +90,7 @@ describe("closed-generic token derivation", () => {
       const t = nameof<ICfg>();
     `;
     const { output } = transform(fixture(src));
-    expect(output).toContain('"./app/ICfg<string>"');
+    expect(output).toContain('"./app:ICfg<string>"');
   });
 
   test("alias-wins regression: a named alias of a closed generic stays the bare alias token", () => {
@@ -103,7 +103,7 @@ describe("closed-generic token derivation", () => {
       services.add<UserRepoAlias>(SqlUserRepo).as<"singleton">();
     `;
     const { output } = transform(fixture(src));
-    expect(output).toContain('services.add("./app/UserRepoAlias", SqlUserRepo, ');
+    expect(output).toContain('services.add("./app:UserRepoAlias", SqlUserRepo, ');
     expect(output).not.toContain("UserRepoAlias<");
   });
 
@@ -116,7 +116,7 @@ describe("closed-generic token derivation", () => {
       const t = nameof<Wrap<User>>();
     `;
     const { output } = transform(fixture(src));
-    expect(output).toContain('"./app/Wrap<./app/User>"');
+    expect(output).toContain('"./app:Wrap<./app:User>"');
   });
 
   test("Promise<X> ctor param → the honest closed-generic token Promise<X>", () => {
@@ -131,9 +131,9 @@ describe("closed-generic token derivation", () => {
     `;
     const { output } = transform(fixture(src));
     // Honest token-split: Promise<IRepo<User>> is NOT stripped — it derives the
-    // closed-generic token `Promise<./app/IRepo<./app/User>>`.
+    // closed-generic token `Promise<./app:IRepo<./app:User>>`.
     expect(output).toContain(
-      'Svc, [["Promise<./app/IRepo<./app/User>>"]]',
+      'Svc, [["Promise<./app:IRepo<./app:User>>"]]',
     );
   });
 
@@ -145,7 +145,7 @@ describe("closed-generic token derivation", () => {
       const t = nameof<IRepo<Promise<User>>>();
     `;
     const { output } = transform(fixture(src));
-    expect(output).toContain('"./app/IRepo<Promise<./app/User>>"');
+    expect(output).toContain('"./app:IRepo<Promise<./app:User>>"');
   });
 
   test("default-lib generics tokenize by bare symbol name: Map<string, User>", () => {
@@ -155,7 +155,7 @@ describe("closed-generic token derivation", () => {
       const t = nameof<Map<string, User>>();
     `;
     const { output } = transform(fixture(src));
-    expect(output).toContain('"Map<string,./app/User>"');
+    expect(output).toContain('"Map<string,./app:User>"');
   });
 });
 
@@ -171,8 +171,8 @@ describe("hole derivation ($N via the Hole brand)", () => {
     `;
     const { output, diagnostics } = transform(fixture(src));
     expect(codes(diagnostics)).toEqual([]);
-    expect(output).toContain('"./app/IRepo<$1>"');
-    expect(output).toContain('"./app/IPair<$2,$9>"');
+    expect(output).toContain('"./app:IRepo<$1>"');
+    expect(output).toContain('"./app:IPair<$2,$9>"');
   });
 
   test("unbounded $<N> sugar derives the $N hole token identically to Hole<N>", () => {
@@ -187,8 +187,8 @@ describe("hole derivation ($N via the Hole brand)", () => {
     `;
     const { output, diagnostics } = transform(fixture(src));
     expect(codes(diagnostics)).toEqual([]);
-    expect(output).toContain('const a = "./app/IRepo<$1>";');
-    expect(output).toContain('const b = "./app/IRepo<$1>";');
+    expect(output).toContain('const a = "./app:IRepo<$1>";');
+    expect(output).toContain('const b = "./app:IRepo<$1>";');
   });
 
   test("constrained Hole<N, C> derives $N, not the constraint or an alias token", () => {
@@ -203,9 +203,9 @@ describe("hole derivation ($N via the Hole brand)", () => {
     `;
     const { output, diagnostics } = transform(fixture(src));
     expect(codes(diagnostics)).toEqual([]);
-    expect(output).toContain('const a = "./app/IRepo<$1>";');
-    expect(output).toContain('const b = "./app/IRepo<$2>";');
-    expect(output).not.toContain('"./app/H2"');
+    expect(output).toContain('const a = "./app:IRepo<$1>";');
+    expect(output).toContain('const b = "./app:IRepo<$2>";');
+    expect(output).not.toContain('"./app:H2"');
   });
 });
 
@@ -224,7 +224,7 @@ describe("instantiation-expression lowering (registration-carried deps)", () => 
     const { output, diagnostics } = transform(fixture(src));
     expect(codes(diagnostics)).toEqual([]);
     expect(output).toContain(
-      'services.add("./app/IRepo<$1>", SqlRepo, [["./app/IDb", "$1"]]).as("singleton");',
+      'services.add("./app:IRepo<$1>", SqlRepo, [["./app:IDb", "$1"]]).as("singleton");',
     );
     // Registration-carried deps: no ctor-keyed metadata, no hoisted const.
     expect(output).not.toContain("defineDeps");
@@ -244,7 +244,7 @@ describe("instantiation-expression lowering (registration-carried deps)", () => 
     const { output, diagnostics } = transform(fixture(src));
     expect(codes(diagnostics)).toEqual([]);
     expect(output).toContain(
-      'services.add("./app/IPair<$1,$2>", Pair, [["$2", "$1"]]).as("singleton");',
+      'services.add("./app:IPair<$1,$2>", Pair, [["$2", "$1"]]).as("singleton");',
     );
   });
 
@@ -261,7 +261,7 @@ describe("instantiation-expression lowering (registration-carried deps)", () => 
     const { output, diagnostics } = transform(fixture(src));
     expect(codes(diagnostics)).toEqual([]);
     expect(output).toContain(
-      'services.add("./app/IPair<$1,$1>", Pair, [["$1", "$1"]]).as("singleton");',
+      'services.add("./app:IPair<$1,$1>", Pair, [["$1", "$1"]]).as("singleton");',
     );
   });
 
@@ -279,7 +279,7 @@ describe("instantiation-expression lowering (registration-carried deps)", () => 
     const { output, diagnostics } = transform(fixture(src));
     expect(codes(diagnostics)).toEqual([]);
     expect(output).toContain(
-      'services.add("./app/IFoo<$1>", Foo, [["./app/Pair<$1,$1>"]]).as("singleton");',
+      'services.add("./app:IFoo<$1>", Foo, [["./app:Pair<$1,$1>"]]).as("singleton");',
     );
   });
 
@@ -299,7 +299,7 @@ describe("instantiation-expression lowering (registration-carried deps)", () => 
     // `T | Bar` with `T = Bar` collapses to the non-union `Bar` — the param is a
     // single `Bar` token, NOT a union deriving the unsubstituted `T`.
     expect(output).toContain(
-      'services.add("./app/IRepo<./app/Bar>", Repo, [["./app/Bar"]]).as("singleton");',
+      'services.add("./app:IRepo<./app:Bar>", Repo, [["./app:Bar"]]).as("singleton");',
     );
   });
 
@@ -318,7 +318,7 @@ describe("instantiation-expression lowering (registration-carried deps)", () => 
     const { output, diagnostics } = transform(fixture(src));
     expect(codes(diagnostics)).toEqual([]);
     expect(output).toContain(
-      'services.add("./app/IRepo<./app/User>", SqlRepo, [["./app/IDb", "./app/User"]]).as("singleton");',
+      'services.add("./app:IRepo<./app:User>", SqlRepo, [["./app:IDb", "./app:User"]]).as("singleton");',
     );
     expect(output).not.toContain("defineDeps");
   });
@@ -336,7 +336,7 @@ describe("instantiation-expression lowering (registration-carried deps)", () => 
     const { output, diagnostics } = transform(fixture(src));
     expect(codes(diagnostics)).toEqual([]);
     expect(output).toContain(
-      'services.add("./app/IRepo<$1>", SqlRepo, [["$1"]]).as("request");',
+      'services.add("./app:IRepo<$1>", SqlRepo, [["$1"]]).as("request");',
     );
   });
 });
@@ -355,7 +355,7 @@ describe("Typeof witness", () => {
     const { output, diagnostics } = transform(fixture(src));
     expect(codes(diagnostics)).toEqual([]);
     expect(output).toContain(
-      'services.add("./app/ILogger<$1>", Logger, [[{ typeArg: 1 }]]).as("singleton");',
+      'services.add("./app:ILogger<$1>", Logger, [[{ typeArg: 1 }]]).as("singleton");',
     );
   });
 
@@ -373,7 +373,7 @@ describe("Typeof witness", () => {
     const { output, diagnostics } = transform(fixture(src));
     expect(codes(diagnostics)).toEqual([]);
     expect(output).toContain(
-      'services.add("./app/ILogger<./app/User>", Logger, [[{ value: "./app/User" }]]).as("singleton");',
+      'services.add("./app:ILogger<./app:User>", Logger, [[{ value: "./app:User" }]]).as("singleton");',
     );
   });
 });
@@ -387,7 +387,7 @@ describe("resolve / nameof pick up generic tokens automatically", () => {
       const r = provider.resolve<IRepo<User>>();
     `;
     const { output } = transform(fixture(src));
-    expect(output).toContain('provider.resolve("./app/IRepo<./app/User>")');
+    expect(output).toContain('provider.resolve("./app:IRepo<./app:User>")');
   });
 
   test("nameof<IRepo<$<1>>>() yields the open template string", () => {
@@ -398,7 +398,7 @@ describe("resolve / nameof pick up generic tokens automatically", () => {
       const t = nameof<IRepo<$<1>>>();
     `;
     const { output } = transform(fixture(src));
-    expect(output).toContain('const t = "./app/IRepo<$1>";');
+    expect(output).toContain('const t = "./app:IRepo<$1>";');
   });
 });
 
@@ -602,10 +602,10 @@ describe("non-generic regression", () => {
     expect(output).not.toContain("defineDeps");
     expect(output).not.toContain("ɵreg");
     expect(output).toContain(
-      'services.add("./app/ILogger", ConsoleLogger, [[]]).as("singleton");',
+      'services.add("./app:ILogger", ConsoleLogger, [[]]).as("singleton");',
     );
     expect(output).toContain(
-      'services.add("./app/IRepo", SqlRepo, [["./app/ILogger"]]).as("request");',
+      'services.add("./app:IRepo", SqlRepo, [["./app:ILogger"]]).as("request");',
     );
   });
 });
