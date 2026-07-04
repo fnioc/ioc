@@ -711,19 +711,15 @@ export class ServiceProvider<S extends string = string>
       throw new FactoryTargetError(ref.type, "unregistered");
     }
 
-    // A value target has no construction step — the "factory" is a thunk that
-    // returns the stored instance (its lifetime is moot: a value is itself).
-    if (target.kind === "value") {
-      return () => sp.#resolve<unknown>(ref.type, owningFrame, [], false);
-    }
-
     const callerParams = ref.params !== undefined && ref.params.length
       ? ref.params
       : undefined;
 
-    if (callerParams === undefined) {
-      // Strict zero-arg mode: every slot must resolve. Route through the normal
-      // resolve path so the registered lifetime is respected.
+    // Both the value target and the strict zero-arg factory hand back the same
+    // thunk: route through the normal resolve path so the registered lifetime is
+    // respected. A value target has no construction step (its lifetime is moot —
+    // a value is itself); a zero-arg factory requires every slot to resolve.
+    if (target.kind === "value" || callerParams === undefined) {
       return () => sp.#resolve<unknown>(ref.type, owningFrame, [], false);
     }
 
