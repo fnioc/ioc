@@ -117,29 +117,6 @@ function rawTypeArgError(slot: TypeArgRef): TypeError {
   );
 }
 
-/** The closed kind-set of a `DepSlot` — the discriminant the ONE slot switch runs on. */
-type SlotKind = "scope" | "factory" | "union" | "literal" | "typearg" | "token";
-
-/** Classifies a slot. Guard order mirrors today's dispatch order exactly. */
-function slotKind(slot: DepSlot): SlotKind {
-  if (isScopeRef(slot)) {
-    return "scope";
-  }
-  if (isFactoryRef(slot)) {
-    return "factory";
-  }
-  if (isUnionSlot(slot)) {
-    return "union";
-  }
-  if (isLiteralRef(slot)) {
-    return "literal";
-  }
-  if (isTypeArgRef(slot)) {
-    return "typearg";
-  }
-  return "token";
-}
-
 /**
  * The string-token members of a `Union` (recursing into nested unions), used to
  * name what a fully-unsatisfiable union slot needs registered. Non-token members
@@ -1013,10 +990,14 @@ export class ServiceProvider<S extends string = string>
   }
 
   /**
-   * THE slot dispatch — the single copy of the 6-way switch, shared by the
+   * THE slot dispatch — the single copy of the 6-way branch, shared by the
    * spine's arg fill, union member resolution, and `#buildPartitioned`. The
    * token arm is the only canonical recursion re-entry into `#resolve`.
-   * (TS cannot narrow through the external classifier, hence the per-arm casts.)
+   *
+   * An if-chain over the guard predicates (not a classifier + switch): each
+   * guard narrows the slot for its own arm at zero cast cost, and exhausting
+   * every object-slot guard leaves a bare string `Token` for the final arm. The
+   * order mirrors the former dispatch order exactly.
    */
   #resolveSlot<T>(
     slot: DepSlot,
@@ -1024,30 +1005,22 @@ export class ServiceProvider<S extends string = string>
     stack: Token[],
     async: boolean,
   ): T | Pending<T> {
-    const kind = slotKind(slot);
-    switch (kind) {
-      case "scope": {
-        return this.#makeProviderView(owningFrame, stack) as T;
-      }
-      case "factory": {
-        return this.#makeFactory(slot as FactoryRef, owningFrame) as T;
-      }
-      case "union": {
-        return this.#resolveUnion<T>(slot as Union, owningFrame, stack, async);
-      }
-      case "literal": {
-        return (slot as LiteralRef).value as T;
-      }
-      case "typearg": {
-        throw rawTypeArgError(slot as TypeArgRef);
-      }
-      case "token": {
-        return this.#resolve<T>(slot as Token, owningFrame, stack, async);
-      }
-      default: {
-        return assertNever(kind);
-      }
+    if (isScopeRef(slot)) {
+      return this.#makeProviderView(owningFrame, stack) as T;
     }
+    if (isFactoryRef(slot)) {
+      return this.#makeFactory(slot, owningFrame) as T;
+    }
+    if (isUnionSlot(slot)) {
+      return this.#resolveUnion<T>(slot, owningFrame, stack, async);
+    }
+    if (isLiteralRef(slot)) {
+      return slot.value as T;
+    }
+    if (isTypeArgRef(slot)) {
+      throw rawTypeArgError(slot);
+    }
+    return this.#resolve<T>(slot, owningFrame, stack, async);
   }
 
   // ── Disposal ────────────────────────────────────────────────────────────────
