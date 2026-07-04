@@ -20,8 +20,8 @@
 // one's cached instance — when no matching frame encloses the owner, the dep
 // resolves transiently (a fresh instance) instead.
 
-import type { DepSlot, FactoryRef, LiteralRef, ParsedToken, ScopeRef, Token, TypeArgRef, Union } from "@fnioc/core";
-import { isFactoryRef as coreIsFactoryRef, isLiteralRef as coreIsLiteralRef, isScopeRef as coreIsScopeRef, isTypeArgRef as coreIsTypeArgRef, isUnionSlot } from "./guards.js";
+import type { DepSlot, FactoryRef, LiteralRef, ParsedToken, Token, TypeArgRef, Union } from "@fnioc/core";
+import { isFactoryRef, isLiteralRef, isScopeRef, isTypeArgRef, isUnionSlot } from "./guards.js";
 import { closeToken, isOpenToken, parseToken, substituteSignatures } from "./tokens.js";
 import type { Func } from "@rhombus-toolkit/func";
 import { assertNever } from "./assert.js";
@@ -107,39 +107,6 @@ function settle<T>(result: T | Pending<T>): Promise<Awaited<T>> {
   return Promise.resolve(isPending(result) ? result.promise : result);
 }
 
-/**
- * True when a `DepSlot` is a `FactoryRef` — a factory-injected parameter.
- * Delegates to the core guard which checks the `.type` field (T0 rename).
- */
-const isFactoryRef: (slot: DepSlot) => slot is FactoryRef = coreIsFactoryRef;
-
-/**
- * True when a `DepSlot` is a `ScopeRef` — a parameter to be filled with the
- * live resolution provider itself (emitted for a factory/ctor param typed
- * `Resolver`, `ScopeFactory`, or the legacy `ResolveScope`).
- */
-const isScopeRef: (slot: DepSlot) => slot is ScopeRef = coreIsScopeRef as (slot: DepSlot) => slot is ScopeRef;
-
-/**
- * True when a `DepSlot` is a `Union` — a set of alternative slots tried in
- * declaration order.
- */
-const isUnion: (slot: DepSlot) => slot is Union = isUnionSlot;
-
-/**
- * True when a `DepSlot` is a `LiteralRef` — a singular literal supplying its
- * value directly (Rule 2). Always satisfiable; injected as `slot.value`.
- */
-const isLiteralRef: (slot: DepSlot) => slot is LiteralRef = coreIsLiteralRef;
-
-/**
- * True when a `DepSlot` is a raw `TypeArgRef` — an OPEN template slot that
- * substitution should have closed into a `LiteralRef`. One reaching the engine
- * means an open template's signature is being used unclosed: never satisfiable
- * in selection, a loud error in resolution.
- */
-const isTypeArgRef: (slot: DepSlot) => slot is TypeArgRef = coreIsTypeArgRef;
-
 /** The loud error for a raw `TypeArgRef` slot reaching resolution. */
 function rawTypeArgError(slot: TypeArgRef): TypeError {
   return new TypeError(
@@ -148,29 +115,6 @@ function rawTypeArgError(slot: TypeArgRef): TypeError {
       `closed token so the engine can close the template, or substitute the ` +
       `signatures before hand-feeding them.`,
   );
-}
-
-/** The closed kind-set of a `DepSlot` — the discriminant the ONE slot switch runs on. */
-type SlotKind = "scope" | "factory" | "union" | "literal" | "typearg" | "token";
-
-/** Classifies a slot. Guard order mirrors today's dispatch order exactly. */
-function slotKind(slot: DepSlot): SlotKind {
-  if (isScopeRef(slot)) {
-    return "scope";
-  }
-  if (isFactoryRef(slot)) {
-    return "factory";
-  }
-  if (isUnion(slot)) {
-    return "union";
-  }
-  if (isLiteralRef(slot)) {
-    return "literal";
-  }
-  if (isTypeArgRef(slot)) {
-    return "typearg";
-  }
-  return "token";
 }
 
 /**
@@ -182,10 +126,29 @@ function* unionTokenMembers(slot: Union): Generator<Token> {
   for (const member of slot.union) {
     if (typeof member === "string") {
       yield member;
-    } else if (isUnion(member as DepSlot)) {
-      yield* unionTokenMembers(member as Union);
+    } else if (isUnionSlot(member)) {
+      yield* unionTokenMembers(member);
     }
   }
+}
+
+/**
+ * Orders signatures longest → shortest with a STABLE tie-break: equal-arity
+ * signatures keep their registration order. The shared ordering behind greedy
+ * selection (`#selectSignature`) and factory-target selection
+ * (`#selectTargetSignature`).
+ */
+function orderByArityDesc(
+  signatures: readonly (readonly DepSlot[])[],
+): readonly (readonly DepSlot[])[] {
+  return signatures
+    .map((sig, index) => ({ sig, index }))
+    .sort((a, b) =>
+      b.sig.length !== a.sig.length
+        ? b.sig.length - a.sig.length
+        : a.index - b.index,
+    )
+    .map(({ sig }) => sig);
 }
 
 /**
@@ -288,13 +251,21 @@ export class ServiceProvider<S extends string = string>
   public createScope(
     ...args: "scoped" extends S ? [name?: S] : [name: S]
   ): ServiceProvider<S> {
-    const name = (args[0] ?? "scoped") as string;
-    const childFrame = new Scope(name, this.#frame);
+    return this.#childScope((args[0] ?? "scoped") as string, this.#frame);
+  }
+
+  /**
+   * Builds a child `ServiceProvider` whose frame is a new `Scope` named `name`
+   * parented to `parentFrame`, sharing this tree's sealed maps and closed memo.
+   * The shared body behind both the public `createScope` and the resolution
+   * view's `createScope`.
+   */
+  #childScope(name: string, parentFrame: Scope | undefined): ServiceProvider<S> {
     return new ServiceProvider<S>(
       this.#registrations,
       this.#openRegistrations,
       this.#closedMemo,
-      childFrame,
+      new Scope(name, parentFrame),
     );
   }
 
@@ -718,16 +689,8 @@ export class ServiceProvider<S extends string = string>
       },
       resolveFactory: (depToken: Token, depParams?: readonly Token[]): unknown =>
         sp.#makeFactory({ type: depToken, params: depParams }, owningFrame),
-      createScope: (...args: ["scoped"?] | [S]): ServiceProvider<S> => {
-        const name = (args[0] ?? "scoped") as string;
-        const childFrame = new Scope(name, owningFrame);
-        return new ServiceProvider<S>(
-          sp.#registrations,
-          sp.#openRegistrations,
-          sp.#closedMemo,
-          childFrame,
-        );
-      },
+      createScope: (...args: ["scoped"?] | [S]): ServiceProvider<S> =>
+        sp.#childScope((args[0] ?? "scoped") as string, owningFrame),
     } as Resolver & ScopeFactory<S>;
   }
 
@@ -767,19 +730,15 @@ export class ServiceProvider<S extends string = string>
       throw new FactoryTargetError(ref.type, "unregistered");
     }
 
-    // A value target has no construction step — the "factory" is a thunk that
-    // returns the stored instance (its lifetime is moot: a value is itself).
-    if (target.kind === "value") {
-      return () => sp.#resolve<unknown>(ref.type, owningFrame, [], false);
-    }
-
     const callerParams = ref.params !== undefined && ref.params.length
       ? ref.params
       : undefined;
 
-    if (callerParams === undefined) {
-      // Strict zero-arg mode: every slot must resolve. Route through the normal
-      // resolve path so the registered lifetime is respected.
+    // Both the value target and the strict zero-arg factory hand back the same
+    // thunk: route through the normal resolve path so the registered lifetime is
+    // respected. A value target has no construction step (its lifetime is moot —
+    // a value is itself); a zero-arg factory requires every slot to resolve.
+    if (target.kind === "value" || callerParams === undefined) {
       return () => sp.#resolve<unknown>(ref.type, owningFrame, [], false);
     }
 
@@ -799,6 +758,7 @@ export class ServiceProvider<S extends string = string>
     // created it.
     return (...callArgs: unknown[]) =>
       sp.#buildPartitioned(
+        ref.type,
         target,
         targetSignature as readonly DepSlot[] | undefined,
         callerParams,
@@ -825,6 +785,7 @@ export class ServiceProvider<S extends string = string>
    * ctor or record-less factory) — in that case args is empty.
    */
   #buildPartitioned<T>(
+    targetToken: Token,
     target: ClassRegistration | FactoryRegistration,
     signature: readonly DepSlot[] | undefined,
     callerParams: readonly Token[],
@@ -871,7 +832,9 @@ export class ServiceProvider<S extends string = string>
 
         // Not claimed by callerParams. Must resolve from the container.
         if (!this.#isResolvable(slot, false)) {
-          throw new NoSatisfiableSignatureError(slot, slot, [slot]);
+          const targetName =
+            target.kind === "class" ? target.ctor.name : target.factory.name;
+          throw new NoSatisfiableSignatureError(targetToken, targetName, [slot]);
         }
         return this.#resolve<unknown>(slot, owningFrame, stack, false);
       }
@@ -907,18 +870,8 @@ export class ServiceProvider<S extends string = string>
     signatures: readonly (readonly DepSlot[])[],
     async: boolean,
   ): readonly DepSlot[] {
-    // Stable sort by descending length; index keeps equal-arity ties in
-    // registration order.
-    const ordered = signatures
-      .map((sig, index) => ({ sig, index }))
-      .sort((a, b) =>
-        b.sig.length !== a.sig.length
-          ? b.sig.length - a.sig.length
-          : a.index - b.index,
-      );
-
     const unsatisfiable = new Set<Token>();
-    for (const { sig } of ordered) {
+    for (const sig of orderByArityDesc(signatures)) {
       let satisfiable = true;
       for (const slot of sig) {
         if (isFactoryRef(slot) || isScopeRef(slot) || isLiteralRef(slot)) {continue;}
@@ -928,7 +881,7 @@ export class ServiceProvider<S extends string = string>
           satisfiable = false;
           continue;
         }
-        if (isUnion(slot)) {
+        if (isUnionSlot(slot)) {
           // A union slot is satisfiable iff at least one member is resolvable.
           // When none is, surface its string-token members so the error names
           // exactly what to register.
@@ -959,13 +912,7 @@ export class ServiceProvider<S extends string = string>
   #selectTargetSignature(
     signatures: readonly (readonly DepSlot[])[],
   ): readonly DepSlot[] {
-    return signatures
-      .map((sig, index) => ({ sig, index }))
-      .sort((a, b) =>
-        b.sig.length !== a.sig.length
-          ? b.sig.length - a.sig.length
-          : a.index - b.index,
-      )[0]!.sig;
+    return orderByArityDesc(signatures)[0]!;
   }
 
   /**
@@ -994,9 +941,9 @@ export class ServiceProvider<S extends string = string>
   #isResolvableSlot(slot: DepSlot, async: boolean): boolean {
     if (isFactoryRef(slot) || isScopeRef(slot) || isLiteralRef(slot)) {return true;}
     if (isTypeArgRef(slot)) {return false;}
-    if (isUnion(slot)) {
+    if (isUnionSlot(slot)) {
       return slot.union.some((member) =>
-        this.#isResolvableSlot(member as DepSlot, async),
+        this.#isResolvableSlot(member, async),
       );
     }
     return this.#isResolvable(slot, async);
@@ -1046,10 +993,14 @@ export class ServiceProvider<S extends string = string>
   }
 
   /**
-   * THE slot dispatch — the single copy of the 6-way switch, shared by the
+   * THE slot dispatch — the single copy of the 6-way branch, shared by the
    * spine's arg fill, union member resolution, and `#buildPartitioned`. The
    * token arm is the only canonical recursion re-entry into `#resolve`.
-   * (TS cannot narrow through the external classifier, hence the per-arm casts.)
+   *
+   * An if-chain over the guard predicates (not a classifier + switch): each
+   * guard narrows the slot for its own arm at zero cast cost, and exhausting
+   * every object-slot guard leaves a bare string `Token` for the final arm. The
+   * order mirrors the former dispatch order exactly.
    */
   #resolveSlot<T>(
     slot: DepSlot,
@@ -1057,30 +1008,22 @@ export class ServiceProvider<S extends string = string>
     stack: Token[],
     async: boolean,
   ): T | Pending<T> {
-    const kind = slotKind(slot);
-    switch (kind) {
-      case "scope": {
-        return this.#makeProviderView(owningFrame, stack) as T;
-      }
-      case "factory": {
-        return this.#makeFactory(slot as FactoryRef, owningFrame) as T;
-      }
-      case "union": {
-        return this.#resolveUnion<T>(slot as Union, owningFrame, stack, async);
-      }
-      case "literal": {
-        return (slot as LiteralRef).value as T;
-      }
-      case "typearg": {
-        throw rawTypeArgError(slot as TypeArgRef);
-      }
-      case "token": {
-        return this.#resolve<T>(slot as Token, owningFrame, stack, async);
-      }
-      default: {
-        return assertNever(kind);
-      }
+    if (isScopeRef(slot)) {
+      return this.#makeProviderView(owningFrame, stack) as T;
     }
+    if (isFactoryRef(slot)) {
+      return this.#makeFactory(slot, owningFrame) as T;
+    }
+    if (isUnionSlot(slot)) {
+      return this.#resolveUnion<T>(slot, owningFrame, stack, async);
+    }
+    if (isLiteralRef(slot)) {
+      return slot.value as T;
+    }
+    if (isTypeArgRef(slot)) {
+      throw rawTypeArgError(slot);
+    }
+    return this.#resolve<T>(slot, owningFrame, stack, async);
   }
 
   // ── Disposal ────────────────────────────────────────────────────────────────

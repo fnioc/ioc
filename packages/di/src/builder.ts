@@ -21,7 +21,7 @@ import type { Func } from "@rhombus-toolkit/func";
 
 import { OpenTokenRegistrationError } from "./errors.js";
 import { ServiceProvider } from "./scope.js";
-import { isOpenToken, parseToken } from "./tokens.js";
+import { HOLE_PATTERN, isOpenToken, parseToken } from "./tokens.js";
 import type {
   ClassRegistration,
   Ctor,
@@ -39,8 +39,15 @@ import type {
 // a library author depends on). di imports it back via `import type` and its
 // runtime `ServiceManifestClass` implements the interface.
 
-/** A token node that is exactly a hole: `$N`, decimal N ≥ 1. */
-const HOLE_NODE = /^\$[1-9][0-9]*$/;
+/** Appends `value` to the list at `key`, creating the list on first use. */
+function appendTo<K, V>(map: Map<K, V[]>, key: K, value: V): void {
+  const existing = map.get(key);
+  if (existing === undefined) {
+    map.set(key, [value]);
+  } else {
+    existing.push(value);
+  }
+}
 
 /**
  * The registration builder.
@@ -91,22 +98,32 @@ export class ServiceManifestClass<Scopes extends string = "singleton">
 
   /** Appends a registration to `token`'s list, creating the list on first use. */
   #append(token: Token, registration: Registration): void {
-    const existing = this.#registrations.get(token);
-    if (existing === undefined) {
-      this.#registrations.set(token, [registration]);
-    } else {
-      existing.push(registration);
-    }
+    appendTo(this.#registrations, token, registration);
   }
 
   /** Appends an open registration to `base`'s list, mirroring `#append`. */
   #appendOpen(base: Token, registration: OpenRegistration): void {
-    const existing = this.#openRegistrations.get(base);
-    if (existing === undefined) {
-      this.#openRegistrations.set(base, [registration]);
-    } else {
-      existing.push(registration);
-    }
+    appendTo(this.#openRegistrations, base, registration);
+  }
+
+  /**
+   * Builds the `.as(scope?)` continuation over an `appendScoped` callback that
+   * appends a fresh scoped copy for the chosen tag. Shared by the class and open
+   * registration paths — both append a base (transient) registration first, then
+   * hand back this continuation so a trailing `.as(scope)` appends the winning
+   * scoped copy.
+   */
+  #scopedContinuation(appendScoped: (scope: Scopes) => void): AddBuilder<Scopes> {
+    return {
+      as<S extends Scopes>(scope?: S): void {
+        // The lowered form always passes a value arg; the authored type-arg-only
+        // form never executes (the transformer rewrites it first). A no-arg call
+        // at runtime would leave the registration transient — guard so it is a
+        // no-op rather than appending a scopeless duplicate.
+        if (scope === undefined) {return;}
+        appendScoped(scope);
+      },
+    };
   }
 
   /**
@@ -120,17 +137,9 @@ export class ServiceManifestClass<Scopes extends string = "singleton">
     base: ClassRegistration | FactoryRegistration,
   ): AddBuilder<Scopes> {
     this.#append(token, base);
-    const append = (next: Registration): void => this.#append(token, next);
-    return {
-      as<S extends Scopes>(scope?: S): void {
-        // The lowered form always passes a value arg; the authored type-arg-only
-        // form never executes (the transformer rewrites it first). A no-arg call
-        // at runtime would leave the registration transient — guard so it is a
-        // no-op rather than appending a scopeless duplicate.
-        if (scope === undefined) {return;}
-        append({ ...base, scope });
-      },
-    };
+    return this.#scopedContinuation((scope) =>
+      this.#append(token, { ...base, scope }),
+    );
   }
 
   /**
@@ -146,7 +155,7 @@ export class ServiceManifestClass<Scopes extends string = "singleton">
     signatures: readonly (readonly DepSlot[])[] | undefined,
   ): AddBuilder<Scopes> {
     const parsed = parseToken(token);
-    if (parsed === undefined || !parsed.args.every((arg) => HOLE_NODE.test(arg))) {
+    if (parsed === undefined || !parsed.args.every((arg) => HOLE_PATTERN.test(arg))) {
       throw new OpenTokenRegistrationError(token, "add");
     }
     const base: OpenRegistration = {
@@ -158,13 +167,9 @@ export class ServiceManifestClass<Scopes extends string = "singleton">
       signatures,
     };
     this.#appendOpen(parsed.base, base);
-    const append = (next: OpenRegistration): void => this.#appendOpen(parsed.base, next);
-    return {
-      as<S extends Scopes>(scope?: S): void {
-        if (scope === undefined) {return;}
-        append({ ...base, scope });
-      },
-    };
+    return this.#scopedContinuation((scope) =>
+      this.#appendOpen(parsed.base, { ...base, scope }),
+    );
   }
 
   /**

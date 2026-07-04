@@ -2,7 +2,7 @@
 // slot kinds apart. Relocated from @fnioc/core (now a pure-types package): the
 // guards are runtime values, so they belong with the engine that runs them.
 
-import type { DepSlot, FactoryRef, LiteralRef, TypeArgRef, Union } from "@fnioc/core";
+import type { DepSlot, FactoryRef, LiteralRef, ScopeRef, TypeArgRef, Union } from "@fnioc/core";
 
 /** True when `slot` is a `FactoryRef` (carries a `.type` token). */
 export function isFactoryRef(slot: DepSlot): slot is FactoryRef {
@@ -14,7 +14,7 @@ export function isFactoryRef(slot: DepSlot): slot is FactoryRef {
 }
 
 /** True when `slot` is a `ScopeRef` (the live-scope marker `{ scope: true }`). */
-export function isScopeRef(slot: DepSlot): boolean {
+export function isScopeRef(slot: DepSlot): slot is ScopeRef {
   return (
     typeof slot === "object" &&
     slot !== null &&

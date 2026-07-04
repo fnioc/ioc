@@ -17,8 +17,11 @@
 import type { DepSlot, ParsedToken, Token } from "@fnioc/core";
 import { isFactoryRef, isTypeArgRef, isUnionSlot } from "./guards.js";
 
-/** A token node that is exactly a hole: `$N`, decimal N ≥ 1. */
-const HOLE_PATTERN = /^\$[1-9][0-9]*$/;
+/**
+ * A token node that is exactly a hole: `$N`, decimal N ≥ 1. The single source of
+ * the hole grammar — the builder imports this rather than re-declaring it.
+ */
+export const HOLE_PATTERN = /^\$[1-9][0-9]*$/;
 
 /**
  * Renders the canonical closed-generic form `base<arg1,arg2>`. With no args,
