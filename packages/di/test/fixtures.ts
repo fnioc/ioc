@@ -30,26 +30,6 @@ export function defineDeps(target: object, signatures: Signatures): void {
   }
 }
 
-/** Reads back a stashed record — mirrors the retired `getDeps` for assertions. */
-export function getDeps(target: object): { signatures: Signatures } | undefined {
-  const signatures = testStore.get(target);
-  return signatures === undefined ? undefined : { signatures };
-}
-
-/** Chainable fluent stash — one `.signature(...)` call per overload. */
-export interface ForCtorBuilder {
-  signature(...slots: DepSlot[]): ForCtorBuilder;
-}
-export function forCtor(ctor: object): ForCtorBuilder {
-  const builder: ForCtorBuilder = {
-    signature(...slots: DepSlot[]): ForCtorBuilder {
-      defineDeps(ctor, [slots]);
-      return builder;
-    },
-  };
-  return builder;
-}
-
 // Patch `add` / `addFactory` to thread a stashed signature into the third-arg
 // channel when the caller passed only `(token, target)`. A no-op when the target
 // has no stash or a signature was passed explicitly.
@@ -95,17 +75,6 @@ export const G = {
   RepoOfA: "pkg:IRepo<pkg:IA>" as Token,
   RepoOfB: "pkg:IRepo<pkg:IB>" as Token,
 } as const;
-
-// ── Counters ────────────────────────────────────────────────────────────────
-
-/** A construction counter so tests can assert how many times a ctor ran. */
-export function makeCounter(): { count: number; bump(): void } {
-  const state = { count: 0, bump() {} };
-  state.bump = () => {
-    state.count += 1;
-  };
-  return state;
-}
 
 // ── Disposal probes ─────────────────────────────────────────────────────────
 
