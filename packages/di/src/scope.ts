@@ -20,8 +20,8 @@
 // one's cached instance — when no matching frame encloses the owner, the dep
 // resolves transiently (a fresh instance) instead.
 
-import type { DepSlot, FactoryRef, LiteralRef, ParsedToken, ScopeRef, Token, TypeArgRef, Union } from "@fnioc/core";
-import { isFactoryRef as coreIsFactoryRef, isLiteralRef as coreIsLiteralRef, isScopeRef as coreIsScopeRef, isTypeArgRef as coreIsTypeArgRef, isUnionSlot } from "./guards.js";
+import type { DepSlot, FactoryRef, LiteralRef, ParsedToken, Token, TypeArgRef, Union } from "@fnioc/core";
+import { isFactoryRef, isLiteralRef, isScopeRef, isTypeArgRef, isUnionSlot } from "./guards.js";
 import { closeToken, isOpenToken, parseToken, substituteSignatures } from "./tokens.js";
 import type { Func } from "@rhombus-toolkit/func";
 import { assertNever } from "./assert.js";
@@ -107,39 +107,6 @@ function settle<T>(result: T | Pending<T>): Promise<Awaited<T>> {
   return Promise.resolve(isPending(result) ? result.promise : result);
 }
 
-/**
- * True when a `DepSlot` is a `FactoryRef` — a factory-injected parameter.
- * Delegates to the core guard which checks the `.type` field (T0 rename).
- */
-const isFactoryRef: (slot: DepSlot) => slot is FactoryRef = coreIsFactoryRef;
-
-/**
- * True when a `DepSlot` is a `ScopeRef` — a parameter to be filled with the
- * live resolution provider itself (emitted for a factory/ctor param typed
- * `Resolver`, `ScopeFactory`, or the legacy `ResolveScope`).
- */
-const isScopeRef: (slot: DepSlot) => slot is ScopeRef = coreIsScopeRef;
-
-/**
- * True when a `DepSlot` is a `Union` — a set of alternative slots tried in
- * declaration order.
- */
-const isUnion: (slot: DepSlot) => slot is Union = isUnionSlot;
-
-/**
- * True when a `DepSlot` is a `LiteralRef` — a singular literal supplying its
- * value directly (Rule 2). Always satisfiable; injected as `slot.value`.
- */
-const isLiteralRef: (slot: DepSlot) => slot is LiteralRef = coreIsLiteralRef;
-
-/**
- * True when a `DepSlot` is a raw `TypeArgRef` — an OPEN template slot that
- * substitution should have closed into a `LiteralRef`. One reaching the engine
- * means an open template's signature is being used unclosed: never satisfiable
- * in selection, a loud error in resolution.
- */
-const isTypeArgRef: (slot: DepSlot) => slot is TypeArgRef = coreIsTypeArgRef;
-
 /** The loud error for a raw `TypeArgRef` slot reaching resolution. */
 function rawTypeArgError(slot: TypeArgRef): TypeError {
   return new TypeError(
@@ -161,7 +128,7 @@ function slotKind(slot: DepSlot): SlotKind {
   if (isFactoryRef(slot)) {
     return "factory";
   }
-  if (isUnion(slot)) {
+  if (isUnionSlot(slot)) {
     return "union";
   }
   if (isLiteralRef(slot)) {
@@ -182,7 +149,7 @@ function* unionTokenMembers(slot: Union): Generator<Token> {
   for (const member of slot.union) {
     if (typeof member === "string") {
       yield member;
-    } else if (isUnion(member as DepSlot)) {
+    } else if (isUnionSlot(member as DepSlot)) {
       yield* unionTokenMembers(member as Union);
     }
   }
@@ -928,7 +895,7 @@ export class ServiceProvider<S extends string = string>
           satisfiable = false;
           continue;
         }
-        if (isUnion(slot)) {
+        if (isUnionSlot(slot)) {
           // A union slot is satisfiable iff at least one member is resolvable.
           // When none is, surface its string-token members so the error names
           // exactly what to register.
@@ -994,7 +961,7 @@ export class ServiceProvider<S extends string = string>
   #isResolvableSlot(slot: DepSlot, async: boolean): boolean {
     if (isFactoryRef(slot) || isScopeRef(slot) || isLiteralRef(slot)) {return true;}
     if (isTypeArgRef(slot)) {return false;}
-    if (isUnion(slot)) {
+    if (isUnionSlot(slot)) {
       return slot.union.some((member) =>
         this.#isResolvableSlot(member as DepSlot, async),
       );
