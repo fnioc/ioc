@@ -1,5 +1,5 @@
 {
-  "packages/core": "10.0.0",
-  "packages/di": "10.0.0",
-  "packages/transformer": "10.0.0"
+  "packages/core": "10.1.0",
+  "packages/di": "10.1.0",
+  "packages/transformer": "10.1.0"
 }
