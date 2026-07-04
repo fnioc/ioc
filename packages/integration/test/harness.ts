@@ -47,8 +47,12 @@ export interface CompiledProject {
 function link(target: string, linkPath: string): void {
   try {
     symlinkSync(target, linkPath);
-  } catch {
-    // Ignore EEXIST from a re-run; the link target is stable.
+  } catch (err) {
+    // Ignore EEXIST from a re-run; the link target is stable. Any other
+    // failure (permissions, ENOENT on the target, …) should surface.
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
+      throw err;
+    }
   }
 }
 
