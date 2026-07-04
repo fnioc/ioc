@@ -160,15 +160,85 @@ export function tokenForType(
 }
 
 /**
+ * Shared property walk for a computed-symbol-keyed "brand" property — the
+ * detection strategy behind both `injectTokenFor` (`Inject<T, K>`, brand
+ * property `TOK`) and `holeNumberFor` (`Hole<N, C>`, brand property `HOLE`).
+ *
+ * Walks all properties of `type` (the checker flattens intersections
+ * automatically via `getPropertiesOfType`, so a constrained brand like
+ * `Entity & { [HOLE]?: 2 }` works) for one declared as a `PropertySignature`
+ * whose name is a computed property referencing an identifier matching
+ * `propName` — exactly the shape of `declare const TOK: unique symbol; T & {
+ * readonly [TOK]?: K }`. The matched property's type is handed to
+ * `extractLiteral`, which is responsible for pulling the literal value out
+ * (including out of the `K | undefined` union the brand's optionality
+ * produces) — the walk itself is brand-agnostic. The first property for which
+ * `extractLiteral` returns a defined value wins.
+ */
+function brandLiteralFor<T>(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+  propName: string,
+  extractLiteral: (propType: ts.Type) => T | undefined,
+): T | undefined {
+  const props = checker.getPropertiesOfType(type);
+  for (const prop of props) {
+    const decls = prop.getDeclarations();
+    // We need the property to be declared as a computed-symbol property. The
+    // unique symbol shows up as a symbol-keyed property.
+    if (!decls || !decls.length) {continue;}
+
+    // Check if the property name is our unique symbol by looking for a property
+    // whose valueDeclaration is a PropertySignature with a computed name referencing
+    // a const declaration named `propName`.
+    const isBrandProp = decls.some((decl) => {
+      if (!ts.isPropertySignature(decl)) {return false;}
+      const name = decl.name;
+      if (!ts.isComputedPropertyName(name)) {return false;}
+      const expr = name.expression;
+      if (!ts.isIdentifier(expr)) {return false;}
+      return expr.text === propName;
+    });
+    if (!isBrandProp) {continue;}
+
+    const propType = checker.getTypeOfSymbol(prop);
+    const literal = extractLiteral(propType);
+    if (literal !== undefined) {return literal;}
+  }
+  return undefined;
+}
+
+/** Pull a string-literal token `K` out of `propType`, or `K | undefined`. */
+function extractStringLiteral(propType: ts.Type): string | undefined {
+  if (propType.isStringLiteral()) {return propType.value;}
+  if (propType.isUnion()) {
+    for (const member of propType.types) {
+      if (member.isStringLiteral()) {return member.value;}
+    }
+  }
+  return undefined;
+}
+
+/** Pull a number-literal token `N` out of `propType`, or `N | undefined`. */
+function extractNumberLiteral(propType: ts.Type): number | undefined {
+  if (propType.isNumberLiteral()) {return propType.value;}
+  if (propType.isUnion()) {
+    for (const member of propType.types) {
+      if (member.isNumberLiteral()) {return member.value;}
+    }
+  }
+  return undefined;
+}
+
+/**
  * Inspect whether `type` carries the `Inject<T, K>` brand and, if so, return
  * the literal string token `K`. Returns `undefined` when the type is not
  * branded.
  *
- * Detection strategy: walk the type's properties for one that is a unique-symbol
- * keyed optional property whose value type is a string literal. That is exactly
- * the shape of `declare const TOK: unique symbol; T & { readonly [TOK]?: K }`.
- * We also accept a property whose internal name is "TOK" as a fallback for
- * environments where the unique-symbol key is represented by its declaration name.
+ * Detection strategy: `brandLiteralFor` walks the type's properties for one
+ * that is a unique-symbol keyed optional property whose value type is a
+ * string literal. That is exactly the shape of `declare const TOK: unique
+ * symbol; T & { readonly [TOK]?: K }`.
  *
  * Union awareness: for a type like `(T & { [TOK]?: K }) | undefined` (which
  * arises from `x?: Inject<T, K>` or `x: Inject<T, K> | undefined`),
@@ -195,85 +265,27 @@ export function injectTokenFor(
     return undefined;
   }
 
-  // Walk all properties of the type (handles intersections automatically via the
-  // checker, which flattens them for getProperties()).
-  const props = checker.getPropertiesOfType(type);
-  for (const prop of props) {
-    const decls = prop.getDeclarations();
-    // We need the property to be declared as a computed-symbol property or with
-    // internal name matching the TOK symbol. The unique symbol shows up as a
-    // symbol-keyed property.
-    if (!decls || !decls.length) {continue;}
-
-    // Check if the property name is our unique symbol by looking for a property
-    // whose valueDeclaration is a PropertySignature with a computed name referencing
-    // a const declaration named "TOK".
-    const isInjectProp = decls.some((decl) => {
-      if (!ts.isPropertySignature(decl)) {return false;}
-      const name = decl.name;
-      if (!ts.isComputedPropertyName(name)) {return false;}
-      const expr = name.expression;
-      if (!ts.isIdentifier(expr)) {return false;}
-      return expr.text === INJECT_TOK_PROPERTY;
-    });
-
-    if (!isInjectProp) {continue;}
-
-    // The property type must be a string literal — that is the token K.
-    const propType = checker.getTypeOfSymbol(prop);
-    if (propType.isStringLiteral()) {
-      return propType.value;
-    }
-    // Handle optional: the property type may be `K | undefined`; extract K.
-    if (propType.isUnion()) {
-      for (const member of propType.types) {
-        if (member.isStringLiteral()) {return member.value;}
-      }
-    }
-  }
-  return undefined;
+  return brandLiteralFor(type, checker, INJECT_TOK_PROPERTY, extractStringLiteral);
 }
 
 /**
  * If `type` carries the `Hole<N, C>` brand (an open-generic placeholder),
  * return the hole number `N`. Returns `undefined` when the type is not a hole.
  *
- * Detection mirrors `injectTokenFor` exactly: walk the type's properties (the
- * checker flattens intersections, so the constrained form `Hole<2, Entity>` —
- * `Entity & { [HOLE]?: 2 }` — works) for one declared as a computed-symbol
- * property named `HOLE`, then extract the number literal from its type. The
- * brand property is optional, so its type is `N | undefined` — the literal is
- * pulled from the union. Works for the anonymous unconstrained form `Hole<1>`
- * (a `__type` with no aliasSymbol) and for aliased/constrained forms alike.
+ * Detection mirrors `injectTokenFor` exactly via `brandLiteralFor`: walk the
+ * type's properties (the checker flattens intersections, so the constrained
+ * form `Hole<2, Entity>` — `Entity & { [HOLE]?: 2 }` — works) for one declared
+ * as a computed-symbol property named `HOLE`, then extract the number literal
+ * from its type. The brand property is optional, so its type is `N |
+ * undefined` — the literal is pulled from the union. Works for the anonymous
+ * unconstrained form `Hole<1>` (a `__type` with no aliasSymbol) and for
+ * aliased/constrained forms alike.
  */
 export function holeNumberFor(
   type: ts.Type,
   checker: ts.TypeChecker,
 ): number | undefined {
-  const props = checker.getPropertiesOfType(type);
-  for (const prop of props) {
-    const decls = prop.getDeclarations();
-    if (!decls || !decls.length) {continue;}
-
-    const isHoleProp = decls.some((decl) => {
-      if (!ts.isPropertySignature(decl)) {return false;}
-      const name = decl.name;
-      if (!ts.isComputedPropertyName(name)) {return false;}
-      const expr = name.expression;
-      if (!ts.isIdentifier(expr)) {return false;}
-      return expr.text === HOLE_BRAND_PROPERTY;
-    });
-    if (!isHoleProp) {continue;}
-
-    const propType = checker.getTypeOfSymbol(prop);
-    if (propType.isNumberLiteral()) {return propType.value;}
-    if (propType.isUnion()) {
-      for (const member of propType.types) {
-        if (member.isNumberLiteral()) {return member.value;}
-      }
-    }
-  }
-  return undefined;
+  return brandLiteralFor(type, checker, HOLE_BRAND_PROPERTY, extractNumberLiteral);
 }
 
 /**
