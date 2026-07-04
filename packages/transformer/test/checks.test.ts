@@ -105,10 +105,10 @@ describe("factory-signature diagnostic (§4.5)", () => {
     );
   });
 
-  test("fires for a forCtor-annotated class factory slot with too few params", () => {
+  test("fires with an inline override array and a factory slot with too few params", () => {
     // Foo ctor: (a: string, b: number) — both holes. Factory declares only 1 → mismatch.
+    // The registration carries an inline override array; the check still fires.
     const src = `
-      import { forCtor } from "@fnioc/core";
       interface IFoo {}
       class Foo implements IFoo {
         constructor(a: string, b: number) {}
@@ -117,9 +117,8 @@ describe("factory-signature diagnostic (§4.5)", () => {
       class Svc implements ISvc {
         constructor(makeFoo: (x: string) => Foo) {}
       }
-      forCtor(Svc).signature({ factory: "manual:IFoo" });
       declare const services: any;
-      services.add<ISvc>(Svc).as<"singleton">();
+      services.add<ISvc>(Svc, ["manual:IFoo"]).as<"singleton">();
     `;
     const { output, diagnostics } = transform(fixture(src));
     expect(output).not.toContain("defineDeps(Svc");
@@ -128,9 +127,8 @@ describe("factory-signature diagnostic (§4.5)", () => {
     );
   });
 
-  test("no diagnostic for a forCtor-annotated factory slot with matching arity", () => {
+  test("no diagnostic with an inline override array and a matching-arity factory slot", () => {
     const src = `
-      import { forCtor } from "@fnioc/core";
       interface IA {}
       interface IFoo {}
       class Foo implements IFoo {
@@ -140,9 +138,8 @@ describe("factory-signature diagnostic (§4.5)", () => {
       class Svc implements ISvc {
         constructor(makeFoo: (b: string) => Foo) {}
       }
-      forCtor(Svc).signature("manual:IA");
       declare const services: any;
-      services.add<ISvc>(Svc).as<"singleton">();
+      services.add<ISvc>(Svc, ["manual:IA"]).as<"singleton">();
     `;
     const { diagnostics } = transform(fixture(src));
     expect(codes(diagnostics)).not.toContain(
