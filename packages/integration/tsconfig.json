@@ -2,6 +2,14 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
+    // Every sibling package (core/di/transformer) disables composite for its
+    // own standalone tsconfig — there are no project references between
+    // packages here. Integration additionally reaches one file OUTSIDE its own
+    // `test/**/*` tree (di's shared `metadata-shim.ts`, imported by relative
+    // path from a couple of test files); composite's "every file must be in
+    // the declared file list" check (TS6307) fires the moment an out-of-tree
+    // file is reachable, so this must be off here too.
+    "composite": false,
     // `@fnioc/transformer` is listed so its `declare module "@fnioc/di"`
     // augmentation (the type-only authoring forms `add<I>(C)`, `.as<"x">()`,
     // `resolve<T>()`) enters this program — the sample wiring authors those

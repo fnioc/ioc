@@ -20,6 +20,9 @@ tasks:
       - 'test/**/*'
       - 'tsconfig.json'
       - 'package.json'
+      # `metadata-shim.ts` is shared verbatim with @fnioc/di's tests and
+      # imported by relative path — track it so edits invalidate this cache.
+      - '/packages/di/test/metadata-shim.ts'
   lint:
     command: 'bun x tsc -p tsconfig.json --noEmit'
     deps:
@@ -28,3 +31,4 @@ tasks:
       - 'test/**/*'
       - 'tsconfig.json'
       - '/tsconfig.base.json'
+      - '/packages/di/test/metadata-shim.ts'

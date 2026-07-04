@@ -3,7 +3,7 @@ import {
   ServiceManifest,
   CircularDependencyError,
 } from "@fnioc/di";
-import { defineDeps, forCtor } from "./metadata-shim.js";
+import { defineDeps, forCtor } from "../../di/test/metadata-shim.js";
 
 // Coverage 4 (uniform-tag transient fallback / §5.4 owning-scope rule), 5 (cycle
 // detection), 9 (greedy overload selection). Each drives the engine through the
