@@ -508,14 +508,6 @@ function typeArgSlotFor(
 }
 
 /**
- * Positionally pair an instantiated UNION override with a syntactic union
- * node's members. Returns one override (or `undefined`) per member. Pairing is
- * best-effort: when the override is not a union, or the constituent count
- * (after optionally stripping the `undefined`/`void` the optional path
- * consumed) differs from the syntactic member count — union normalization can
- * reorder or collapse members — every member falls back to its own node type.
- */
-/**
  * True when the per-member union pairing is safe: there is NO instantiation
  * override (the ordinary syntactic-union path applies), or the substituted
  * override is itself a union whose constituent count matches the syntactic
@@ -532,6 +524,14 @@ function overrideMatchesSyntacticUnion(
   return override.isUnion() && override.types.length === memberCount;
 }
 
+/**
+ * Positionally pair an instantiated UNION override with a syntactic union
+ * node's members. Returns one override (or `undefined`) per member. Pairing is
+ * best-effort: when the override is not a union, or the constituent count
+ * (after optionally stripping the `undefined`/`void` the optional path
+ * consumed) differs from the syntactic member count — union normalization can
+ * reorder or collapse members — every member falls back to its own node type.
+ */
 function unionMemberOverrides(
   override: ts.Type | undefined,
   memberCount: number,
