@@ -21,7 +21,7 @@ export interface DiagnosticSink {
  * keeps them clear of TypeScript's own code space. These are part of the
  * transformer's observable surface — tests assert on them.
  */
-export const enum DiagnosticCode {
+export enum DiagnosticCode {
   /** A factory param's call signature doesn't match the target ctor's holes. */
   FactorySignatureMismatch = 990003,
   /**
@@ -53,12 +53,20 @@ export const enum DiagnosticCode {
    * not bind — substitution at close time would have no argument for it.
    */
   DepHoleNotInServiceTemplate = 990010,
+  /**
+   * A registration-time override array element (`add<I>(C, [...])`) is neither a
+   * string-literal token nor an `undefined`/elision gap — an object literal, a
+   * variable, or a call the transformer cannot resolve statically. The element is
+   * ignored and the derived token is kept; use a string-literal token override.
+   */
+  UnresolvableOverrideElement = 990011,
 }
 
 const SOURCE = "@fnioc/transformer";
 
-/** Build an informational diagnostic anchored at `node` in `file`. */
-export function info(
+/** Build a diagnostic of `category` anchored at `node` in `file`. */
+function diagnostic(
+  category: ts.DiagnosticCategory,
   file: ts.SourceFile,
   node: ts.Node,
   code: DiagnosticCode,
@@ -68,7 +76,7 @@ export function info(
     file,
     start: node.getStart(file),
     length: node.getWidth(file),
-    category: ts.DiagnosticCategory.Message,
+    category,
     code,
     messageText,
     source: SOURCE,
@@ -82,15 +90,7 @@ export function warning(
   code: DiagnosticCode,
   messageText: string,
 ): Diagnostic {
-  return {
-    file,
-    start: node.getStart(file),
-    length: node.getWidth(file),
-    category: ts.DiagnosticCategory.Warning,
-    code,
-    messageText,
-    source: SOURCE,
-  };
+  return diagnostic(ts.DiagnosticCategory.Warning, file, node, code, messageText);
 }
 
 /** Build an error diagnostic anchored at `node` in `file`. */
@@ -100,13 +100,5 @@ export function error(
   code: DiagnosticCode,
   messageText: string,
 ): Diagnostic {
-  return {
-    file,
-    start: node.getStart(file),
-    length: node.getWidth(file),
-    category: ts.DiagnosticCategory.Error,
-    code,
-    messageText,
-    source: SOURCE,
-  };
+  return diagnostic(ts.DiagnosticCategory.Error, file, node, code, messageText);
 }

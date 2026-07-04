@@ -508,14 +508,6 @@ function typeArgSlotFor(
 }
 
 /**
- * Positionally pair an instantiated UNION override with a syntactic union
- * node's members. Returns one override (or `undefined`) per member. Pairing is
- * best-effort: when the override is not a union, or the constituent count
- * (after optionally stripping the `undefined`/`void` the optional path
- * consumed) differs from the syntactic member count — union normalization can
- * reorder or collapse members — every member falls back to its own node type.
- */
-/**
  * True when the per-member union pairing is safe: there is NO instantiation
  * override (the ordinary syntactic-union path applies), or the substituted
  * override is itself a union whose constituent count matches the syntactic
@@ -532,6 +524,14 @@ function overrideMatchesSyntacticUnion(
   return override.isUnion() && override.types.length === memberCount;
 }
 
+/**
+ * Positionally pair an instantiated UNION override with a syntactic union
+ * node's members. Returns one override (or `undefined`) per member. Pairing is
+ * best-effort: when the override is not a union, or the constituent count
+ * (after optionally stripping the `undefined`/`void` the optional path
+ * consumed) differs from the syntactic member count — union normalization can
+ * reorder or collapse members — every member falls back to its own node type.
+ */
 function unionMemberOverrides(
   override: ts.Type | undefined,
   memberCount: number,
@@ -758,13 +758,24 @@ export function extractFactoryReferenceSignature(
   const type = ctx.checker.getTypeAtLocation(expr);
   // A class/constructable resolves down the class path, never here.
   if (type.getConstructSignatures().length) {return undefined;}
-  const callSignatures = type.getCallSignatures();
-  if (!callSignatures.length) {return undefined;}
-  // Map ALL call signatures (declared overloads), not just the first one.
-  // The static class-declaration path (`extractSignatureFromClass`) emits one
-  // signature per declared overload; this path must match that behaviour.
+  return mapReferenceSignatures(type.getCallSignatures(), ctx);
+}
+
+/**
+ * Map a reference value's call/construct signatures to dep signatures, one per
+ * declared overload — the shared body of the factory-reference and
+ * ctor-reference extractors. Mirrors the static class-declaration path
+ * (`extractSignatureFromClass`), which also emits one signature per overload.
+ * Returns `undefined` when there are no signatures or any signature has a slot
+ * that can't be derived.
+ */
+function mapReferenceSignatures(
+  signatures: readonly ts.Signature[],
+  ctx: DepContext,
+): Signature[] | undefined {
+  if (!signatures.length) {return undefined;}
   const results: Signature[] = [];
-  for (const sig of callSignatures) {
+  for (const sig of signatures) {
     const slots = signatureToSlots(sig, ctx);
     if (slots === undefined) {return undefined;}
     results.push(...slots);
@@ -784,20 +795,10 @@ export function extractCtorReferenceSignature(
   expr: ts.Expression,
   ctx: DepContext,
 ): Signature[] | undefined {
-  const constructSignatures = ctx.checker
-    .getTypeAtLocation(expr)
-    .getConstructSignatures();
-  if (!constructSignatures.length) {return undefined;}
-  // Map ALL construct signatures (declared overloads), not just the first one.
-  // The static class-declaration path (`extractSignatureFromClass`) emits one
-  // signature per declared overload; this path must match that behaviour.
-  const results: Signature[] = [];
-  for (const sig of constructSignatures) {
-    const slots = signatureToSlots(sig, ctx);
-    if (slots === undefined) {return undefined;}
-    results.push(...slots);
-  }
-  return results.length ? results : undefined;
+  return mapReferenceSignatures(
+    ctx.checker.getTypeAtLocation(expr).getConstructSignatures(),
+    ctx,
+  );
 }
 
 /**

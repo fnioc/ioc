@@ -51,6 +51,19 @@ declare module "@fnioc/di" {
      */
     add<I>(ctor: Ctor<any[], I>): AddBuilder<Scopes>;
     /**
+     * Registration-time override form — a sparse positional override array for a
+     * class whose ctor you can't edit (third-party / generic). Each element
+     * overrides the transformer-derived token at that position; `undefined` (or
+     * an array hole) keeps the derived token. Lowers to
+     * `add("token", C, [[...merged...]])`. Never runs post-transform.
+     *
+     *   add<ICache>(RedisCache, ["pkg:IRedisClient", undefined, "pkg:ILogger"])
+     */
+    add<I>(
+      ctor: Ctor<any[], I>,
+      overrides: readonly (string | undefined)[],
+    ): AddBuilder<Scopes>;
+    /**
      * Type-driven factory authoring — lowers to `addFactory("token", fn)` (the
      * transformer knows the arg is a function). Never runs post-transform.
      */

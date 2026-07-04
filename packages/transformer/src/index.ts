@@ -63,5 +63,4 @@ export {
   type DiagnosticSink,
   error,
   warning,
-  info,
 } from "./diagnostics.js";

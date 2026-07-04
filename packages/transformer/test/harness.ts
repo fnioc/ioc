@@ -162,4 +162,52 @@ export function fixture(source: string, name = "app.ts"): VirtualFiles {
   return { [`${DEFAULT_ROOT}/${name}`]: source };
 }
 
+/**
+ * Pull the `[[...]]` signature array text out of the inline registration call
+ * for the given class/factory. Signatures ride ON the registration as the third
+ * argument: `add("token", Ctor, [[...]])` / `addFactory("token", fn, [[...]])`.
+ * We locate the `, ${ctor}, ` boundary and balanced-scan the `[[...]]`.
+ */
+export function depsArrayFor(output: string, ctor: string): string {
+  const marker = `, ${ctor}, `;
+  const at = output.indexOf(marker);
+  if (at < 0) {throw new Error(`no inline signature for ${ctor} in:\n${output}`);}
+  const start = output.indexOf("[", at + marker.length);
+  if (start < 0) {throw new Error(`no signature array for ${ctor} in:\n${output}`);}
+  let depth = 0;
+  for (let i = start; i < output.length; i++) {
+    const ch = output[i];
+    if (ch === "[") {
+      depth += 1;
+    } else if (ch === "]") {
+      depth -= 1;
+      if (depth === 0) {return output.slice(start, i + 1);}
+    }
+  }
+  throw new Error(`unbalanced signature array for ${ctor} in:\n${output}`);
+}
+
+/** The virtual entry path a {@link withCoreBrand} fixture places `appSource` at. */
+export const CORE_BRAND_APP = "/proj/src/app.ts";
+
+/**
+ * Build a multi-file fixture backed by a virtual `@fnioc/core` package that
+ * exports the `Inject<T, K>` brand, with `appSource` as the entry file at
+ * {@link CORE_BRAND_APP}. Lets brand-detection tests reference `@fnioc/core`
+ * without a real `node_modules`.
+ */
+export function withCoreBrand(appSource: string): VirtualFiles {
+  return {
+    "/proj/node_modules/@fnioc/core/package.json": JSON.stringify({
+      name: "@fnioc/core",
+      version: "1.0.0",
+      exports: { ".": "./index.js" },
+    }),
+    "/proj/node_modules/@fnioc/core/index.d.ts":
+      "declare const TOK: unique symbol;\n" +
+      "export type Inject<T, K extends string> = T & { readonly [TOK]?: K };\n",
+    [CORE_BRAND_APP]: appSource,
+  };
+}
+
 export const ROOT = DEFAULT_ROOT;

@@ -42,6 +42,7 @@ import {
 import {
   DiagnosticCode,
   error,
+  warning,
   type DiagnosticSink,
 } from "./diagnostics.js";
 
@@ -293,12 +294,13 @@ function findRegistrationCalls(expr: ts.Node): FoundReg[] {
  *
  * The override array is a literal `ts.ArrayLiteralExpression`. We read it
  * positionally: an `OmittedExpression` (elision/hole) or `undefined` identifier
- * means "keep derived"; anything else is emitted as the override slot literal.
+ * means "keep derived"; a string literal is the override token. Any other
+ * element (object literal, variable, call) cannot be statically resolved — the
+ * derived token is kept and an `UnresolvableOverrideElement` diagnostic fires.
  */
 function applyOverrides(
   baseSignature: Signature,
   overrideNode: ts.Expression,
-  factory: ts.NodeFactory,
   ctx: LowerContext,
 ): Signature | undefined {
   if (!ts.isArrayLiteralExpression(overrideNode)) {return undefined;}
@@ -309,21 +311,25 @@ function applyOverrides(
     // OmittedExpression (elision) or `undefined` literal → keep derived.
     if (ts.isOmittedExpression(elem)) {continue;}
     if (ts.isIdentifier(elem) && elem.text === "undefined") {continue;}
-    // Anything else is the override. We try to interpret it as a slot:
-    // - string literal → token string
-    // - object literal `{ type: "..." }` → factory slot  (for manual FactoryRef)
-    // - `undefined` → keep
-    // For simplicity, we accept string literals as token overrides, which is the
-    // documented common case. Object-literal DepSlot overrides pass through the
-    // override array and are re-emitted verbatim in the output.
+    // A string literal is the documented common case: a token override.
     if (ts.isStringLiteralLike(elem)) {
       result[i] = elem.text;
-    } else if (ts.isObjectLiteralExpression(elem)) {
-      // We don't parse complex object literals at compile time. Leave the base
-      // derived token at position i; this is a best-effort merge for the common
-      // string-token override case.
+      continue;
     }
-    // For other expression types (variables, calls), we can't statically resolve.
+    // Anything else (object literal, variable, call) can't be statically
+    // resolved. Rather than silently keep the derived slot, flag it so the
+    // author knows the override didn't take.
+    ctx.sink.addDiagnostic(
+      warning(
+        ctx.sourceFile,
+        elem,
+        DiagnosticCode.UnresolvableOverrideElement,
+        `override element at position ${i} is not a string-literal token; the ` +
+          "transformer cannot resolve it statically, so the derived token is " +
+          "kept. Use a string-literal token (or `undefined` to keep the derived " +
+          "token).",
+      ),
+    );
   }
   return result;
 }
@@ -516,7 +522,7 @@ function planAddRegistration(
     // Apply the registration-time override array (design §6) if present.
     if (signatures && overrideArg) {
       signatures = signatures.map((sig) => {
-        const merged = applyOverrides(sig, overrideArg, ctx.factory, ctx);
+        const merged = applyOverrides(sig, overrideArg, ctx);
         return merged ?? sig;
       });
     }

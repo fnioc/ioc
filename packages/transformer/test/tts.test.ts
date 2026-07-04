@@ -1,5 +1,11 @@
 import { test, expect, describe } from "bun:test";
-import { transform, fixture, type VirtualFiles } from "./harness.js";
+import {
+  transform,
+  fixture,
+  depsArrayFor,
+  withCoreBrand,
+  CORE_BRAND_APP,
+} from "./harness.js";
 import { DiagnosticCode } from "../src/index.js";
 
 // Token Surface (TTS) feature tests.
@@ -13,27 +19,6 @@ import { DiagnosticCode } from "../src/index.js";
 //   - resolveFactory param extraction (design §2)
 //   - Registration-time override merge (design §6)
 
-// ── helper ────────────────────────────────────────────────────────────────────
-
-function depsArrayFor(output: string, ctor: string): string {
-  const marker = `, ${ctor}, `;
-  const at = output.indexOf(marker);
-  if (at < 0) {throw new Error(`no inline signature for ${ctor} in:\n${output}`);}
-  const start = output.indexOf("[", at + marker.length);
-  if (start < 0) {throw new Error(`no signature array for ${ctor} in:\n${output}`);}
-  let depth = 0;
-  for (let i = start; i < output.length; i++) {
-    const ch = output[i];
-    if (ch === "[") {
-      depth += 1;
-    } else if (ch === "]") {
-      depth -= 1;
-      if (depth === 0) {return output.slice(start, i + 1);}
-    }
-  }
-  throw new Error(`unbalanced signature array for ${ctor} in:\n${output}`);
-}
-
 // ── Inject<T, "tok"> brand detection ─────────────────────────────────────────
 
 describe("Inject brand detection (§3 / §5)", () => {
@@ -41,17 +26,7 @@ describe("Inject brand detection (§3 / §5)", () => {
     // The transformer reads the Inject brand's string literal and uses it as the
     // token, bypassing normal derivation. The type could be an interface that
     // would normally derive its own token — the brand wins.
-    const files: VirtualFiles = {
-      "/proj/node_modules/@fnioc/core/package.json": JSON.stringify({
-        name: "@fnioc/core",
-        version: "1.0.0",
-        exports: { ".": "./index.js" },
-      }),
-      "/proj/node_modules/@fnioc/core/index.d.ts": `
-        declare const TOK: unique symbol;
-        export type Inject<T, K extends string> = T & { readonly [TOK]?: K };
-      `,
-      "/proj/src/app.ts": `
+    const files = withCoreBrand(`
         import type { Inject } from "@fnioc/core";
         interface ICache {}
         interface ISvc {}
@@ -60,10 +35,9 @@ describe("Inject brand detection (§3 / §5)", () => {
         }
         declare const services: any;
         services.add<ISvc>(Svc).as<"singleton">();
-      `,
-    };
-    const { outputs } = transform(files, { entry: ["/proj/src/app.ts"] });
-    const out = outputs["/proj/src/app.ts"]!;
+      `);
+    const { outputs } = transform(files, { entry: [CORE_BRAND_APP] });
+    const out = outputs[CORE_BRAND_APP]!;
     const arr = depsArrayFor(out, "Svc");
     expect(arr).toBe('[["pkg:redis-cache"]]');
     // The brand token was used, not a structurally-derived token for ICache.
@@ -73,17 +47,7 @@ describe("Inject brand detection (§3 / §5)", () => {
   test("Inject brand works for a symbol-less anonymous type (escape hatch)", () => {
     // An anonymous / structural type with no name cannot be tokenized normally.
     // Inject<T, "my:opts"> brands it with an explicit token, escaping the hard error.
-    const files: VirtualFiles = {
-      "/proj/node_modules/@fnioc/core/package.json": JSON.stringify({
-        name: "@fnioc/core",
-        version: "1.0.0",
-        exports: { ".": "./index.js" },
-      }),
-      "/proj/node_modules/@fnioc/core/index.d.ts": `
-        declare const TOK: unique symbol;
-        export type Inject<T, K extends string> = T & { readonly [TOK]?: K };
-      `,
-      "/proj/src/app.ts": `
+    const files = withCoreBrand(`
         import type { Inject } from "@fnioc/core";
         interface ISvc {}
         class Svc implements ISvc {
@@ -91,12 +55,11 @@ describe("Inject brand detection (§3 / §5)", () => {
         }
         declare const services: any;
         services.add<ISvc>(Svc).as<"singleton">();
-      `,
-    };
+      `);
     const { outputs, diagnostics } = transform(files, {
-      entry: ["/proj/src/app.ts"],
+      entry: [CORE_BRAND_APP],
     });
-    const out = outputs["/proj/src/app.ts"]!;
+    const out = outputs[CORE_BRAND_APP]!;
     // Branded → no hard error, uses the branded token.
     expect(
       diagnostics.filter((d) => d.code === DiagnosticCode.UnderivableToken).length,
@@ -111,17 +74,7 @@ describe("Inject brand detection (§3 / §5)", () => {
     // brand. The branded token must survive AND keep the optional `undefined`
     // fallback — the whole-type brand short-circuit must NOT collapse the param to a
     // bare required token (the regression this guards).
-    const files: VirtualFiles = {
-      "/proj/node_modules/@fnioc/core/package.json": JSON.stringify({
-        name: "@fnioc/core",
-        version: "1.0.0",
-        exports: { ".": "./index.js" },
-      }),
-      "/proj/node_modules/@fnioc/core/index.d.ts": `
-        declare const TOK: unique symbol;
-        export type Inject<T, K extends string> = T & { readonly [TOK]?: K };
-      `,
-      "/proj/src/app.ts": `
+    const files = withCoreBrand(`
         import type { Inject } from "@fnioc/core";
         interface ISvc {}
         class Svc implements ISvc {
@@ -129,12 +82,11 @@ describe("Inject brand detection (§3 / §5)", () => {
         }
         declare const services: any;
         services.add<ISvc>(Svc).as<"singleton">();
-      `,
-    };
+      `);
     const { outputs, diagnostics } = transform(files, {
-      entry: ["/proj/src/app.ts"],
+      entry: [CORE_BRAND_APP],
     });
-    const out = outputs["/proj/src/app.ts"]!;
+    const out = outputs[CORE_BRAND_APP]!;
     expect(
       diagnostics.filter((d) => d.code === DiagnosticCode.UnderivableToken).length,
     ).toBe(0);
@@ -147,17 +99,7 @@ describe("Inject brand detection (§3 / §5)", () => {
     // `x: Inject<T, K> | undefined` is the explicit-union form of an optional param;
     // the resolved type is identical to `x?: Inject<T, K>` — branded token + the
     // `undefined` fallback both survive.
-    const files: VirtualFiles = {
-      "/proj/node_modules/@fnioc/core/package.json": JSON.stringify({
-        name: "@fnioc/core",
-        version: "1.0.0",
-        exports: { ".": "./index.js" },
-      }),
-      "/proj/node_modules/@fnioc/core/index.d.ts": `
-        declare const TOK: unique symbol;
-        export type Inject<T, K extends string> = T & { readonly [TOK]?: K };
-      `,
-      "/proj/src/app.ts": `
+    const files = withCoreBrand(`
         import type { Inject } from "@fnioc/core";
         interface ISvc {}
         class Svc implements ISvc {
@@ -165,12 +107,11 @@ describe("Inject brand detection (§3 / §5)", () => {
         }
         declare const services: any;
         services.add<ISvc>(Svc).as<"singleton">();
-      `,
-    };
+      `);
     const { outputs, diagnostics } = transform(files, {
-      entry: ["/proj/src/app.ts"],
+      entry: [CORE_BRAND_APP],
     });
-    const out = outputs["/proj/src/app.ts"]!;
+    const out = outputs[CORE_BRAND_APP]!;
     expect(
       diagnostics.filter((d) => d.code === DiagnosticCode.UnderivableToken).length,
     ).toBe(0);
@@ -183,17 +124,7 @@ describe("Inject brand detection (§3 / §5)", () => {
     // A genuine 2-member union where one member is branded. The whole-type brand
     // short-circuit must NOT fire — that would collapse the union to the branded
     // token and silently drop IBar. The brand is applied per-member.
-    const files: VirtualFiles = {
-      "/proj/node_modules/@fnioc/core/package.json": JSON.stringify({
-        name: "@fnioc/core",
-        version: "1.0.0",
-        exports: { ".": "./index.js" },
-      }),
-      "/proj/node_modules/@fnioc/core/index.d.ts": `
-        declare const TOK: unique symbol;
-        export type Inject<T, K extends string> = T & { readonly [TOK]?: K };
-      `,
-      "/proj/src/app.ts": `
+    const files = withCoreBrand(`
         import type { Inject } from "@fnioc/core";
         interface IFoo {}
         interface IBar {}
@@ -203,12 +134,11 @@ describe("Inject brand detection (§3 / §5)", () => {
         }
         declare const services: any;
         services.add<ISvc>(Svc).as<"singleton">();
-      `,
-    };
+      `);
     const { outputs, diagnostics } = transform(files, {
-      entry: ["/proj/src/app.ts"],
+      entry: [CORE_BRAND_APP],
     });
-    const out = outputs["/proj/src/app.ts"]!;
+    const out = outputs[CORE_BRAND_APP]!;
     expect(
       diagnostics.filter((d) => d.code === DiagnosticCode.UnderivableToken).length,
     ).toBe(0);
@@ -218,17 +148,7 @@ describe("Inject brand detection (§3 / §5)", () => {
   });
 
   test("mixed branded + normal params: branded wins for branded, normal for others", () => {
-    const files: VirtualFiles = {
-      "/proj/node_modules/@fnioc/core/package.json": JSON.stringify({
-        name: "@fnioc/core",
-        version: "1.0.0",
-        exports: { ".": "./index.js" },
-      }),
-      "/proj/node_modules/@fnioc/core/index.d.ts": `
-        declare const TOK: unique symbol;
-        export type Inject<T, K extends string> = T & { readonly [TOK]?: K };
-      `,
-      "/proj/src/app.ts": `
+    const files = withCoreBrand(`
         import type { Inject } from "@fnioc/core";
         interface ICache {}
         interface ILogger {}
@@ -241,10 +161,9 @@ describe("Inject brand detection (§3 / §5)", () => {
         }
         declare const services: any;
         services.add<ISvc>(Svc).as<"singleton">();
-      `,
-    };
-    const { outputs } = transform(files, { entry: ["/proj/src/app.ts"] });
-    const out = outputs["/proj/src/app.ts"]!;
+      `);
+    const { outputs } = transform(files, { entry: [CORE_BRAND_APP] });
+    const out = outputs[CORE_BRAND_APP]!;
     // First param: branded → "pkg:redis-cache"
     // Second param: normal derivation → "./app:ILogger" source-relative token
     const arr = depsArrayFor(out, "Svc");
@@ -504,5 +423,31 @@ describe("registration-time override merge (§6)", () => {
     // The derived tokens must NOT appear.
     expect(arr).not.toContain('"./app:IRedisClient"');
     expect(arr).not.toContain('"./app:ILogger"');
+  });
+
+  test("non-string override element warns and keeps the derived token", () => {
+    // An object literal (or any non-string, non-undefined element) can't be
+    // resolved statically. The transformer must flag it rather than silently
+    // drop it — the derived token at that position is kept.
+    const src = `
+      interface IRedisClient {}
+      interface ILogger {}
+      interface ICache {}
+      class RedisCache implements ICache {
+        constructor(client: IRedisClient, log: ILogger) {}
+      }
+      declare const services: any;
+      services.add<ICache>(RedisCache, [{ factory: "manual:x" }, "pkg:ILogger"]).as<"singleton">();
+    `;
+    const { output, diagnostics } = transform(fixture(src));
+    const warns = diagnostics.filter(
+      (d) => d.code === DiagnosticCode.UnresolvableOverrideElement,
+    );
+    expect(warns.length).toBe(1);
+    const arr = depsArrayFor(output, "RedisCache");
+    // Position 0: object-literal override ignored → derived token kept.
+    expect(arr).toContain('"./app:IRedisClient"');
+    // Position 1: valid string override still applies.
+    expect(arr).toContain('"pkg:ILogger"');
   });
 });

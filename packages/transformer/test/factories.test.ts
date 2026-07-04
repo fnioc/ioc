@@ -1,5 +1,10 @@
 import { test, expect, describe } from "bun:test";
-import { transform, fixture, type VirtualFiles } from "./harness.js";
+import {
+  transform,
+  fixture,
+  depsArrayFor,
+  type VirtualFiles,
+} from "./harness.js";
 import { DiagnosticCode } from "../src/index.js";
 
 // Factory detection (PRD §7 / §8). A constructor parameter whose type ANNOTATION
@@ -8,30 +13,6 @@ import { DiagnosticCode } from "../src/index.js";
 // — instead of a plain token. A NAMED function-interface reference is the
 // deliberate opt-out and resolves to its own normal token. Detection is purely
 // syntactic (the annotation's shape), never the resolved type.
-
-/**
- * Pull the `[[...]]` signature array text out of the inline registration call
- * for the given class/factory. Signatures ride ON the registration as the third
- * argument: `add("token", Ctor, [[...]])` / `addFactory("token", fn, [[...]])`.
- */
-function depsArrayFor(output: string, ctor: string): string {
-  const marker = `, ${ctor}, `;
-  const at = output.indexOf(marker);
-  if (at < 0) {throw new Error(`no inline signature for ${ctor} in:\n${output}`);}
-  const start = output.indexOf("[", at + marker.length);
-  if (start < 0) {throw new Error(`no signature array for ${ctor} in:\n${output}`);}
-  let depth = 0;
-  for (let i = start; i < output.length; i++) {
-    const ch = output[i];
-    if (ch === "[") {
-      depth += 1;
-    } else if (ch === "]") {
-      depth -= 1;
-      if (depth === 0) {return output.slice(start, i + 1);}
-    }
-  }
-  throw new Error(`unbalanced signature array for ${ctor} in:\n${output}`);
-}
 
 describe("factory detection", () => {
   test("inline () => IFoo emits a { type: token } slot", () => {
