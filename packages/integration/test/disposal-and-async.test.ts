@@ -1,6 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import { ServiceManifest, AsyncDisposalRequiredError } from "@fnioc/di";
-import { defineDeps } from "./metadata-shim.js";
+import { defineDeps } from "../../di/test/metadata-shim.js";
 
 // Coverage 6 (disposal — sync), 7 (disposal — async), 8 (async-as-values).
 //

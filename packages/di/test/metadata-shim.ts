@@ -1,4 +1,7 @@
 // Test-only ergonomic for hand-feeding dep signatures without the transformer.
+// Shared across `@fnioc/di` and `@fnioc/integration` tests — both suites author
+// fixtures by hand (no transformer) and need the exact same
+// `defineDeps`/`forCtor` sugar over the engine's inline third-argument form.
 //
 // The global metadata store is retired: signatures now ride ON the registration
 // (`add(token, ctor, [[...]])`). To keep the plentiful `defineDeps(C, sig); …
@@ -13,6 +16,7 @@ import type { DepSlot } from "@fnioc/core";
 
 type Signatures = readonly (readonly DepSlot[])[];
 
+/** The test-only signature stash — keyed by the ctor / factory function. */
 const testStore = new WeakMap<object, DepSlot[][]>();
 
 /** Stash one-or-more signatures for `target`, appending to any prior stash. */
@@ -40,6 +44,9 @@ export function forCtor(ctor: object): ForCtorBuilder {
   return builder;
 }
 
+// Patch `add` / `addFactory` to thread a stashed signature into the third-arg
+// channel when the caller passed only `(token, target)`. A no-op when the target
+// has no stash or a signature was passed explicitly.
 type AddFn = (...args: unknown[]) => unknown;
 function patchThirdArg(method: "add" | "addFactory"): void {
   const proto = ServiceManifestClass.prototype as unknown as Record<string, AddFn>;
