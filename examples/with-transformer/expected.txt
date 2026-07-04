@@ -1,7 +1,7 @@
 === @fnioc/di — with transformer ===
 greeter is a shared singleton: true
 Greeter instances built: 1
-ConsoleLogger instances built: 1
+ConsoleLogger instances built: 3
 SystemClock instances built: 2
 logged lines:
   [2026-01-01T00:00:00Z] Hello, Ada!
@@ -10,6 +10,12 @@ logged lines:
   diagnostics at 2026-01-01T00:00:00Z
   [sql] saved @fnioc-examples/shared:User
   [sql] saved @fnioc-examples/shared:Invoice
+  Welcome! (as of 2026-01-01T00:00:00Z)
+  personalized greeting requested for Bob
+  personalized greeting requested for Carol
+  disposed: sync-resource
+  disposed: async-resource
+  disposed: sync-resource
 request 1 id stable within scope: true (value 1)
 request 2 id is distinct: true (value 2)
 RequestId instances built: 2
@@ -24,3 +30,36 @@ open generics:
   closed registration wins for Order: memory
   order save: [memory] saved @fnioc-examples/shared:Order (count 1)
   auditor closed over the user repo: true (auditing @fnioc-examples/shared:User)
+scopes — a third custom tag, and TRANSIENT (no matching open frame):
+  operation id stable within one frame: true (value 1)
+  operation id distinct across sibling frames: true (value 2)
+  same registration, no open "operation" frame here => transient: true
+  class registration proof — resolved instance really is a Greeter: true
+  per-scope addRequest(...) authoring still isolates correctly: true
+tokenless addFactory<I>(fn) [HEADLINE]:
+  welcome banner built via factory: Welcome! (as of 2026-01-01T00:00:00Z)
+addValue<I>(v) — a pre-built instance, no construction step:
+  resolving twice trivially returns the identical reference: true (demo@1.0.0)
+Typeof<T> witness — the erased SqlRepository knows its own closing: @fnioc-examples/shared:User
+literal dep — channel injected straight from its TYPE, no token or registration: true
+optional dep — unregistered token degrades to undefined, never throws: no toggle registered (undefined fallback)
+overload selection — longest satisfiable signature wins:
+  richer (logger, metrics) overload chosen because IMetricsBackend is registered: true
+resolveFactory — zero-arg (respects lifetime) vs parameterized (always fresh):
+  zero-arg factory returns the SAME cached singleton: true
+  parameterized factory builds fresh every call: true
+  Welcome, Bob! / Welcome, Carol!
+ResolveScope (Resolver) injection — factory resolved its own deps imperatively: [demo@1.0.0] as of 2026-01-01T00:00:00Z
+=== HEADLINE: async — Promise<T>-only registration + recursive resolveAsync ===
+  resolveAsync<IRemoteConfig>() directly: https://api.example.test
+  resolveAsync<IRemoteConfigConsumer>() recursively resolved the bare token via the Promise<T> fallback: resolved via async fallback: endpoint=https://api.example.test
+  RemoteConfig built exactly once — shared singleton cache through the async fallback: true
+disposal — Symbol.dispose (sync) vs Symbol.asyncDispose (async):
+  sync dispose() tore down the sync-only scope: true
+  disposeAsync() tore down both, REVERSE of construction order: true
+  disposal log order: disposed: async-resource then disposed: sync-resource
+last-wins override (registering a token twice — the engine keeps both, resolves the most recent):
+  bare IClock now resolves the override: true (2099-12-31T23:59:59Z)
+=== HEADLINE: class-as-factory via OverloadedConstructorParameters ===
+  addFactory<I>(overload-faithful wrapper) resolves identically to add<I>(C): true (both: "with-metrics")
+  Reflect.construct really built a genuine Reporter: true
