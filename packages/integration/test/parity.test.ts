@@ -9,7 +9,7 @@ import { compileWithTransformer, type CompiledProject } from "./harness.js";
 // The SAME sample graph, registered WITHOUT the transformer using the
 // plugin-less paths (PRD §9):
 //   1. `useValue` / `useFactory`              (the async config + the IThunk value)
-//   2. `forCtor(C).signature(...)`            (hand-fed tokens for classes you own)
+//   2. `add(token, C, [[...]])`               (hand-fed inline signatures for classes you own)
 //
 // Tokens are hand-authored to the EXACT strings the transformer emits, and the
 // hand-fed metadata mirrors the lowered `defineDeps` arrays. We then assert the
@@ -247,7 +247,7 @@ describe("Named alias — single-token semantics (manual token surface)", () => 
 });
 
 describe("Inject brand override — branded token wins (parity matrix §9)", () => {
-  // Demonstrates that `forCtor(C).signature("my:token", ...)` is the exact
+  // Demonstrates that `add(token, C, [["my:token"]])` is the exact
   // manual-surface equivalent of the transformer's `Inject<T, "my:token">` brand
   // on a ctor param: the branded token is used, not the structural derivation.
   class SpecialCache { public readonly kind = "special"; }
