@@ -187,4 +187,27 @@ export function depsArrayFor(output: string, ctor: string): string {
   throw new Error(`unbalanced signature array for ${ctor} in:\n${output}`);
 }
 
+/** The virtual entry path a {@link withCoreBrand} fixture places `appSource` at. */
+export const CORE_BRAND_APP = "/proj/src/app.ts";
+
+/**
+ * Build a multi-file fixture backed by a virtual `@fnioc/core` package that
+ * exports the `Inject<T, K>` brand, with `appSource` as the entry file at
+ * {@link CORE_BRAND_APP}. Lets brand-detection tests reference `@fnioc/core`
+ * without a real `node_modules`.
+ */
+export function withCoreBrand(appSource: string): VirtualFiles {
+  return {
+    "/proj/node_modules/@fnioc/core/package.json": JSON.stringify({
+      name: "@fnioc/core",
+      version: "1.0.0",
+      exports: { ".": "./index.js" },
+    }),
+    "/proj/node_modules/@fnioc/core/index.d.ts":
+      "declare const TOK: unique symbol;\n" +
+      "export type Inject<T, K extends string> = T & { readonly [TOK]?: K };\n",
+    [CORE_BRAND_APP]: appSource,
+  };
+}
+
 export const ROOT = DEFAULT_ROOT;
