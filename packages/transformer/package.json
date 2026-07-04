@@ -1,6 +1,6 @@
 {
   "name": "@fnioc/transformer",
-  "version": "9.0.0",
+  "version": "10.0.0",
   "description": "The ioc ts-patch transformer: token generation, dependency extraction, registration lowering, and the factory-signature diagnostic.",
   "keywords": [
     "dependency-injection",

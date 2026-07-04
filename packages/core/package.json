@@ -1,6 +1,6 @@
 {
   "name": "@fnioc/core",
-  "version": "9.0.0",
+  "version": "10.0.0",
   "description": "The pure-types ioc abstractions substrate: the dependency-signature data format, the slot/token type surface, and the authoring type machinery a library author depends on to author registrations without the di runtime. Types only — zero runtime, zero dependencies.",
   "keywords": [
     "dependency-injection",

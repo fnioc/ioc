@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.0.0](https://github.com/fnioc/ioc/compare/di-v9.0.0...di-v10.0.0) (2026-07-04)
+
+
+### Chores
+
+* **di:** Synchronize fnioc versions
+
 ## [9.0.0](https://github.com/fnioc/ioc/compare/di-v8.0.0...di-v9.0.0) (2026-07-03)
 
 

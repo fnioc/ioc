@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.0.0](https://github.com/fnioc/ioc/compare/core-v9.0.0...core-v10.0.0) (2026-07-04)
+
+
+### Chores
+
+* **core:** Synchronize fnioc versions
+
 ## [9.0.0](https://github.com/fnioc/ioc/compare/core-v8.0.0...core-v9.0.0) (2026-07-03)
 
 

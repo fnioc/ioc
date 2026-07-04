@@ -1,5 +1,16 @@
 # Changelog
 
+## [10.0.0](https://github.com/fnioc/ioc/compare/transformer-v9.0.0...transformer-v10.0.0) (2026-07-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* **transformer:** package-unique source:symbol token derivation ([#90](https://github.com/fnioc/ioc/issues/90))
+
+### Bug Fixes
+
+* **transformer:** package-unique source:symbol token derivation ([#90](https://github.com/fnioc/ioc/issues/90)) ([efa80fa](https://github.com/fnioc/ioc/commit/efa80fac335e1dad4e650e5abeb608bdb476f94b))
+
 ## [9.0.0](https://github.com/fnioc/ioc/compare/transformer-v8.0.0...transformer-v9.0.0) (2026-07-03)
 
 
