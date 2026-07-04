@@ -133,6 +133,25 @@ function* unionTokenMembers(slot: Union): Generator<Token> {
 }
 
 /**
+ * Orders signatures longest → shortest with a STABLE tie-break: equal-arity
+ * signatures keep their registration order. The shared ordering behind greedy
+ * selection (`#selectSignature`) and factory-target selection
+ * (`#selectTargetSignature`).
+ */
+function orderByArityDesc(
+  signatures: readonly (readonly DepSlot[])[],
+): readonly (readonly DepSlot[])[] {
+  return signatures
+    .map((sig, index) => ({ sig, index }))
+    .sort((a, b) =>
+      b.sig.length !== a.sig.length
+        ? b.sig.length - a.sig.length
+        : a.index - b.index,
+    )
+    .map(({ sig }) => sig);
+}
+
+/**
  * A scope frame — a node in the parent-linked chain. Holds this scope's name,
  * its instance cache, an ordered list for disposal, and an optional parent.
  * It does NOT hold registrations (those live sealed on the ServiceProvider).
@@ -851,18 +870,8 @@ export class ServiceProvider<S extends string = string>
     signatures: readonly (readonly DepSlot[])[],
     async: boolean,
   ): readonly DepSlot[] {
-    // Stable sort by descending length; index keeps equal-arity ties in
-    // registration order.
-    const ordered = signatures
-      .map((sig, index) => ({ sig, index }))
-      .sort((a, b) =>
-        b.sig.length !== a.sig.length
-          ? b.sig.length - a.sig.length
-          : a.index - b.index,
-      );
-
     const unsatisfiable = new Set<Token>();
-    for (const { sig } of ordered) {
+    for (const sig of orderByArityDesc(signatures)) {
       let satisfiable = true;
       for (const slot of sig) {
         if (isFactoryRef(slot) || isScopeRef(slot) || isLiteralRef(slot)) {continue;}
@@ -903,13 +912,7 @@ export class ServiceProvider<S extends string = string>
   #selectTargetSignature(
     signatures: readonly (readonly DepSlot[])[],
   ): readonly DepSlot[] {
-    return signatures
-      .map((sig, index) => ({ sig, index }))
-      .sort((a, b) =>
-        b.sig.length !== a.sig.length
-          ? b.sig.length - a.sig.length
-          : a.index - b.index,
-      )[0]!.sig;
+    return orderByArityDesc(signatures)[0]!;
   }
 
   /**
