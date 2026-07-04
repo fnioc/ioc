@@ -118,7 +118,7 @@ const isFactoryRef: (slot: DepSlot) => slot is FactoryRef = coreIsFactoryRef;
  * live resolution provider itself (emitted for a factory/ctor param typed
  * `Resolver`, `ScopeFactory`, or the legacy `ResolveScope`).
  */
-const isScopeRef: (slot: DepSlot) => slot is ScopeRef = coreIsScopeRef as (slot: DepSlot) => slot is ScopeRef;
+const isScopeRef: (slot: DepSlot) => slot is ScopeRef = coreIsScopeRef;
 
 /**
  * True when a `DepSlot` is a `Union` — a set of alternative slots tried in
