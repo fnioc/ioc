@@ -39,6 +39,16 @@ import type {
 // a library author depends on). di imports it back via `import type` and its
 // runtime `ServiceManifestClass` implements the interface.
 
+/** Appends `value` to the list at `key`, creating the list on first use. */
+function appendTo<K, V>(map: Map<K, V[]>, key: K, value: V): void {
+  const existing = map.get(key);
+  if (existing === undefined) {
+    map.set(key, [value]);
+  } else {
+    existing.push(value);
+  }
+}
+
 /**
  * The registration builder.
  *
@@ -88,22 +98,12 @@ export class ServiceManifestClass<Scopes extends string = "singleton">
 
   /** Appends a registration to `token`'s list, creating the list on first use. */
   #append(token: Token, registration: Registration): void {
-    const existing = this.#registrations.get(token);
-    if (existing === undefined) {
-      this.#registrations.set(token, [registration]);
-    } else {
-      existing.push(registration);
-    }
+    appendTo(this.#registrations, token, registration);
   }
 
   /** Appends an open registration to `base`'s list, mirroring `#append`. */
   #appendOpen(base: Token, registration: OpenRegistration): void {
-    const existing = this.#openRegistrations.get(base);
-    if (existing === undefined) {
-      this.#openRegistrations.set(base, [registration]);
-    } else {
-      existing.push(registration);
-    }
+    appendTo(this.#openRegistrations, base, registration);
   }
 
   /**
