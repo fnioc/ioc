@@ -232,13 +232,21 @@ export class ServiceProvider<S extends string = string>
   public createScope(
     ...args: "scoped" extends S ? [name?: S] : [name: S]
   ): ServiceProvider<S> {
-    const name = (args[0] ?? "scoped") as string;
-    const childFrame = new Scope(name, this.#frame);
+    return this.#childScope((args[0] ?? "scoped") as string, this.#frame);
+  }
+
+  /**
+   * Builds a child `ServiceProvider` whose frame is a new `Scope` named `name`
+   * parented to `parentFrame`, sharing this tree's sealed maps and closed memo.
+   * The shared body behind both the public `createScope` and the resolution
+   * view's `createScope`.
+   */
+  #childScope(name: string, parentFrame: Scope | undefined): ServiceProvider<S> {
     return new ServiceProvider<S>(
       this.#registrations,
       this.#openRegistrations,
       this.#closedMemo,
-      childFrame,
+      new Scope(name, parentFrame),
     );
   }
 
@@ -662,16 +670,8 @@ export class ServiceProvider<S extends string = string>
       },
       resolveFactory: (depToken: Token, depParams?: readonly Token[]): unknown =>
         sp.#makeFactory({ type: depToken, params: depParams }, owningFrame),
-      createScope: (...args: ["scoped"?] | [S]): ServiceProvider<S> => {
-        const name = (args[0] ?? "scoped") as string;
-        const childFrame = new Scope(name, owningFrame);
-        return new ServiceProvider<S>(
-          sp.#registrations,
-          sp.#openRegistrations,
-          sp.#closedMemo,
-          childFrame,
-        );
-      },
+      createScope: (...args: ["scoped"?] | [S]): ServiceProvider<S> =>
+        sp.#childScope((args[0] ?? "scoped") as string, owningFrame),
     } as Resolver & ScopeFactory<S>;
   }
 
