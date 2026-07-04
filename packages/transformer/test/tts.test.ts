@@ -1,5 +1,10 @@
 import { test, expect, describe } from "bun:test";
-import { transform, fixture, type VirtualFiles } from "./harness.js";
+import {
+  transform,
+  fixture,
+  depsArrayFor,
+  type VirtualFiles,
+} from "./harness.js";
 import { DiagnosticCode } from "../src/index.js";
 
 // Token Surface (TTS) feature tests.
@@ -12,27 +17,6 @@ import { DiagnosticCode } from "../src/index.js";
 //   - Hard error for unbranded underivable types (design §5)
 //   - resolveFactory param extraction (design §2)
 //   - Registration-time override merge (design §6)
-
-// ── helper ────────────────────────────────────────────────────────────────────
-
-function depsArrayFor(output: string, ctor: string): string {
-  const marker = `, ${ctor}, `;
-  const at = output.indexOf(marker);
-  if (at < 0) {throw new Error(`no inline signature for ${ctor} in:\n${output}`);}
-  const start = output.indexOf("[", at + marker.length);
-  if (start < 0) {throw new Error(`no signature array for ${ctor} in:\n${output}`);}
-  let depth = 0;
-  for (let i = start; i < output.length; i++) {
-    const ch = output[i];
-    if (ch === "[") {
-      depth += 1;
-    } else if (ch === "]") {
-      depth -= 1;
-      if (depth === 0) {return output.slice(start, i + 1);}
-    }
-  }
-  throw new Error(`unbalanced signature array for ${ctor} in:\n${output}`);
-}
 
 // ── Inject<T, "tok"> brand detection ─────────────────────────────────────────
 

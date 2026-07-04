@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { transform, fixture } from "./harness.js";
+import { transform, fixture, depsArrayFor } from "./harness.js";
 import { DiagnosticCode } from "../src/index.js";
 
 // Rule 2 (LiteralRef value supply) + the union-unified optional handling +
@@ -13,26 +13,6 @@ import { DiagnosticCode } from "../src/index.js";
 //   - `X | null`          →  union(X, { value: null })
 //   - a pure-literal union `"a" | "b"`  →  one sorted token (NOT a union slot)
 //   - every intrinsic     →  its keyword token (Rule 1); `boolean` from `true|false`
-
-/** Pull the `[[...]]` inline signature literal out of the registration call. */
-function depsArrayFor(output: string, ctor: string): string {
-  const marker = `, ${ctor}, `;
-  const at = output.indexOf(marker);
-  if (at < 0) {throw new Error(`no inline signature for ${ctor} in:\n${output}`);}
-  const start = output.indexOf("[", at + marker.length);
-  if (start < 0) {throw new Error(`no signature array for ${ctor} in:\n${output}`);}
-  let depth = 0;
-  for (let i = start; i < output.length; i++) {
-    const ch = output[i];
-    if (ch === "[") {
-      depth += 1;
-    } else if (ch === "]") {
-      depth -= 1;
-      if (depth === 0) {return output.slice(start, i + 1);}
-    }
-  }
-  throw new Error(`unbalanced signature array for ${ctor} in:\n${output}`);
-}
 
 function emitFor(ctorBody: string, extra = ""): string {
   const src = `

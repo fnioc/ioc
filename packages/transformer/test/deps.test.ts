@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { transform, fixture } from "./harness.js";
+import { transform, fixture, depsArrayFor } from "./harness.js";
 import { DiagnosticCode } from "../src/index.js";
 
 // Dependency extraction → defineDeps emission (PRD §8). The emitted shape is the
@@ -10,31 +10,6 @@ import { DiagnosticCode } from "../src/index.js";
 // their keyword as a token; an unregistered token simply misses at runtime, it is
 // NOT a compile error. ONLY an anonymous inline structure (a `__type`/nameless
 // non-intrinsic) still produces the hard UnderivableToken diagnostic.
-
-/**
- * Pull the `[[...]]` signature array text out of the inline registration call
- * for the given class/factory. Signatures now ride ON the registration as the
- * third argument: `add("token", Ctor, [[...]])` / `addFactory("token", fn,
- * [[...]])`. We locate the `, ${ctor}, ` boundary and balanced-scan the `[[...]]`.
- */
-function depsArrayFor(output: string, ctor: string): string {
-  const marker = `, ${ctor}, `;
-  const at = output.indexOf(marker);
-  if (at < 0) {throw new Error(`no inline signature for ${ctor} in:\n${output}`);}
-  const start = output.indexOf("[", at + marker.length);
-  if (start < 0) {throw new Error(`no signature array for ${ctor} in:\n${output}`);}
-  let depth = 0;
-  for (let i = start; i < output.length; i++) {
-    const ch = output[i];
-    if (ch === "[") {
-      depth += 1;
-    } else if (ch === "]") {
-      depth -= 1;
-      if (depth === 0) {return output.slice(start, i + 1);}
-    }
-  }
-  throw new Error(`unbalanced signature array for ${ctor} in:\n${output}`);
-}
 
 describe("dependency extraction", () => {
   test("primitive parameter types tokenize by their keyword (Rule 1, no diagnostics)", () => {
