@@ -107,6 +107,26 @@ export class ServiceManifestClass<Scopes extends string = "singleton">
   }
 
   /**
+   * Builds the `.as(scope?)` continuation over an `appendScoped` callback that
+   * appends a fresh scoped copy for the chosen tag. Shared by the class and open
+   * registration paths — both append a base (transient) registration first, then
+   * hand back this continuation so a trailing `.as(scope)` appends the winning
+   * scoped copy.
+   */
+  #scopedContinuation(appendScoped: (scope: Scopes) => void): AddBuilder<Scopes> {
+    return {
+      as<S extends Scopes>(scope?: S): void {
+        // The lowered form always passes a value arg; the authored type-arg-only
+        // form never executes (the transformer rewrites it first). A no-arg call
+        // at runtime would leave the registration transient — guard so it is a
+        // no-op rather than appending a scopeless duplicate.
+        if (scope === undefined) {return;}
+        appendScoped(scope);
+      },
+    };
+  }
+
+  /**
    * Appends a scopeless `class`/`factory` base registration and returns the
    * `.as(scope?)` continuation. `.as()` appends a fresh SCOPED copy so the
    * array's last entry wins; a bare `.add(...)`/`.addFactory(...)` with no
@@ -117,17 +137,9 @@ export class ServiceManifestClass<Scopes extends string = "singleton">
     base: ClassRegistration | FactoryRegistration,
   ): AddBuilder<Scopes> {
     this.#append(token, base);
-    const append = (next: Registration): void => this.#append(token, next);
-    return {
-      as<S extends Scopes>(scope?: S): void {
-        // The lowered form always passes a value arg; the authored type-arg-only
-        // form never executes (the transformer rewrites it first). A no-arg call
-        // at runtime would leave the registration transient — guard so it is a
-        // no-op rather than appending a scopeless duplicate.
-        if (scope === undefined) {return;}
-        append({ ...base, scope });
-      },
-    };
+    return this.#scopedContinuation((scope) =>
+      this.#append(token, { ...base, scope }),
+    );
   }
 
   /**
@@ -155,13 +167,9 @@ export class ServiceManifestClass<Scopes extends string = "singleton">
       signatures,
     };
     this.#appendOpen(parsed.base, base);
-    const append = (next: OpenRegistration): void => this.#appendOpen(parsed.base, next);
-    return {
-      as<S extends Scopes>(scope?: S): void {
-        if (scope === undefined) {return;}
-        append({ ...base, scope });
-      },
-    };
+    return this.#scopedContinuation((scope) =>
+      this.#appendOpen(parsed.base, { ...base, scope }),
+    );
   }
 
   /**
