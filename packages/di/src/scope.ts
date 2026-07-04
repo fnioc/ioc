@@ -743,6 +743,7 @@ export class ServiceProvider<S extends string = string>
     // created it.
     return (...callArgs: unknown[]) =>
       sp.#buildPartitioned(
+        ref.type,
         target,
         targetSignature as readonly DepSlot[] | undefined,
         callerParams,
@@ -769,6 +770,7 @@ export class ServiceProvider<S extends string = string>
    * ctor or record-less factory) — in that case args is empty.
    */
   #buildPartitioned<T>(
+    targetToken: Token,
     target: ClassRegistration | FactoryRegistration,
     signature: readonly DepSlot[] | undefined,
     callerParams: readonly Token[],
@@ -815,7 +817,9 @@ export class ServiceProvider<S extends string = string>
 
         // Not claimed by callerParams. Must resolve from the container.
         if (!this.#isResolvable(slot, false)) {
-          throw new NoSatisfiableSignatureError(slot, slot, [slot]);
+          const targetName =
+            target.kind === "class" ? target.ctor.name : target.factory.name;
+          throw new NoSatisfiableSignatureError(targetToken, targetName, [slot]);
         }
         return this.#resolve<unknown>(slot, owningFrame, stack, false);
       }
