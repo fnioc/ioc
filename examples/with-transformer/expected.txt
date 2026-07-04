@@ -1,7 +1,7 @@
 === @fnioc/di — with transformer ===
 greeter is a shared singleton: true
 Greeter instances built: 1
-ConsoleLogger instances built: 3
+ConsoleLogger instances built: 4
 SystemClock instances built: 2
 logged lines:
   [2026-01-01T00:00:00Z] Hello, Ada!
@@ -45,6 +45,7 @@ literal dep — channel injected straight from its TYPE, no token or registratio
 optional dep — unregistered token degrades to undefined, never throws: no toggle registered (undefined fallback)
 overload selection — longest satisfiable signature wins:
   richer (logger, metrics) overload chosen because IMetricsBackend is registered: true
+  falls back to the shorter (logger)-only overload when IMetricsBackend is unregistered: true
 resolveFactory — zero-arg (respects lifetime) vs parameterized (always fresh):
   zero-arg factory returns the SAME cached singleton: true
   parameterized factory builds fresh every call: true

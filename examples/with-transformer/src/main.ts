@@ -347,6 +347,17 @@ overrideDemo.add<IClock>(SystemClock).as<"singleton">();
 overrideDemo.add<IClock>(OverrideClock).as<"singleton">(); // registered SECOND — wins
 const overriddenClock = overrideDemo.build().createScope("singleton").resolve<IClock>();
 
+// Overload FALLBACK — isolated in its OWN throwaway container, for the same
+// reason the last-wins demo above is: the shared `services` manifest already
+// registers `IMetricsBackend`, which would make Reporter's richer overload
+// satisfiable there too. Here `IMetricsBackend` is never registered, so the
+// SAME greedy longest-satisfiable selection that picked the richer overload
+// above instead falls back to the shorter (logger)-only one.
+const leanReporterManifest = new ServiceManifest<"singleton">();
+leanReporterManifest.add<ILogger>(ConsoleLogger).as<"singleton">();
+leanReporterManifest.add<IReporter>(Reporter).as<"singleton">();
+const leanReporter = leanReporterManifest.build().createScope("singleton").resolve<IReporter>();
+
 // HEADLINE: register a class AS a factory via the overload-faithful wrapper.
 // Two independent, throwaway containers isolate the comparison — registering
 // both forms under the SAME token in ONE container would just be another
@@ -413,6 +424,7 @@ const lines = [
   `optional dep — unregistered token degrades to undefined, never throws: ${optionalConsumer.describe()}`,
   "overload selection — longest satisfiable signature wins:",
   `  richer (logger, metrics) overload chosen because IMetricsBackend is registered: ${reporter.report() === "with-metrics"}`,
+  `  falls back to the shorter (logger)-only overload when IMetricsBackend is unregistered: ${leanReporter.report() === "logger-only"}`,
   "resolveFactory — zero-arg (respects lifetime) vs parameterized (always fresh):",
   `  zero-arg factory returns the SAME cached singleton: ${greeterFactory() === greeterA}`,
   `  parameterized factory builds fresh every call: ${personalizedBob !== personalizedCarol}`,
