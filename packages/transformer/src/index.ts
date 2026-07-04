@@ -16,6 +16,15 @@
 // consumer that references `@fnioc/transformer`'s types.
 import "./augment.js";
 
+// The overload-faithful parameter-tuple utilities, re-exported so a consumer can
+// type a factory's rest parameter (`(...args: OverloadedConstructorParameters<
+// typeof C>) => I`) without importing `@fnioc/core` directly — an example app
+// depends on `@fnioc/transformer` for the plugin already, so this is the same
+// "one import reaches the whole authoring surface" gateway `augment.ts` itself
+// documents. Re-exported from `./augment.js` (not `@fnioc/core` directly) so
+// there is exactly one place that names the upstream package.
+export type { OverloadedParameters, OverloadedConstructorParameters } from "./augment.js";
+
 // ts-patch entry point (default + named `transform`) and the test-drivable
 // factory.
 export {

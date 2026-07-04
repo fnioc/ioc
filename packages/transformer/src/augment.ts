@@ -23,13 +23,17 @@ import type {} from "@fnioc/di";
 // Re-export the authoring brand types so transformer consumers can use
 // `Inject<T, "tok">`, the open-generics placeholders (`Hole<N, C>`, `$<N>`)
 // and the `Typeof<T>` witness without importing from `@fnioc/core`
-// directly. A single import of `@fnioc/transformer` brings both the transformer
-// plugin and the brand types into scope.
+// directly. The overload-faithful `OverloadedParameters` / `OverloadedConstructorParameters`
+// ride along too — they type a factory rest parameter so an overloaded ctor
+// lowers to one dep signature per overload. A single import of
+// `@fnioc/transformer` brings both the transformer plugin and these types into scope.
 export type {
   Inject,
   Hole,
   $,
   Typeof,
+  OverloadedParameters,
+  OverloadedConstructorParameters,
 } from "@fnioc/core";
 
 declare module "@fnioc/di" {
@@ -68,6 +72,15 @@ declare module "@fnioc/di" {
      * transformer knows the arg is a function). Never runs post-transform.
      */
     add<I>(factory: Func<any[], I>): AddBuilder<Scopes>;
+    /**
+     * Type-driven factory authoring, EXPLICIT form — `addFactory<I>(fn)` lowers to
+     * `addFactory("token", fn)`. Mirrors `add<I>(factory)`; the explicit method
+     * name documents intent at the call site (a factory, never a class). It
+     * coexists with di's runtime `addFactory(token, factory, signatures?)` overload
+     * — arity disambiguates (one value arg here vs. the runtime form's leading
+     * string token). Never runs post-transform.
+     */
+    addFactory<I>(factory: Func<any[], I>): AddBuilder<Scopes>;
     /**
      * Type-driven value authoring — lowers to `addValue("token", v)`. Never runs
      * post-transform.
