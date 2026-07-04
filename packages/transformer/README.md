@@ -58,12 +58,14 @@ Run this once after installing `ts-patch`. It patches the local `typescript` ins
 
 ## Token derivation
 
-Tokens are stable strings derived from TypeScript interface types. The derivation rule depends on whether the type is publicly exported from a package or internal to the application.
+Every named type produces a token `<source>:<exportName>` — `<source>` is where a human imports the type from, `<exportName>` its declared name.
 
-| Type | Rule | Example token |
-|---|---|---|
-| Package-public type (reachable through the package's `exports`/`main`) | `packageName:exportSubpath/SymbolName` | `your-lib:contracts/IFoo` |
-| App-internal type (not publicly exported) | Source-relative path token | `./src/services/IUserRepo` |
+| Parameter type | Token emitted |
+|---|---|
+| `IFoo` (package root export) | `"pkg:IFoo"` |
+| `IFoo` (package subpath export `pkg/contracts`) | `"pkg/contracts:IFoo"` |
+| `IBar` (app-internal, package `app`) | `"app/src/IBar:IBar"` |
+| `IBar` (app-internal, rootless project) | `"./src/IBar:IBar"` |
 
 The transformer walks up to the nearest `package.json` to identify the owning package, then checks whether the symbol is publicly reachable.
 
@@ -94,7 +96,7 @@ The transformer provides a compile-time token helper. Each `nameof<IFoo>()` call
 import { nameof } from "@fnioc/transformer";
 
 const token = nameof<IUserRepo>();
-// → "your-pkg:contracts/IUserRepo" at compile time
+// → "your-pkg/contracts:IUserRepo" at compile time
 ```
 
 If the transformer is not wired up and `nameof` runs at runtime, it throws:
