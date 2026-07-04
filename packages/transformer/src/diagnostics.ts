@@ -21,7 +21,7 @@ export interface DiagnosticSink {
  * keeps them clear of TypeScript's own code space. These are part of the
  * transformer's observable surface — tests assert on them.
  */
-export const enum DiagnosticCode {
+export enum DiagnosticCode {
   /** A factory param's call signature doesn't match the target ctor's holes. */
   FactorySignatureMismatch = 990003,
   /**
