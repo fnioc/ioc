@@ -284,8 +284,17 @@ export function extractSignatureFromClass(
 }
 
 /**
- * Map a parameter list to its emitted signatures. Auto-extraction always yields
- * exactly ONE signature — one slot per param, no overload expansion.
+ * Map a parameter list to its emitted signatures. A NON-rest parameter list
+ * yields exactly ONE signature — one slot per param, no overload expansion.
+ *
+ * A trailing REST parameter is expanded positionally (`expandRestParam`): a rest
+ * whose type is a TUPLE (`...args: [A, B]`) contributes its element slots to the
+ * one signature; a rest whose type is a UNION OF TUPLES (`...args: [A] | [B, C]`)
+ * emits ONE signature PER member tuple — this is how an overloaded factory
+ * (`(...args: OverloadedConstructorParameters<C>) => I`) fans back out to one dep
+ * signature per constructor overload. Any leading fixed params precede the
+ * expanded tail. A rest that is neither (an `A[]` variadic) keeps its
+ * pre-existing single opaque slot.
  *
  * Optionality is handled PER-PARAM, not by suffix-dropping: any optional param
  * (`x?: X`, `x: X = default`, `x: X | undefined`/`| void`) lowers to a
@@ -296,14 +305,81 @@ export function extractSignatureFromClass(
  * registered)` — expansion degrades to `[]` and loses `b`, whereas the per-param
  * union yields `new Ctor(undefined, y)`. JS makes an explicit `undefined`
  * argument equivalent to omission for a default initializer, so `= default`
- * still fires. The signature array stays a `Token[][]` (an array of signatures)
- * even though the transformer now emits exactly one.
+ * still fires.
  */
 function paramsToSignatures(
   params: readonly ts.ParameterDeclaration[],
   ctx: DepContext,
 ): Signature[] {
-  return [params.map((param) => extractParamSlot(param, ctx))];
+  // TS guarantees a rest parameter is last, so its index bounds the leading fixed
+  // params exactly. `-1` (no rest) or a non-expandable rest → the classic path.
+  const restIndex = params.findIndex((param) => param.dotDotDotToken !== undefined);
+  const expanded =
+    restIndex === -1 ? undefined : expandRestParam(params[restIndex]!, ctx);
+  if (expanded === undefined) {
+    // No rest, or a variadic `A[]` rest with no finite positional form: one slot
+    // per param, single signature (a non-expandable rest keeps its opaque slot —
+    // behaviour unchanged).
+    return [params.map((param) => extractParamSlot(param, ctx))];
+  }
+  const fixed = params
+    .slice(0, restIndex)
+    .map((param) => extractParamSlot(param, ctx));
+  return expanded.map((tail) => [...fixed, ...tail]);
+}
+
+/**
+ * Expand a REST parameter (`...args: T`) into one-or-more slot TAILS. A tuple rest
+ * yields ONE tail (its element slots); a union-of-tuples rest yields one tail PER
+ * member (each overload's parameter tuple becomes one dep signature). Returns
+ * `undefined` when the rest type is neither a tuple nor a union of tuples — a
+ * variadic `A[]` has no finite positional form, so the caller keeps a single
+ * opaque slot.
+ */
+function expandRestParam(
+  rest: ts.ParameterDeclaration,
+  ctx: DepContext,
+): Slot[][] | undefined {
+  const type = ctx.checker.getTypeAtLocation(rest);
+  if (type.isUnion()) {
+    const tails: Slot[][] = [];
+    for (const member of type.types) {
+      const tail = tupleElementSlots(member, rest, ctx);
+      // A non-tuple union member (a mixed union) is not overload-shaped — bail so
+      // the whole rest keeps its opaque slot rather than emit a partial fan-out.
+      if (tail === undefined) {return undefined;}
+      tails.push(tail);
+    }
+    return tails.length ? tails : undefined;
+  }
+  const tail = tupleElementSlots(type, rest, ctx);
+  return tail === undefined ? undefined : [tail];
+}
+
+/**
+ * The positional slots for a TUPLE type — one per element, classified exactly as
+ * a parameter of that element type would be (`slotForType`). Labels are
+ * transparent (`[a: A, b: B]` reads as `[A, B]`); an optional element (`[A, B?]`)
+ * gains the `{ value: undefined }` fallback; the empty tuple (`[]`) is zero slots.
+ * Returns `undefined` when `type` is not a tuple, or carries a rest / variadic
+ * element (`[A, ...B[]]`) with no finite positional form.
+ */
+function tupleElementSlots(
+  type: ts.Type,
+  anchor: ts.ParameterDeclaration,
+  ctx: DepContext,
+): Slot[] | undefined {
+  if (!ctx.checker.isTupleType(type)) {return undefined;}
+  const reference = type as ts.TypeReference;
+  const elementFlags = (reference.target as ts.TupleType).elementFlags ?? [];
+  if (
+    elementFlags.some((flag) => flag & (ts.ElementFlags.Rest | ts.ElementFlags.Variadic))
+  ) {
+    return undefined;
+  }
+  return ctx.checker.getTypeArguments(reference).map((elementType, i) =>
+    slotForType(elementType, !!(elementFlags[i]! & ts.ElementFlags.Optional), anchor, ctx),
+  );
 }
 
 /**
@@ -700,6 +776,183 @@ function extractParamSlotFromTypeNode(
     ),
   );
   return "??unresolvable??";
+}
+
+/**
+ * Classify a bare `ts.Type` — a tuple element from an expanded rest parameter —
+ * into a slot, mirroring `extractParamSlot`'s priority order over a TYPE rather
+ * than a `ParameterDeclaration`. `optional` marks a `B?` tuple element: it appends
+ * the `{ value: undefined }` fallback exactly as the per-param optional path does.
+ * `anchor` is the rest parameter, used only as a diagnostic anchor.
+ *
+ * The syntactic distinctions `extractParamSlot` reads off annotation nodes are
+ * made STRUCTURALLY here (a computed tuple element has no annotation node of its
+ * own): an inline function type is a callable, non-constructable, ANONYMOUS type;
+ * an inline union is an alias-free multi-member union. A NAMED alias (a callable
+ * interface, a union alias) is opaque to this structural view and derives a single
+ * token — matching the param-level opt-out where a named callable interface is NOT
+ * treated as a factory and a named union alias tokenizes as a whole.
+ */
+function slotForType(
+  type: ts.Type,
+  optional: boolean,
+  anchor: ts.ParameterDeclaration,
+  ctx: DepContext,
+): Slot {
+  // 1. A `ResolveScope`-typed element is the live scope, not a token.
+  if (isResolveScopeType(type)) {return { scope: true };}
+
+  // 2. A `Typeof<T>` element receives a type-arg slot (open hole) or its closed token.
+  const typeArgSlot = typeArgSlotFor(type, anchor, ctx);
+  if (typeArgSlot !== undefined) {return typeArgSlot;}
+
+  // 3. Optional element (`B?`), or a type admitting `undefined`/`void`: the
+  //    non-nullish slot(s) first, a `{ value: undefined }` fallback appended LAST.
+  if (optional || typeIncludesUndefinedOrVoid(type)) {
+    const members = nonNullishTypeSlots(type, anchor, ctx);
+    if (!members.length) {return { value: undefined };}
+    return { union: [...members, { value: undefined }] };
+  }
+
+  // 4. Inject<T,"tok"> brand — on a single (non-multi-member-union) type only.
+  if (!isMultiMemberUnion(type)) {
+    const brandedToken = injectTokenFor(type, ctx.checker);
+    if (brandedToken !== undefined) {return brandedToken;}
+  }
+
+  // 5. Inline function type → a factory ref (callable, not constructable, anonymous).
+  const factory = factorySlotForType(type, ctx);
+  if (factory !== undefined) {return factory;}
+
+  // 6. Inline (anonymous) union → a UnionSlot. A named union alias, a pure-literal
+  //    union (`"a" | "b"`), and the wide `boolean` all tokenize whole at step 7.
+  if (
+    isAnonymousUnion(type) &&
+    !isPureLiteralUnion(type) &&
+    !(type.flags & ts.TypeFlags.Boolean)
+  ) {
+    return {
+      union: (type as ts.UnionType).types.map((m) =>
+        slotForType(m, false, anchor, ctx),
+      ),
+    };
+  }
+
+  // 7. Rule 2 singleton (`"dev"` / `42` / `true` / `1n`) → a literal value slot.
+  const singleton = singletonValue(type);
+  if (singleton) {return { value: singleton.value };}
+
+  // 7b. Normal token derivation.
+  const result = tokenForType(type, ctx);
+  if (result !== undefined) {return result.token;}
+
+  // 8. Hard error: no derivable token and no Inject brand.
+  ctx.sink.addDiagnostic(
+    error(
+      ctx.sourceFile,
+      anchor.type ?? anchor,
+      DiagnosticCode.UnderivableToken,
+      "cannot derive a token for this factory parameter type — name the type or brand the parameter with `Inject<T, 'my:token'>`",
+    ),
+  );
+  return "??unresolvable??";
+}
+
+/**
+ * The slot(s) for the NON-`undefined`/`void` part of an optional tuple element —
+ * the type-level counterpart of `nonNullishMemberSlots`. A pure-literal core stays
+ * ONE sorted literal-union token; a wide `boolean | undefined` core collapses to
+ * `"boolean"`; every other union member classifies via `slotForType`. A whole-type
+ * `undefined`/`void` element has no core (empty), so the caller emits the bare
+ * `{ value: undefined }` fallback.
+ */
+function nonNullishTypeSlots(
+  type: ts.Type,
+  anchor: ts.ParameterDeclaration,
+  ctx: DepContext,
+): Slot[] {
+  const literalUnion = literalUnionTokenForOptional(type);
+  if (literalUnion !== undefined) {return [literalUnion];}
+  if (type.isUnion()) {
+    const kept = type.types.filter(
+      (t) => !(t.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Void)),
+    );
+    // Two-or-more surviving `true | false` members are the wide boolean.
+    if (
+      kept.length >= 2 &&
+      kept.every((t) => !!(t.flags & ts.TypeFlags.BooleanLiteral))
+    ) {
+      return ["boolean"];
+    }
+    return kept.map((t) => slotForType(t, false, anchor, ctx));
+  }
+  if (type.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Void)) {return [];}
+  return [slotForType(type, false, anchor, ctx)];
+}
+
+/**
+ * The factory slot for a bare type that is an INLINE function type — callable, not
+ * constructable, and anonymous. A NAMED callable interface / function alias is the
+ * opt-out (it derives a token for its name instead), matching how `factorySlotFor`
+ * ignores a named function-interface reference. Mirrors `factorySlotFor`: the
+ * return type supplies the token, a zero-param signature stays a bare `{ type }`,
+ * and a parameterised one lists a token per declared param.
+ */
+function factorySlotForType(
+  type: ts.Type,
+  ctx: DepContext,
+): FactorySlot | undefined {
+  if (type.getConstructSignatures().length) {return undefined;}
+  const callSignatures = type.getCallSignatures();
+  if (!callSignatures.length) {return undefined;}
+  if (!isAnonymousType(type)) {return undefined;}
+
+  const signature = callSignatures[0]!;
+  const token = tokenForReturnType(signature, ctx);
+  if (token === undefined) {return undefined;}
+  if (!signature.parameters.length) {return { type: token };}
+
+  const params: string[] = [];
+  for (const paramSymbol of signature.parameters) {
+    const paramToken = tokenForSymbolType(paramSymbol, ctx);
+    if (paramToken === null) {
+      const decl = paramSymbol.valueDeclaration;
+      ctx.sink.addDiagnostic(
+        error(
+          ctx.sourceFile,
+          decl && ts.isParameter(decl) ? (decl.type ?? decl) : ctx.sourceFile,
+          DiagnosticCode.UnderivableToken,
+          "cannot derive a token for this factory parameter type — name the type so the runtime can route the caller-supplied argument",
+        ),
+      );
+      params.push("??unresolvable??");
+    } else {
+      params.push(paramToken);
+    }
+  }
+  return { type: token, params };
+}
+
+/**
+ * True when a type is an ANONYMOUS object type (an inline `() => X` literal), as
+ * opposed to a named interface or a type alias. A type alias to a function
+ * (`type Fn = () => X`) carries an `aliasSymbol` and is treated as named — the
+ * factory opt-out, mirroring `factorySlotFor`'s syntactic FunctionTypeNode gate.
+ */
+function isAnonymousType(type: ts.Type): boolean {
+  if (type.aliasSymbol) {return false;}
+  const objectFlags = (type as ts.ObjectType).objectFlags ?? 0;
+  return !!(objectFlags & ts.ObjectFlags.Anonymous);
+}
+
+/**
+ * True when a type is an INLINE union — a multi-member union with no `aliasSymbol`
+ * (`A | B` written directly). A NAMED union alias (`type U = A | B`) carries an
+ * alias symbol and is opaque here, deriving a single token, mirroring how a param
+ * typed by a union alias tokenizes as a whole rather than splitting per member.
+ */
+function isAnonymousUnion(type: ts.Type): boolean {
+  return type.isUnion() && type.aliasSymbol === undefined && isMultiMemberUnion(type);
 }
 
 /** True when a param's resolved type is the `ResolveScope` contract interface. */
