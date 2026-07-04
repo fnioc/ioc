@@ -53,6 +53,13 @@ export enum DiagnosticCode {
    * not bind — substitution at close time would have no argument for it.
    */
   DepHoleNotInServiceTemplate = 990010,
+  /**
+   * A registration-time override array element (`add<I>(C, [...])`) is neither a
+   * string-literal token nor an `undefined`/elision gap — an object literal, a
+   * variable, or a call the transformer cannot resolve statically. The element is
+   * ignored and the derived token is kept; use a string-literal token override.
+   */
+  UnresolvableOverrideElement = 990011,
 }
 
 const SOURCE = "@fnioc/transformer";

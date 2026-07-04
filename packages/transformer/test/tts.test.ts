@@ -505,4 +505,30 @@ describe("registration-time override merge (§6)", () => {
     expect(arr).not.toContain('"./app:IRedisClient"');
     expect(arr).not.toContain('"./app:ILogger"');
   });
+
+  test("non-string override element warns and keeps the derived token", () => {
+    // An object literal (or any non-string, non-undefined element) can't be
+    // resolved statically. The transformer must flag it rather than silently
+    // drop it — the derived token at that position is kept.
+    const src = `
+      interface IRedisClient {}
+      interface ILogger {}
+      interface ICache {}
+      class RedisCache implements ICache {
+        constructor(client: IRedisClient, log: ILogger) {}
+      }
+      declare const services: any;
+      services.add<ICache>(RedisCache, [{ factory: "manual:x" }, "pkg:ILogger"]).as<"singleton">();
+    `;
+    const { output, diagnostics } = transform(fixture(src));
+    const warns = diagnostics.filter(
+      (d) => d.code === DiagnosticCode.UnresolvableOverrideElement,
+    );
+    expect(warns.length).toBe(1);
+    const arr = depsArrayFor(output, "RedisCache");
+    // Position 0: object-literal override ignored → derived token kept.
+    expect(arr).toContain('"./app/IRedisClient"');
+    // Position 1: valid string override still applies.
+    expect(arr).toContain('"pkg:ILogger"');
+  });
 });
