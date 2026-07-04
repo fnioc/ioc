@@ -758,13 +758,24 @@ export function extractFactoryReferenceSignature(
   const type = ctx.checker.getTypeAtLocation(expr);
   // A class/constructable resolves down the class path, never here.
   if (type.getConstructSignatures().length) {return undefined;}
-  const callSignatures = type.getCallSignatures();
-  if (!callSignatures.length) {return undefined;}
-  // Map ALL call signatures (declared overloads), not just the first one.
-  // The static class-declaration path (`extractSignatureFromClass`) emits one
-  // signature per declared overload; this path must match that behaviour.
+  return mapReferenceSignatures(type.getCallSignatures(), ctx);
+}
+
+/**
+ * Map a reference value's call/construct signatures to dep signatures, one per
+ * declared overload — the shared body of the factory-reference and
+ * ctor-reference extractors. Mirrors the static class-declaration path
+ * (`extractSignatureFromClass`), which also emits one signature per overload.
+ * Returns `undefined` when there are no signatures or any signature has a slot
+ * that can't be derived.
+ */
+function mapReferenceSignatures(
+  signatures: readonly ts.Signature[],
+  ctx: DepContext,
+): Signature[] | undefined {
+  if (!signatures.length) {return undefined;}
   const results: Signature[] = [];
-  for (const sig of callSignatures) {
+  for (const sig of signatures) {
     const slots = signatureToSlots(sig, ctx);
     if (slots === undefined) {return undefined;}
     results.push(...slots);
@@ -784,20 +795,10 @@ export function extractCtorReferenceSignature(
   expr: ts.Expression,
   ctx: DepContext,
 ): Signature[] | undefined {
-  const constructSignatures = ctx.checker
-    .getTypeAtLocation(expr)
-    .getConstructSignatures();
-  if (!constructSignatures.length) {return undefined;}
-  // Map ALL construct signatures (declared overloads), not just the first one.
-  // The static class-declaration path (`extractSignatureFromClass`) emits one
-  // signature per declared overload; this path must match that behaviour.
-  const results: Signature[] = [];
-  for (const sig of constructSignatures) {
-    const slots = signatureToSlots(sig, ctx);
-    if (slots === undefined) {return undefined;}
-    results.push(...slots);
-  }
-  return results.length ? results : undefined;
+  return mapReferenceSignatures(
+    ctx.checker.getTypeAtLocation(expr).getConstructSignatures(),
+    ctx,
+  );
 }
 
 /**
