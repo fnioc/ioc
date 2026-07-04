@@ -29,7 +29,6 @@ import type {
   Factory,
   OpenRegistration,
   Registration,
-  Resolver,
 } from "./types.js";
 
 // The authoring TYPE-machinery — `ProperCase`, `ScopeAddAuthoring`,
@@ -244,7 +243,7 @@ export class ServiceManifestClass<Scopes extends string = "singleton">
    */
   public addFactory(
     token: Token,
-    factory: Func<[Resolver], unknown>,
+    factory: Factory,
     signatures?: readonly (readonly DepSlot[])[],
   ): AddBuilder<Scopes>;
   public addFactory(
