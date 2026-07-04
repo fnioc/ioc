@@ -23,13 +23,17 @@ import type {} from "@fnioc/di";
 // Re-export the authoring brand types so transformer consumers can use
 // `Inject<T, "tok">`, the open-generics placeholders (`Hole<N, C>`, `$<N>`)
 // and the `Typeof<T>` witness without importing from `@fnioc/core`
-// directly. A single import of `@fnioc/transformer` brings both the transformer
-// plugin and the brand types into scope.
+// directly. The overload-faithful `OverloadedParameters` / `OverloadedConstructorParameters`
+// ride along too — they type a factory rest parameter so an overloaded ctor
+// lowers to one dep signature per overload. A single import of
+// `@fnioc/transformer` brings both the transformer plugin and these types into scope.
 export type {
   Inject,
   Hole,
   $,
   Typeof,
+  OverloadedParameters,
+  OverloadedConstructorParameters,
 } from "@fnioc/core";
 
 declare module "@fnioc/di" {
