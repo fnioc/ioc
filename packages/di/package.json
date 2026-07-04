@@ -1,6 +1,6 @@
 {
   "name": "@fnioc/di",
-  "version": "10.0.0",
+  "version": "10.1.0",
   "description": "The ioc runtime engine: DiBuilder, scopes, resolution, captive-dependency protection, factories, and native disposal.",
   "keywords": [
     "dependency-injection",
