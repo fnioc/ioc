@@ -53,7 +53,7 @@ export interface LowerContext extends CheckContext, DepContext {
 }
 
 /** A method that the transformer lowers, keyed by its callee name. */
-type RegMethod = "add" | "addValue";
+type RegMethod = "add" | "addValue" | "addFactory";
 
 /**
  * What `registrationMethod` matched: the canonical lowered method (`add` /
@@ -183,15 +183,16 @@ export function lowerStatement(
 }
 
 /**
- * The registration method `call` invokes (`add` / `addValue`), or `undefined`.
+ * The registration method `call` invokes (`add` / `addValue` / `addFactory`), or
+ * `undefined`.
  *
  * Accepts one OR two value arguments for `add` (the second is the optional
- * registration-time override array). `addValue` accepts only one value arg.
- * The `<I>` type arg is OPTIONAL: `add(Something)` (no type arg) is valid
- * authoring. The already-lowered explicit forms (`add(token, ctor)`,
- * `addFactory(token, fn)`, `addValue(token, value)`) pass a STRING as the first
- * arg and are left untouched (the first arg of a lowered call is always a string
- * literal token, not a ctor reference).
+ * registration-time override array). `addValue` and the explicit factory form
+ * `addFactory<I>(fn)` accept only one value arg. The `<I>` type arg is OPTIONAL:
+ * `add(Something)` (no type arg) is valid authoring. The already-lowered explicit
+ * forms (`add(token, ctor)`, `addFactory(token, fn)`, `addValue(token, value)`)
+ * pass a STRING as the first arg and are left untouched (the first arg of a
+ * lowered call is always a string literal token, not a ctor / factory reference).
  *
  * Disambiguation for two-arg `add`:
  *   - `add<I>(C, overrides)` — type-arg form with override array → type-driven
@@ -220,6 +221,14 @@ function registrationMethod(call: ts.CallExpression): MatchedMethod | undefined 
     if (call.arguments.length !== 1) {return undefined;}
     const scope = name[3]!.toLowerCase() + name.slice(4);
     return { method: "add", scope };
+  }
+
+  // `addFactory<I>(fn)` — the explicit tokenless factory authoring form. EXACTLY
+  // one value argument (the factory function); the token rides on `<I>`. The
+  // two-or-three-arg runtime form (`addFactory("token", fn, signatures?)`, a
+  // STRING first) is already lowered and passes through untouched.
+  if (name === "addFactory") {
+    return call.arguments.length === 1 ? { method: "addFactory" } : undefined;
   }
 
   if (name !== "add" && name !== "addValue") {return undefined;}
@@ -481,6 +490,21 @@ function planAddRegistration(
   const arg = reg.arg;
   const overrideArg = reg.overrideArg;
   const openToken = token !== undefined && isOpenToken(token);
+
+  // `addFactory<I>(fn)` — the explicit tokenless factory form. Unlike `add<I>(…)`,
+  // which routes by the arg's TYPE (class → `add`, callable → `addFactory`), this
+  // form is factory by construction and ALWAYS lowers to `addFactory`: an inline
+  // arrow / function expression reads its parameters directly; a factory reference
+  // resolves through its call signature. The augment type constrains the arg to
+  // `Func`, so a class / instantiation arg can never reach here.
+  if (reg.method === "addFactory") {
+    if (openToken) {emitOpenTokenError(token, "addFactory", reg, ctx);}
+    const signatures = isFactoryArg(arg)
+      ? extractSignatureFromFunction(arg, ctx)
+      : extractFactoryReferenceSignature(arg, ctx);
+    if (signatures) {checkDepHoles(signatures, token, shape, arg, ctx);}
+    return { token, calleeMethod: "addFactory", signatures: signatures ?? undefined };
+  }
 
   // Inline factory literal — signatures read straight off its parameters.
   if (isFactoryArg(arg)) {

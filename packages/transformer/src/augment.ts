@@ -73,6 +73,15 @@ declare module "@fnioc/di" {
      */
     add<I>(factory: Func<any[], I>): AddBuilder<Scopes>;
     /**
+     * Type-driven factory authoring, EXPLICIT form — `addFactory<I>(fn)` lowers to
+     * `addFactory("token", fn)`. Mirrors `add<I>(factory)`; the explicit method
+     * name documents intent at the call site (a factory, never a class). It
+     * coexists with di's runtime `addFactory(token, factory, signatures?)` overload
+     * — arity disambiguates (one value arg here vs. the runtime form's leading
+     * string token). Never runs post-transform.
+     */
+    addFactory<I>(factory: Func<any[], I>): AddBuilder<Scopes>;
+    /**
      * Type-driven value authoring — lowers to `addValue("token", v)`. Never runs
      * post-transform.
      */

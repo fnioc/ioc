@@ -226,8 +226,8 @@ export class ServiceManifestClass<Scopes extends string = "singleton">
 
   /**
    * Factory registration — a string token bound to a factory function. The
-   * runtime form the transformer emits for an authored `add<I>(fn)`, and what a
-   * plugin-less caller writes directly.
+   * runtime form the transformer emits for an authored `add<I>(fn)` /
+   * `addFactory<I>(fn)`, and what a plugin-less caller writes directly.
    *
    * Parameter injection follows the metadata rule (see `ServiceProvider`): a
    * factory WITH registration-carried signatures (the optional third arg, emitted
@@ -236,6 +236,11 @@ export class ServiceManifestClass<Scopes extends string = "singleton">
    * provider — type it `(sp: Resolver) => T` and `sp.resolve(...)` its own deps.
    * Returns the `.as(scope?)` continuation so a factory caches at a named scope
    * exactly like a class.
+   *
+   * The implementation signature admits the single-arg authoring form
+   * (`addFactory<I>(fn)`) so the `@fnioc/transformer` overload merges onto it —
+   * that form never runs post-transform, and the runtime guard below fails a
+   * plugin-less call loud rather than registering junk (mirrors `add`).
    */
   public addFactory(
     token: Token,
@@ -243,10 +248,20 @@ export class ServiceManifestClass<Scopes extends string = "singleton">
     signatures?: readonly (readonly DepSlot[])[],
   ): AddBuilder<Scopes>;
   public addFactory(
-    token: Token,
-    factory: Factory,
-    signatures?: readonly (readonly DepSlot[])[],
+    ...args:
+      | [factory: Func<any[], unknown>]
+      | [token: Token, factory: Factory, signatures?: readonly (readonly DepSlot[])[]]
   ): AddBuilder<Scopes> {
+    // Only the string-token form reaches the engine at runtime. The single-arg
+    // `addFactory<I>(fn)` authoring overload never runs post-transform; guard
+    // defensively so a hand-written type-form call fails loud.
+    if (args.length === 1 || typeof args[0] !== "string") {
+      throw new TypeError(
+        "addFactory<I>(fn) requires the @fnioc/transformer plugin. Without it, " +
+          'register with an explicit token: addFactory("my:token", (scope) => ...).',
+      );
+    }
+    const [token, factory, signatures] = args;
     // Open registrations are class-only: a template must synthesize per-closing
     // class registrations, which a factory/value shape cannot express in v1.
     if (isOpenToken(token)) {
