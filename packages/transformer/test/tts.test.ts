@@ -446,7 +446,7 @@ describe("registration-time override merge (§6)", () => {
     expect(warns.length).toBe(1);
     const arr = depsArrayFor(output, "RedisCache");
     // Position 0: object-literal override ignored → derived token kept.
-    expect(arr).toContain('"./app/IRedisClient"');
+    expect(arr).toContain('"./app:IRedisClient"');
     // Position 1: valid string override still applies.
     expect(arr).toContain('"pkg:ILogger"');
   });
