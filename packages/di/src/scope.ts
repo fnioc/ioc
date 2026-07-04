@@ -126,8 +126,8 @@ function* unionTokenMembers(slot: Union): Generator<Token> {
   for (const member of slot.union) {
     if (typeof member === "string") {
       yield member;
-    } else if (isUnionSlot(member as DepSlot)) {
-      yield* unionTokenMembers(member as Union);
+    } else if (isUnionSlot(member)) {
+      yield* unionTokenMembers(member);
     }
   }
 }
@@ -940,7 +940,7 @@ export class ServiceProvider<S extends string = string>
     if (isTypeArgRef(slot)) {return false;}
     if (isUnionSlot(slot)) {
       return slot.union.some((member) =>
-        this.#isResolvableSlot(member as DepSlot, async),
+        this.#isResolvableSlot(member, async),
       );
     }
     return this.#isResolvable(slot, async);
