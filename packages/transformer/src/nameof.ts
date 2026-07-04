@@ -15,7 +15,7 @@
  *
  * @example
  * ```ts
- * const key = nameof<IUserRepo>(); // → "pkg:contracts/IUserRepo" at compile time
+ * const key = nameof<IUserRepo>(); // → "pkg/contracts:IUserRepo" at compile time
  * ```
  */
 export function nameof<T>(): string {
