@@ -21,7 +21,7 @@ import type { Func } from "@rhombus-toolkit/func";
 
 import { OpenTokenRegistrationError } from "./errors.js";
 import { ServiceProvider } from "./scope.js";
-import { isOpenToken, parseToken } from "./tokens.js";
+import { HOLE_PATTERN, isOpenToken, parseToken } from "./tokens.js";
 import type {
   ClassRegistration,
   Ctor,
@@ -38,9 +38,6 @@ import type {
 // shapes — lives in the pure-types `@fnioc/core` package (the abstractions surface
 // a library author depends on). di imports it back via `import type` and its
 // runtime `ServiceManifestClass` implements the interface.
-
-/** A token node that is exactly a hole: `$N`, decimal N ≥ 1. */
-const HOLE_NODE = /^\$[1-9][0-9]*$/;
 
 /**
  * The registration builder.
@@ -146,7 +143,7 @@ export class ServiceManifestClass<Scopes extends string = "singleton">
     signatures: readonly (readonly DepSlot[])[] | undefined,
   ): AddBuilder<Scopes> {
     const parsed = parseToken(token);
-    if (parsed === undefined || !parsed.args.every((arg) => HOLE_NODE.test(arg))) {
+    if (parsed === undefined || !parsed.args.every((arg) => HOLE_PATTERN.test(arg))) {
       throw new OpenTokenRegistrationError(token, "add");
     }
     const base: OpenRegistration = {
