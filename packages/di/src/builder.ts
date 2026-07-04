@@ -198,6 +198,7 @@ export class ServiceManifestClass<Scopes extends string = "singleton">
   public add(
     ...args:
       | [ctor: Ctor<any[], unknown>]
+      | [ctor: Ctor<any[], unknown>, overrides: readonly (string | undefined)[]]
       | [factory: Func<any[], unknown>]
       | [token: Token, ctor: Ctor, signatures?: readonly (readonly DepSlot[])[]]
   ): AddBuilder<Scopes> {
