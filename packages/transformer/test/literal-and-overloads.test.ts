@@ -101,10 +101,10 @@ describe("WP-series — wide primitives tokenize by keyword (Rule 1)", () => {
   test("WP-4/5/6: primitives inside a union → bare keyword members", () => {
     expect(
       emitFor(`constructor(a: string | IFoo) {}`, "interface IFoo {}"),
-    ).toBe('[[{ union: ["string", "./app/IFoo"] }]]');
+    ).toBe('[[{ union: ["string", "./app:IFoo"] }]]');
     expect(
       emitFor(`constructor(a: number | IFoo) {}`, "interface IFoo {}"),
-    ).toBe('[[{ union: ["number", "./app/IFoo"] }]]');
+    ).toBe('[[{ union: ["number", "./app:IFoo"] }]]');
   });
 
   test("WP-7: `true | false` is the wide boolean type → bare token 'boolean'", () => {
@@ -134,19 +134,19 @@ describe("optional params lower to union(<non-nullish>, { value: undefined })", 
   test("`dep?: IFoo` → single signature with a union fallback", () => {
     expect(
       emitFor(`constructor(dep?: IFoo) {}`, "interface IFoo {}"),
-    ).toBe('[[{ union: ["./app/IFoo", { value: void 0 }] }]]');
+    ).toBe('[[{ union: ["./app:IFoo", { value: void 0 }] }]]');
   });
 
   test("`dep: IFoo | undefined` → identical union fallback", () => {
     expect(
       emitFor(`constructor(dep: IFoo | undefined) {}`, "interface IFoo {}"),
-    ).toBe('[[{ union: ["./app/IFoo", { value: void 0 }] }]]');
+    ).toBe('[[{ union: ["./app:IFoo", { value: void 0 }] }]]');
   });
 
   test("`p: string = 'x'` default initializer → union('string', { value: undefined })", () => {
     expect(
       emitFor(`constructor(a: IFoo, p: string = "x") {}`, "interface IFoo {}"),
-    ).toBe('[["./app/IFoo", { union: ["string", { value: void 0 }] }]]');
+    ).toBe('[["./app:IFoo", { union: ["string", { value: void 0 }] }]]');
   });
 
   test("interior `a: IFoo | undefined, b: IBar` keeps b (union fallback expresses it)", () => {
@@ -157,7 +157,7 @@ describe("optional params lower to union(<non-nullish>, { value: undefined })", 
         "interface IFoo {} interface IBar {}",
       ),
     ).toBe(
-      '[[{ union: ["./app/IFoo", { value: void 0 }] }, "./app/IBar"]]',
+      '[[{ union: ["./app:IFoo", { value: void 0 }] }, "./app:IBar"]]',
     );
   });
 
@@ -169,14 +169,14 @@ describe("optional params lower to union(<non-nullish>, { value: undefined })", 
         "interface IFoo {} interface IBar {}",
       ),
     ).toBe(
-      '[[{ union: ["./app/IFoo", "./app/IBar", { value: void 0 }] }]]',
+      '[[{ union: ["./app:IFoo", "./app:IBar", { value: void 0 }] }]]',
     );
   });
 
   test("`X | null` → union(X, { value: null })", () => {
     expect(
       emitFor(`constructor(a: IFoo | null) {}`, "interface IFoo {}"),
-    ).toBe('[[{ union: ["./app/IFoo", { value: null }] }]]');
+    ).toBe('[[{ union: ["./app:IFoo", { value: null }] }]]');
   });
 
   test("optional pure-literal union `mode?: \"a\" | \"b\"` keeps the sorted literal token", () => {
@@ -192,7 +192,7 @@ describe("inline union slots (GAP10/11)", () => {
   test("GAP11: declaration order preserved, non-alphabetical IBeta | IAlpha", () => {
     expect(
       emitFor(`constructor(dep: IBeta | IAlpha) {}`, "interface IAlpha {} interface IBeta {}"),
-    ).toBe('[[{ union: ["./app/IBeta", "./app/IAlpha"] }]]');
+    ).toBe('[[{ union: ["./app:IBeta", "./app:IAlpha"] }]]');
   });
 
   test("GAP10: pure literal union is NOT a union slot — one sorted literal token", () => {
@@ -206,7 +206,7 @@ describe("inline union slots (GAP10/11)", () => {
   test("mixed literal + interface union → real union with a LiteralRef member", () => {
     expect(
       emitFor(`constructor(dep: "dev" | IFoo) {}`, "interface IFoo {}"),
-    ).toBe('[[{ union: [{ value: "dev" }, "./app/IFoo"] }]]');
+    ).toBe('[[{ union: [{ value: "dev" }, "./app:IFoo"] }]]');
   });
 });
 
@@ -232,7 +232,7 @@ describe("declared constructor overloads → one signature each (impl ignored)",
     ).toBe(0);
     // Exactly two signatures (one per declared overload); NO third from the impl.
     expect(depsArrayFor(output, "C")).toBe(
-      '[["./app/IFoo"], ["./app/IFoo", "./app/IBar"]]',
+      '[["./app:IFoo"], ["./app:IFoo", "./app:IBar"]]',
     );
   });
 
@@ -252,7 +252,7 @@ describe("declared constructor overloads → one signature each (impl ignored)",
     const { output } = transform(fixture(src));
     // Second overload's optional b → union(IBar, { value: undefined }), one sig each.
     expect(depsArrayFor(output, "C")).toBe(
-      '[["./app/IFoo"], ["./app/IFoo", { union: ["./app/IBar", { value: void 0 }] }]]',
+      '[["./app:IFoo"], ["./app:IFoo", { union: ["./app:IBar", { value: void 0 }] }]]',
     );
   });
 });
@@ -295,13 +295,13 @@ describe("optional wide-boolean emits the 'boolean' token (Fix 1)", () => {
 // ── WP extended: wide primitive in a union ────────────────────────────────────
 
 describe("wide primitive in a required union", () => {
-  test("`boolean | IFoo` → union(['boolean', './app/IFoo'])", () => {
+  test("`boolean | IFoo` → union(['boolean', './app:IFoo'])", () => {
     // A required (non-optional) union that contains the wide boolean: the
     // `boolean` member must survive as the bare keyword token, not be broken
     // into false/true literal members.
     expect(
       emitFor(`constructor(a: boolean | IFoo) {}`, "interface IFoo {}"),
-    ).toBe('[[{ union: ["boolean", "./app/IFoo"] }]]');
+    ).toBe('[[{ union: ["boolean", "./app:IFoo"] }]]');
   });
 });
 
@@ -316,7 +316,7 @@ describe("index-access types and unique symbol (regression pins)", () => {
         `constructor(dep: Shape["bar"]) {}`,
         "interface IBar {} type Shape = { bar: IBar; mode: \"dev\" }",
       ),
-    ).toBe('[["./app/IBar"]]');
+    ).toBe('[["./app:IBar"]]');
   });
 
   test("index-access `Shape['mode']` resolves to a LiteralRef (Rule 2)", () => {
@@ -341,7 +341,7 @@ describe("index-access types and unique symbol (regression pins)", () => {
         `constructor(a: MySym) {}`,
         "declare const MySym: unique symbol; type MySym = typeof MySym;",
       ),
-    ).toBe('[["./app/MySym"]]');
+    ).toBe('[["./app:MySym"]]');
   });
 });
 

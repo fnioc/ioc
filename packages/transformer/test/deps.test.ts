@@ -134,7 +134,7 @@ describe("dependency extraction", () => {
       services.add<IMarker>(Svc).as<"singleton">();
     `;
     const { output } = transform(fixture(src));
-    expect(depsArrayFor(output, "Svc")).toBe('[["./app/ILogger", "./app/IDb"]]');
+    expect(depsArrayFor(output, "Svc")).toBe('[["./app:ILogger", "./app:IDb"]]');
   });
 
   test("mixed multi-param ctor: every param tokenizes, including the `string` (Rule 1)", () => {
@@ -154,7 +154,7 @@ describe("dependency extraction", () => {
       diagnostics.filter((d) => d.code === DiagnosticCode.UnderivableToken).length,
     ).toBe(0);
     expect(depsArrayFor(output, "SqlUserRepo")).toBe(
-      '[["./app/ILogger", "./app/IDbConnection", "string"]]',
+      '[["./app:ILogger", "./app:IDbConnection", "string"]]',
     );
   });
 
@@ -184,6 +184,6 @@ describe("dependency extraction", () => {
       services.add<IMarker>(Svc).as<"singleton">();
     `;
     const { output } = transform(fixture(src));
-    expect(depsArrayFor(output, "Svc")).toBe('[["./app/Logger"]]');
+    expect(depsArrayFor(output, "Svc")).toBe('[["./app:Logger"]]');
   });
 });

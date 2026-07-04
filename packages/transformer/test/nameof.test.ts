@@ -34,7 +34,7 @@ describe("nameof<T>() rewriting", () => {
       const key = nameof<IFoo>();
     `;
     const { output } = transform(fixture(src));
-    expect(output).toContain('const key = "./app/IFoo"');
+    expect(output).toContain('const key = "./app:IFoo"');
     expect(output).not.toContain("nameof<");
   });
 
@@ -54,7 +54,7 @@ describe("nameof<T>() rewriting", () => {
     };
     const { outputs } = transform(files, { entry: ["/proj/src/app.ts"] });
     const out = outputs["/proj/src/app.ts"]!;
-    expect(out).toContain('const key = "your-lib:contracts/IFoo"');
+    expect(out).toContain('const key = "your-lib/contracts:IFoo"');
   });
 
   test("rewrites nameof regardless of how it's imported/aliased", () => {
@@ -80,6 +80,6 @@ describe("nameof<T>() rewriting", () => {
     const out = outputs["/proj/src/app.ts"]!;
     // The aliased call uses the local name; the rewrite keys on the resolved
     // symbol's real name (`nameof`), so it still lowers to the token.
-    expect(out).toContain('const k = "./src/app/IBar"');
+    expect(out).toContain('const k = "./src/app:IBar"');
   });
 });

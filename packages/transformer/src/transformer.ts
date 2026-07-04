@@ -23,6 +23,7 @@ import {
   tokenForType,
   injectTokenFor,
   singletonValue,
+  stripExt,
   type TokenContext,
 } from "./tokens.js";
 import {
@@ -45,11 +46,27 @@ export function createTransformerFactory(
   const checker = program.getTypeChecker();
   const projectRoot = computeProjectRoot(program);
 
+  // Index every program source file by its extension-stripped path ("stem") so
+  // package-public detection can turn an export entry's on-disk target (a `.js`
+  // path) into the declaration file the program loaded (`.d.ts`). Declaration
+  // files outrank `.js` at the same stem — that's the module we read exports of.
+  const byStem = new Map<string, ts.SourceFile>();
+  const stemRank = (name: string): number =>
+    name.endsWith(".d.ts") ? 3 : /\.[mc]?tsx?$/.test(name) ? 2 : 1;
+  for (const sf of program.getSourceFiles()) {
+    const stem = stripExt(sf.fileName.replace(/\\/g, "/"));
+    const existing = byStem.get(stem);
+    if (!existing || stemRank(sf.fileName) >= stemRank(existing.fileName)) {
+      byStem.set(stem, sf);
+    }
+  }
+
   return (context) => (sourceFile) =>
     transformSourceFile(sourceFile, {
       checker,
       projectRoot,
       readFile: options.readFile,
+      sourceFileAtStem: (stem) => byStem.get(stem),
       // Default-lib types (`Promise`, `Map`) tokenize by bare name — their lib
       // path is machine-dependent and carries no identity.
       isDefaultLib: (file) => program.isSourceFileDefaultLibrary(file),

@@ -23,7 +23,7 @@ describe("per-scope authored class form", () => {
 
     // Lowered to the three-arg add(...) with a trailing .as("request").
     expect(output).toContain(
-      'services.add("./app/IUserRepo", SqlUserRepo, [["./app/ILogger", "./app/IDbConnection"]]).as("request")',
+      'services.add("./app:IUserRepo", SqlUserRepo, [["./app:ILogger", "./app:IDbConnection"]]).as("request")',
     );
     expect(output).not.toContain("defineDeps");
   });
@@ -37,7 +37,7 @@ describe("per-scope authored class form", () => {
     `;
     const { output } = transform(fixture(src));
     expect(output).toContain(
-      'services.add("./app/ILogger", ConsoleLogger, [[]]).as("singleton")',
+      'services.add("./app:ILogger", ConsoleLogger, [[]]).as("singleton")',
     );
     expect(output).not.toContain("defineDeps");
   });
@@ -51,7 +51,7 @@ describe("per-scope authored class form", () => {
     `;
     const { output } = transform(fixture(src));
     // The instance type Foo drives the token (no explicit <I>).
-    expect(output).toContain('services.add("./app/Foo", Foo, [[]]).as("request")');
+    expect(output).toContain('services.add("./app:Foo", Foo, [[]]).as("request")');
     expect(output).not.toContain("defineDeps");
   });
 });
@@ -66,7 +66,7 @@ describe("per-scope authored factory form", () => {
     const { output } = transform(fixture(src));
     // A function arg routes to addFactory (the transformer knows it is callable),
     // then the baked-in scope is appended.
-    expect(output).toContain('.addFactory("./app/IClock", ');
+    expect(output).toContain('.addFactory("./app:IClock", ');
     expect(output).toContain('[[]]).as("request")');
   });
 
@@ -83,8 +83,8 @@ describe("per-scope authored factory form", () => {
       services.addRequest((log: ILogger): IReport => new Report(log));
     `;
     const { output } = transform(fixture(src));
-    expect(output).toContain('.addFactory("./app/IReport", ');
-    expect(output).toContain('[["./app/ILogger"]]).as("request")');
+    expect(output).toContain('.addFactory("./app:IReport", ');
+    expect(output).toContain('[["./app:ILogger"]]).as("request")');
   });
 });
 
@@ -111,9 +111,9 @@ describe("per-scope two-arg runtime form passes through", () => {
     `;
     const { output } = transform(fixture(src));
     // addValue lowers to its token form; addFactory two-arg passes through.
-    expect(output).toContain('services.addValue("./app/IFoo"');
+    expect(output).toContain('services.addValue("./app:IFoo"');
     expect(output).toContain('services.addFactory("t"');
     // Neither gains a bogus .as() from per-scope handling.
-    expect(output).not.toContain('addValue("./app/IFoo", new Foo()).as');
+    expect(output).not.toContain('addValue("./app:IFoo", new Foo()).as');
   });
 });

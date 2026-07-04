@@ -8,8 +8,8 @@ logged lines:
   [2026-01-01T00:00:00Z] Hello, Linus!
   [union] union-test
   diagnostics at 2026-01-01T00:00:00Z
-  [sql] saved ./shared/src/contracts/User
-  [sql] saved ./shared/src/contracts/Invoice
+  [sql] saved @fnioc-examples/shared:User
+  [sql] saved @fnioc-examples/shared:Invoice
 request 1 id stable within scope: true (value 1)
 request 2 id is distinct: true (value 2)
 RequestId instances built: 2
@@ -18,9 +18,9 @@ inject brand pinned correct clock: true
 open generics:
   user repo is a per-closing singleton: true
   distinct closings are distinct instances: true
-  user save: [sql] saved ./shared/src/contracts/User
-  invoice save: [sql] saved ./shared/src/contracts/Invoice
+  user save: [sql] saved @fnioc-examples/shared:User
+  invoice save: [sql] saved @fnioc-examples/shared:Invoice
   SqlRepository instances built: 2
   closed registration wins for Order: memory
-  order save: [memory] saved ./shared/src/contracts/Order (count 1)
-  auditor closed over the user repo: true (auditing ./shared/src/contracts/User)
+  order save: [memory] saved @fnioc-examples/shared:Order (count 1)
+  auditor closed over the user repo: true (auditing @fnioc-examples/shared:User)

@@ -1,9 +1,11 @@
 import { test, expect, describe } from "bun:test";
 import { transform, type VirtualFiles } from "./harness.js";
 
-// Token generation (PRD §8). Tokens are exercised through the lowered output:
-//   - package-public type  →  `packageName:subpath/Symbol`  (version excluded)
-//   - app-internal type    →  source-relative `./...` token
+// Token generation (PRD §8). Every token is `<source>:<exportName>`, exercised
+// through the lowered output:
+//   - package-public type  →  `importSpecifier:Symbol`  (version excluded)
+//   - app-internal type    →  `packageName/path:Symbol`
+//   - rootless type        →  `./path:Symbol`
 //   - `Promise<X>`         →  the honest closed-generic token `Promise<X>`
 //
 // Signatures ride inline on the registration: `add("token", Ctor, [[...]])`.
@@ -31,7 +33,7 @@ function withLib(appSource: string): VirtualFiles {
 }
 
 describe("token generation", () => {
-  test("package-public type → packageName:subpath/Symbol", () => {
+  test("package-public type → importSpecifier:Symbol", () => {
     const files = withLib(`
       import { IFoo } from "your-lib/contracts";
       class Foo implements IFoo { constructor() {} }
@@ -40,7 +42,7 @@ describe("token generation", () => {
     `);
     const { outputs } = transform(files, { entry: ["/proj/src/app.ts"] });
     const out = outputs["/proj/src/app.ts"]!;
-    expect(out).toContain('services.add("your-lib:contracts/IFoo", Foo, ');
+    expect(out).toContain('services.add("your-lib/contracts:IFoo", Foo, ');
   });
 
   test("package-public root export → packageName:Symbol (no subpath)", () => {
@@ -65,10 +67,10 @@ describe("token generation", () => {
     const { outputs } = transform(files, { entry: ["/proj/src/app.ts"] });
     const out = outputs["/proj/src/app.ts"]!;
     expect(out).not.toContain("3.4.5");
-    expect(out).toContain("your-lib:contracts/IFoo");
+    expect(out).toContain("your-lib/contracts:IFoo");
   });
 
-  test("app-internal (non-exported) type → source-relative token", () => {
+  test("app-internal (non-exported) type → packageName/path:Symbol token", () => {
     // No package.json provides this interface's file as a public export, and the
     // interface lives in the app's own src tree → a `./...` token.
     const files: VirtualFiles = {
@@ -86,10 +88,14 @@ describe("token generation", () => {
       compilerOptions: { rootDir: "/proj" },
     });
     const out = outputs["/proj/src/app.ts"]!;
-    expect(out).toContain('services.add("./src/services/IUserRepo", SqlUserRepo, ');
+    expect(out).toContain(
+      'services.add("the-app/src/services/IUserRepo:IUserRepo", SqlUserRepo, ',
+    );
   });
 
-  test("app-internal token appends Symbol when file basename differs", () => {
+  test("app-internal token: a second packageName/path:Symbol witness", () => {
+    // No basename-dedup any more — the token is uniformly `packageName/path:Symbol`
+    // even when the file basename differs from the declared symbol.
     const files: VirtualFiles = {
       "/proj/package.json": JSON.stringify({ name: "the-app", version: "1.0.0" }),
       "/proj/src/contracts.ts": `export interface IThing {}`,
@@ -105,7 +111,7 @@ describe("token generation", () => {
       compilerOptions: { rootDir: "/proj" },
     });
     const out = outputs["/proj/src/app.ts"]!;
-    expect(out).toContain('services.add("./src/contracts/IThing", Thing, ');
+    expect(out).toContain('services.add("the-app/src/contracts:IThing", Thing, ');
   });
 
   test("Promise<X> parameter → the honest closed-generic token Promise<X>", () => {
@@ -125,7 +131,56 @@ describe("token generation", () => {
     // Honest token-split: Promise<IFoo> derives the closed-generic token
     // `Promise<...IFoo>` (Promise-ness is part of the identity), NOT stripped.
     expect(out).toContain(
-      'NeedsAsync, [["Promise<your-lib:contracts/IFoo>"]]',
+      'NeedsAsync, [["Promise<your-lib/contracts:IFoo>"]]',
     );
+  });
+
+  test("re-export from root: a deep declaration tokenizes as the BARE package", () => {
+    // `Deep` is declared in an internal file that is NOT itself an export entry,
+    // but the root `index` re-exports it. Derivation is export-GRAPH based, so
+    // the token is the bare package `your-lib:Deep` — stem matching (which sees
+    // only the nested declaration file) could never produce this.
+    const files: VirtualFiles = {
+      "/proj/node_modules/your-lib/package.json": JSON.stringify({
+        name: "your-lib",
+        version: "1.0.0",
+        exports: { ".": "./index.js" },
+      }),
+      "/proj/node_modules/your-lib/index.d.ts": `export { Deep } from "./internal/deep";`,
+      "/proj/node_modules/your-lib/internal/deep.d.ts": `export interface Deep {}`,
+      "/proj/src/app.ts": `
+        import { Deep } from "your-lib";
+        class DeepImpl implements Deep { constructor() {} }
+        declare const services: any;
+        services.add<Deep>(DeepImpl).as<"singleton">();
+      `,
+    };
+    const { outputs } = transform(files, { entry: ["/proj/src/app.ts"] });
+    const out = outputs["/proj/src/app.ts"]!;
+    expect(out).toContain('services.add("your-lib:Deep", DeepImpl, ');
+  });
+
+  test("nested namespace type → module-qualified export name A.Foo", () => {
+    const files: VirtualFiles = {
+      "/proj/node_modules/your-lib/package.json": JSON.stringify({
+        name: "your-lib",
+        version: "1.0.0",
+        exports: { ".": "./index.js" },
+      }),
+      "/proj/node_modules/your-lib/index.d.ts": `
+        export namespace A {
+          export interface Foo {}
+        }
+      `,
+      "/proj/src/app.ts": `
+        import { A } from "your-lib";
+        class FooImpl implements A.Foo { constructor() {} }
+        declare const services: any;
+        services.add<A.Foo>(FooImpl).as<"singleton">();
+      `,
+    };
+    const { outputs } = transform(files, { entry: ["/proj/src/app.ts"] });
+    const out = outputs["/proj/src/app.ts"]!;
+    expect(out).toContain('services.add("your-lib:A.Foo", FooImpl, ');
   });
 });

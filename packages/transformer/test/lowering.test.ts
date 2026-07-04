@@ -22,7 +22,7 @@ describe("registration lowering", () => {
 
     // The signature rides inline as the third argument; no hoist, no defineDeps.
     expect(output).toContain(
-      'services.add("./app/IUserRepo", SqlUserRepo, [["./app/ILogger", "./app/IDbConnection"]]).as("request")',
+      'services.add("./app:IUserRepo", SqlUserRepo, [["./app:ILogger", "./app:IDbConnection"]]).as("request")',
     );
     expect(output).not.toContain("ɵreg");
     expect(output).not.toContain("defineDeps");
@@ -37,7 +37,7 @@ describe("registration lowering", () => {
     `;
     const { output } = transform(fixture(src));
     expect(output).toContain(
-      'services.add("./app/ILogger", ConsoleLogger, [[]]).as("singleton")',
+      'services.add("./app:ILogger", ConsoleLogger, [[]]).as("singleton")',
     );
     expect(output).not.toContain("defineDeps");
   });
@@ -74,7 +74,7 @@ describe("registration lowering", () => {
       services.add<IFoo>(Foo);
     `;
     const { output } = transform(fixture(src));
-    expect(output).toContain('services.add("./app/IFoo", Foo, [[]])');
+    expect(output).toContain('services.add("./app:IFoo", Foo, [[]])');
     expect(output).not.toContain("defineDeps");
   });
 });

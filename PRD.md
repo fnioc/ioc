@@ -261,12 +261,14 @@ The verb `signature` is used consistently: the ABI field is `signatures`, the de
 
 ### Token derivation for named types
 
-Every named type produces a token by its name. No special-casing for intrinsics:
+Every named type produces a token **`<source>:<exportName>`** — `<source>` is where a human imports the type from, `<exportName>` its module-qualified declared name (bare for a top-level type, `A.Foo` for a nested type):
 
 | Parameter type | Token emitted |
 |---|---|
-| `IFoo` (package-public) | `"pkg:IFoo"` |
-| `IBar` (app-internal) | `"./src/IBar"` |
+| `IFoo` (package root export) | `"pkg:IFoo"` |
+| `IFoo` (package subpath export `pkg/contracts`) | `"pkg/contracts:IFoo"` |
+| `IBar` (app-internal, package `app`) | `"app/src/IBar:IBar"` |
+| `IBar` (app-internal, rootless project) | `"./src/IBar:IBar"` |
 | `string` | `"string"` |
 | `number` | `"number"` |
 | `boolean` | `"boolean"` |
@@ -564,15 +566,15 @@ Useful for test doubles, third-party instances, async factories (`addFactory` re
 
 The transformer provides a `nameof<IFoo>()`-style compile-time mechanism returning a plain `string`. The return type is `string` — no computed or branded types.
 
-**Token derivation rules:**
+**Token derivation rules.** Every token is **`<source>:<exportName>`** — one rule, no dedup special-cases:
 
-- **Package-public type** (reachable through the package's public exports): `packageName:publicExportSubpath/SymbolName`  
-  Example: `your-lib:contracts/IFoo`  
-  Derive by: walking up to the nearest `package.json` to identify the owning package, checking whether the symbol is publicly exported via the package's `exports`/`main` fields.
-- **App-internal type** (not publicly exported): source-relative path token.  
-  Example: `./src/services/IUserRepo`
+- **Package-public type** (reachable through the package's public exports): **`<importSpecifier>:<QualifiedName>`**, where `<importSpecifier>` is the exact specifier a consumer imports from — `your-lib/contracts:IFoo` for a subpath export, `your-lib:IRoot` for a root export. Derive by walking to the nearest `package.json`, then using the **TypeScript checker export graph** (`getExportsOfModule` on each public entry point) to find which public specifier actually re-exports the symbol. When several do, the canonical `<source>` is the specifier **whose target is the declaring file**; if none targets it directly, the shortest subpath (root before subpaths), ties lexicographic. This resolves a type declared deep but re-exported from the package root to the **bare package** — file-path stem matching cannot.
+- **App-internal type** (owned by a `package.json` but not publicly exported): **`<packageName>/<declaration-file path relative to the package root, extension stripped>:<QualifiedName>`**, e.g. `the-app/src/services/IUserRepo:IUserRepo`. The package-name prefix guarantees global uniqueness across disparate packages that share a relative path. Not importable, so never hand-written.
+- **Nested types** — `<QualifiedName>` is module-qualified (`A.Foo`), closing within-file same-name collisions; top-level types (the norm) qualify to the bare name.
+- **Rootless files** — no named `package.json` up-tree ⇒ no package name to qualify with; fall back to a best-effort `./<path relative to the inferred project root>:<QualifiedName>`. Documented residual; every real project ships a `package.json`.
+- **One rule, no dedup special-cases.** Every token is `source:symbol`; the previous "omit the symbol when the file basename matches it" shortcut is removed — a predictable redundant-looking token beats an exception a human must remember.
 
-**Version excluded from token.** Tokens do not embed the package version — compatible versions of a dependency unify on the same token. Document the caveat: if two incompatible versions of the same package are installed (version skew), their tokens collide, which produces a registration conflict rather than two isolated containers. The standard mitigation is the same as for any semver peer dep: keep compatible versions.
+**Version excluded from token.** Tokens do not embed the package version — compatible versions of a dependency unify on the same token. Document the caveat: if two incompatible versions of the same package are installed (version skew), their tokens collide, which produces a registration conflict rather than two isolated containers. The standard mitigation is the same as for any semver peer dep: keep compatible versions. Generic type arguments are unaffected by the `source:symbol` shape — only the base token gains it; the `base<arg1,arg2>` recursion and each argument's derivation are untouched.
 
 `nameof<IFoo>()` at the authoring level compiles to the derived string. In the transformer, a call `nameof<IFoo>()` in source is rewritten to its string value at compile time — callers never see the generation logic at runtime.
 

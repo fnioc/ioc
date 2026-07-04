@@ -1,16 +1,27 @@
 // Token generation (PRD §8 "Token generation").
 //
-// A token is a plain `string` that stably identifies an interface across the
-// codebase. There are two derivations:
+// A token is a plain `string` that stably identifies a type across the
+// codebase. One rule, no exceptions: every token is `<source>:<exportName>`.
 //
-//   1. Package-public type — reachable through a package's PUBLIC exports:
-//        `packageName:publicExportSubpath/SymbolName`   e.g. `your-lib:contracts/IFoo`
-//      We find the owning package by walking up to the nearest `package.json`
-//      from the type's declaration file, then check the package's
-//      `exports`/`main` to decide public-export status + the subpath.
+//   - `<exportName>` is the type's MODULE-QUALIFIED declared name — the bare
+//     name for a top-level type (`IFoo`), dotted for a type nested in a
+//     namespace (`A.Foo`). Computed purely from declaration nesting
+//     (`symbol.parent` walk), never from the export table.
 //
-//   2. App-internal type — not publicly exported:
-//        a source-relative path token                   e.g. `./src/services/IUserRepo`
+//   - `<source>` is WHERE A HUMAN IMPORTS THE TYPE FROM, in three tiers:
+//       1. Importable (package-public) → the exact import specifier: `pkg` for a
+//          root export, `pkg/contracts` for a subpath export. Determined from the
+//          TypeScript checker EXPORT GRAPH (`getExportsOfModule` over each public
+//          entry point), not file-path stems — so a type declared deep but
+//          re-exported from the package root tokenizes as the bare `pkg`.
+//       2. App-internal (owned by a `package.json` but not publicly exported) →
+//          `packageName/<decl-file path relative to package root, ext stripped>`.
+//          The package name makes it globally unique.
+//       3. Rootless (no named `package.json` up-tree) → best-effort
+//          `./<decl-file path relative to projectRoot, ext stripped>`.
+//
+// The previous "omit the symbol when the file basename matches it" dedup trick
+// is retired: a predictable redundant-looking token beats a memorized exception.
 //
 // The package VERSION is deliberately excluded from the token so that compatible
 // versions of a dependency unify on one token. Version-skew caveat: if two
@@ -50,9 +61,9 @@ const HOLE_BRAND_PROPERTY = "HOLE";
 export interface TokenContext {
   readonly checker: ts.TypeChecker;
   /**
-   * Project root used to make app-internal tokens source-relative. Tokens for
-   * app-internal types are rendered relative to this directory and prefixed
-   * with `./`.
+   * Project root used ONLY for the rootless best-effort token (a declaration
+   * with no owning `package.json` up-tree). App-internal tokens are rendered
+   * relative to their owning *package* root, not this directory.
    */
   readonly projectRoot: string;
   /**
@@ -61,6 +72,16 @@ export interface TokenContext {
    * reader that sees its virtual filesystem.
    */
   readonly readFile?: Func<[string], string | undefined>;
+  /**
+   * Look up a program source file by its EXTENSION-STRIPPED absolute path (its
+   * "stem"). Turns a package export entry's on-disk target (e.g.
+   * `.../contracts/index.js`) into the declaration file the program actually
+   * loaded (`.../contracts/index.d.ts`) so its module exports can be read for
+   * package-public detection. Wired inside `createTransformerFactory`; when
+   * absent (a hand-built context), package-public detection is skipped and the
+   * type falls through to the app-internal / rootless branch.
+   */
+  readonly sourceFileAtStem?: Func<[string], ts.SourceFile | undefined>;
   /**
    * True when a source file is a TypeScript default lib (`lib.es*.d.ts`).
    * A type declared there tokenizes as its BARE symbol name (`Promise`, `Map`)
@@ -340,7 +361,7 @@ export function deriveToken(
   if (!declaration) {return undefined;}
 
   const sourceFile = declaration.getSourceFile();
-  const base = baseTokenFor(name, sourceFile, ctx);
+  const base = baseTokenFor(symbol, sourceFile, ctx);
 
   // A GENERIC reference appends its checker-resolved type arguments
   // recursively: `base<arg1,arg2>`. Non-generic types return the bare base —
@@ -358,33 +379,76 @@ export function deriveToken(
 }
 
 /**
- * The BASE token for a named symbol (sans generic args): default-lib types by
- * bare name, package-public types as `name:subpath/Symbol`, everything else as
- * an app-internal source-relative token.
+ * The BASE token `<source>:<exportName>` for a named symbol (sans generic args).
+ * `<exportName>` is the module-qualified declared name; `<source>` is one of the
+ * three tiers (package-public import specifier, app-internal `pkg/path`, or
+ * rootless `./path`). Default-lib types (`Promise`, `Map`) tokenize as the bare
+ * symbol name — their lib path is machine-dependent and carries no identity.
  */
 function baseTokenFor(
-  name: string,
+  symbol: ts.Symbol,
   sourceFile: ts.SourceFile,
   ctx: TokenContext,
 ): string {
-  // Default-lib rule: a type declared in a TS default lib (`Promise`, `Map`)
-  // tokenizes as the bare symbol name — its lib path is machine-dependent.
-  if (ctx.isDefaultLib?.(sourceFile)) {return name;}
+  if (ctx.isDefaultLib?.(sourceFile)) {return symbol.getName();}
 
+  const exportName = qualifiedExportName(symbol);
   const declPath = sourceFile.fileName;
   const pkg = nearestPackage(declPath, ctx);
   if (pkg) {
-    const subpath = publicExportSubpath(pkg, declPath);
-    if (subpath !== undefined) {
-      // Package-public: `name:subpath/Symbol` (subpath "" → `name:Symbol`).
-      return !subpath
-        ? `${pkg.name}:${name}`
-        : `${pkg.name}:${subpath}/${name}`;
-    }
+    // Tier 1 — package-public: the exact import specifier from the export graph.
+    const spec = publicImportSpecifier(pkg, symbol, ctx);
+    if (spec !== undefined) {return `${spec}:${exportName}`;}
+    // Tier 2 — app-internal: `packageName/<decl path rel. to package root>`.
+    return packagePrivateToken(pkg, declPath, exportName);
   }
+  // Tier 3 — rootless: best-effort `./<decl path rel. to projectRoot>`.
+  return rootlessToken(declPath, exportName, ctx.projectRoot);
+}
 
-  // App-internal: source-relative path token, `./`-prefixed, no extension.
-  return appInternalToken(declPath, name, ctx.projectRoot);
+/**
+ * The module-qualified DECLARED name of a symbol: the bare name for a top-level
+ * type (`IFoo`), dotted for a type nested in a namespace/module (`A.Foo`). Walks
+ * `symbol.parent` (a private field, accessed via the same narrow cast used for
+ * `intrinsicName`) and prepends each enclosing NON-source-file container name.
+ * The walk stops at the source-file module symbol, so the file itself never
+ * contributes to the name.
+ */
+function qualifiedExportName(symbol: ts.Symbol): string {
+  let name = symbol.getName();
+  let parent = symbolParent(symbol);
+  while (parent && !isSourceFileModuleSymbol(parent)) {
+    name = `${parent.getName()}.${name}`;
+    parent = symbolParent(parent);
+  }
+  return name;
+}
+
+/**
+ * The outermost declaration ancestor directly owned by a source-file module —
+ * `symbol` itself for a top-level type, the enclosing namespace symbol for a
+ * type nested inside one. Used to match a type against a module's public exports
+ * (a nested type is reachable only through its top-level container).
+ */
+function topLevelAncestor(symbol: ts.Symbol): ts.Symbol {
+  let current = symbol;
+  let parent = symbolParent(current);
+  while (parent && !isSourceFileModuleSymbol(parent)) {
+    current = parent;
+    parent = symbolParent(parent);
+  }
+  return current;
+}
+
+/** `symbol.parent` — a private field not in the public typings. */
+function symbolParent(symbol: ts.Symbol): ts.Symbol | undefined {
+  return (symbol as ts.Symbol & { parent?: ts.Symbol }).parent;
+}
+
+/** True when `symbol` is a source-file module (its declaration IS a SourceFile). */
+function isSourceFileModuleSymbol(symbol: ts.Symbol): boolean {
+  const decls = symbol.getDeclarations();
+  return !!decls?.some((d) => ts.isSourceFile(d));
 }
 
 /**
@@ -653,33 +717,66 @@ function nearestPackage(
 }
 
 /**
- * If `declPath` is reachable through `pkg`'s public exports, return the export
- * SUBPATH (the public entry's directory relative to the package root, sans
- * extension; `""` for the root entry). Returns `undefined` when the file is
- * private to the package (not its `main`/`exports`/`types` surface).
+ * If `symbol` is reachable through `pkg`'s PUBLIC exports, return the exact
+ * import specifier a consumer writes — `pkg` for a root export, `pkg/contracts`
+ * for a subpath export. Returns `undefined` when the type is private to the
+ * package (→ app-internal token).
+ *
+ * The match is against the checker EXPORT GRAPH, not file-path stems: each
+ * public entry point's module is resolved (via `sourceFileAtStem`) and its
+ * `getExportsOfModule` is scanned (aliases resolved) for a symbol that SHARES A
+ * DECLARATION with the type's top-level ancestor. This resolves a type declared
+ * deep but re-exported from the package root to the bare package — something
+ * stem matching could never do.
+ *
+ * Canonical pick among matching subpaths (deterministic):
+ *   1. Prefer the entry whose target module IS the declaration's own file.
+ *   2. Else the shortest subpath (root `""` wins → bare package), ties broken
+ *      lexicographically.
  */
-function publicExportSubpath(
+function publicImportSpecifier(
   pkg: PackageInfo,
-  declPath: string,
+  symbol: ts.Symbol,
+  ctx: TokenContext,
 ): string | undefined {
-  const rel = posixRelative(pkg.dir, declPath);
-  if (rel === undefined) {return undefined;}
-  const relNoExt = stripExt(rel);
+  if (!ctx.sourceFileAtStem) {return undefined;}
+  const target = topLevelAncestor(symbol);
+  const targetDecls = new Set(target.getDeclarations() ?? []);
+  if (!targetDecls.size) {return undefined;}
+  const declFile = primaryDeclaration(target)?.getSourceFile();
 
-  const entries = collectExportEntries(pkg);
-
-  // A `.d.ts` declaration commonly pairs with a `.js` entry of the same stem,
-  // and a directory entry pairs with its `/index`.
-  for (const entry of entries) {
-    const entryNoExt = stripExt(entry.targetRel);
-    if (
-      entryNoExt === relNoExt ||
-      entryNoExt.replace(/\/index$/, "") === relNoExt.replace(/\/index$/, "")
-    ) {
-      return entry.subpath;
+  const matches: { subpath: string; targetsDeclFile: boolean }[] = [];
+  for (const entry of collectExportEntries(pkg)) {
+    const absStem = stripExt(`${pkg.dir}/${entry.targetRel}`);
+    const sf = ctx.sourceFileAtStem(absStem);
+    if (!sf) {continue;}
+    const mod = ctx.checker.getSymbolAtLocation(sf);
+    if (!mod) {continue;}
+    for (const exp of ctx.checker.getExportsOfModule(mod)) {
+      const resolved =
+        exp.flags & ts.SymbolFlags.Alias
+          ? ctx.checker.getAliasedSymbol(exp)
+          : exp;
+      const decls = resolved.getDeclarations() ?? [];
+      if (decls.some((d) => targetDecls.has(d))) {
+        matches.push({ subpath: entry.subpath, targetsDeclFile: sf === declFile });
+        break;
+      }
     }
   }
-  return undefined;
+  if (!matches.length) {return undefined;}
+
+  matches.sort((a, b) => {
+    if (a.targetsDeclFile !== b.targetsDeclFile) {
+      return a.targetsDeclFile ? -1 : 1;
+    }
+    if (a.subpath.length !== b.subpath.length) {
+      return a.subpath.length - b.subpath.length;
+    }
+    return a.subpath < b.subpath ? -1 : a.subpath > b.subpath ? 1 : 0;
+  });
+  const best = matches[0]!;
+  return best.subpath === "" ? pkg.name : `${pkg.name}/${best.subpath}`;
 }
 
 interface ExportEntry {
@@ -777,32 +874,40 @@ function dirname(p: string): string {
   return n.slice(0, idx);
 }
 
-function stripExt(p: string): string {
+export function stripExt(p: string): string {
   return p
     .replace(/\.d\.ts$/, "")
     .replace(/\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/, "");
 }
 
 /**
- * Source-relative token for an app-internal declaration: the declaration file's
- * path relative to the project root, `./`-prefixed, extension stripped. Per the
- * PRD §8 example `./src/services/IUserRepo`, the file path IS the identity when
- * the file is named after the symbol it declares. To stay collision-safe when a
- * file declares multiple interfaces, the SymbolName is appended only when the
- * file's basename differs from it — so `src/services/IUserRepo.ts` →
- * `./src/services/IUserRepo`, but `src/types.ts` declaring `IFoo` →
- * `./src/types/IFoo`.
+ * App-internal (tier 2) token: `packageName/<decl-file path relative to the
+ * PACKAGE root, extension stripped>:<exportName>`. The package-name prefix makes
+ * it globally unique across disparate packages that share a relative path.
  */
-function appInternalToken(
+function packagePrivateToken(
+  pkg: PackageInfo,
   declPath: string,
-  name: string,
+  exportName: string,
+): string {
+  const rel = posixRelative(pkg.dir, declPath);
+  const base = stripExt(rel ?? normalize(declPath).replace(/^\/+/, ""));
+  return `${pkg.name}/${base}:${exportName}`;
+}
+
+/**
+ * Rootless (tier 3) token: best-effort `./<decl-file path relative to the
+ * project root, extension stripped>:<exportName>` for a declaration with no
+ * owning `package.json` up-tree — no package name to qualify with. When the
+ * declaration is outside the project root, the absolute path (leading `/`
+ * stripped so `./` doesn't double the slash) stands in.
+ */
+function rootlessToken(
+  declPath: string,
+  exportName: string,
   projectRoot: string,
 ): string {
-  // When the declaration is not under the project root (no rootDir, or a path
-  // outside it), fall back to the absolute path with its leading `/` stripped so
-  // the `./` prefix doesn't produce a doubled slash (`.//tmp/...`).
   const rel = posixRelative(projectRoot, declPath);
   const base = stripExt(rel ?? normalize(declPath).replace(/^\/+/, ""));
-  const basename = base.slice(base.lastIndexOf("/") + 1);
-  return basename === name ? `./${base}` : `./${base}/${name}`;
+  return `./${base}:${exportName}`;
 }

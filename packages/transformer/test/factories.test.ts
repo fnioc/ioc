@@ -45,7 +45,7 @@ describe("factory detection", () => {
       services.add<ISvc>(Svc).as<"singleton">();
     `;
     const { output } = transform(fixture(src));
-    expect(depsArrayFor(output, "Svc")).toBe('[[{ type: "./app/IFoo" }]]');
+    expect(depsArrayFor(output, "Svc")).toBe('[[{ type: "./app:IFoo" }]]');
   });
 
   test("declared params are emitted as FactoryRef.params in declared order", () => {
@@ -63,7 +63,7 @@ describe("factory detection", () => {
     const { output } = transform(fixture(src));
     // Declared params become caller-supplied tokens in authored order.
     expect(depsArrayFor(output, "Svc")).toBe(
-      '[[{ type: "./app/IFoo", params: ["./app/B2", "./app/D4"] }]]',
+      '[[{ type: "./app:IFoo", params: ["./app:B2", "./app:D4"] }]]',
     );
   });
 
@@ -80,7 +80,7 @@ describe("factory detection", () => {
     `;
     const { output } = transform(fixture(src));
     // Resolves to the named interface's OWN token, not a factory ref.
-    expect(depsArrayFor(output, "Svc")).toBe('[["./app/IFooThunk"]]');
+    expect(depsArrayFor(output, "Svc")).toBe('[["./app:IFooThunk"]]');
     expect(output).not.toContain("factory:");
   });
 
@@ -96,8 +96,8 @@ describe("factory detection", () => {
     `;
     const { output } = transform(fixture(src));
     // Honest token-split: the factory's Promise<IFoo> return is NOT unwrapped —
-    // its FactoryRef type is the closed-generic token `Promise<./app/IFoo>`.
-    expect(depsArrayFor(output, "Svc")).toBe('[[{ type: "Promise<./app/IFoo>" }]]');
+    // its FactoryRef type is the closed-generic token `Promise<./app:IFoo>`.
+    expect(depsArrayFor(output, "Svc")).toBe('[[{ type: "Promise<./app:IFoo>" }]]');
   });
 
   test("factory mixes with plain tokens in one signature", () => {
@@ -113,7 +113,7 @@ describe("factory detection", () => {
     `;
     const { output } = transform(fixture(src));
     expect(depsArrayFor(output, "Svc")).toBe(
-      '[["./app/ILogger", { type: "./app/IFoo" }]]',
+      '[["./app:ILogger", { type: "./app:IFoo" }]]',
     );
   });
 
@@ -155,7 +155,7 @@ describe("factory detection", () => {
     const { output } = transform(fixture(src));
     // Both declared overloads must appear — the impl is ignored.
     expect(depsArrayFor(output, "Impl")).toBe(
-      '[["./app/IFoo"], ["./app/IFoo", "./app/IBar"]]',
+      '[["./app:IFoo"], ["./app:IFoo", "./app:IBar"]]',
     );
   });
 
@@ -174,7 +174,7 @@ describe("factory detection", () => {
     const { output } = transform(fixture(src));
     // Both call overloads must appear.
     expect(depsArrayFor(output, "makeMarker")).toBe(
-      '[["./app/IFoo"], ["./app/IFoo", "./app/IBar"]]',
+      '[["./app:IFoo"], ["./app:IFoo", "./app:IBar"]]',
     );
   });
 
@@ -199,7 +199,7 @@ describe("factory detection", () => {
     const { outputs } = transform(files, { entry: ["/proj/src/app.ts"] });
     const out = outputs["/proj/src/app.ts"]!;
     expect(depsArrayFor(out, "Svc")).toBe(
-      '[[{ type: "your-lib:contracts/IFoo" }]]',
+      '[[{ type: "your-lib/contracts:IFoo" }]]',
     );
   });
 });
@@ -218,7 +218,7 @@ describe("declared factory params → caller-supplied params (caller wins over r
     `;
     const { output } = transform(fixture(src));
     expect(depsArrayFor(output, "Svc")).toBe(
-      '[[{ type: "./app/IReport", params: ["./app/ILogger"] }]]',
+      '[[{ type: "./app:IReport", params: ["./app:ILogger"] }]]',
     );
   });
 
@@ -233,7 +233,7 @@ describe("declared factory params → caller-supplied params (caller wins over r
       services.add<ISvc>(Svc).as<"singleton">();
     `;
     const { output } = transform(fixture(src));
-    expect(depsArrayFor(output, "Svc")).toBe('[[{ type: "./app/IReport" }]]');
+    expect(depsArrayFor(output, "Svc")).toBe('[[{ type: "./app:IReport" }]]');
   });
 
   test("mixed (table: string, log: ILogger) => IRepo emits params in declared order", () => {
@@ -249,7 +249,7 @@ describe("declared factory params → caller-supplied params (caller wins over r
     `;
     const { output } = transform(fixture(src));
     expect(depsArrayFor(output, "Svc")).toBe(
-      '[[{ type: "./app/IRepo", params: ["string", "./app/ILogger"] }]]',
+      '[[{ type: "./app:IRepo", params: ["string", "./app:ILogger"] }]]',
     );
   });
 });

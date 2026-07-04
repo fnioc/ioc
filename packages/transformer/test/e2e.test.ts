@@ -132,18 +132,18 @@ describe("ts-patch production e2e (ESM)", () => {
     expect(emitted).not.toContain("defineDeps");
     expect(emitted).not.toContain("ɵreg");
     expect(emitted).toContain(
-      'services.add("./services/ILogger", ConsoleLogger, [[]]).as("singleton");',
+      'services.add("./services:ILogger", ConsoleLogger, [[]]).as("singleton");',
     );
     expect(emitted).toContain(
-      'services.add("./services/IUserRepo", SqlUserRepo, ' +
-        '[["./services/ILogger", "./services/IDbConnection"]]).as("request");',
+      'services.add("./services:IUserRepo", SqlUserRepo, ' +
+        '[["./services:ILogger", "./services:IDbConnection"]]).as("request");',
     );
 
     // An inline `() => IUserRepo` ctor param lowers to a FactoryRef slot keyed
     // on the return type's token (PRD §7). Field renamed: `type` (was `factory`).
     expect(emitted).toContain(
-      'services.add("./services/IWidget", WidgetHost, ' +
-        '[[{ type: "./services/IUserRepo" }]]).as("singleton");',
+      'services.add("./services:IWidget", WidgetHost, ' +
+        '[[{ type: "./services:IUserRepo" }]]).as("singleton");',
     );
   }, 30_000);
 
@@ -163,14 +163,14 @@ describe("ts-patch production e2e (ESM)", () => {
     // carried as the third `add()` argument (no defineDeps, no hoist), the
     // Typeof param an open `{ typeArg: 1 }` slot.
     expect(emitted).toContain(
-      'services.add("./generics/IRepository<$1>", SqlRepository, ' +
-        '[["./services/ILogger", { typeArg: 1 }]]).as("singleton");',
+      'services.add("./generics:IRepository<$1>", SqlRepository, ' +
+        '[["./services:ILogger", { typeArg: 1 }]]).as("singleton");',
     );
     // Closed instantiation: concrete closed token + the witness closed to a
     // literal value slot carrying the arg's token.
     expect(emitted).toContain(
-      'services.add("./generics/IRepository<./generics/User>", SqlRepository, ' +
-        '[["./services/ILogger", { value: "./generics/User" }]]).as("singleton");',
+      'services.add("./generics:IRepository<./generics:User>", SqlRepository, ' +
+        '[["./services:ILogger", { value: "./generics:User" }]]).as("singleton");',
     );
     expect(emitted).not.toContain("defineDeps");
   }, 30_000);

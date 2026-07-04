@@ -33,20 +33,20 @@ import {
 } from "./sample/services.js";
 
 const T = {
-  logger: "./sample/contracts/ILogger",
-  db: "./sample/contracts/IDbConnection",
-  repo: "./sample/contracts/IUserRepo",
-  ctx: "./sample/contracts/IRequestContext",
-  report: "./sample/contracts/IReport",
-  reportService: "./sample/contracts/IReportService",
-  reportFactory: "./sample/contracts/IReportFactory",
-  thunkConsumer: "./sample/contracts/IThunkConsumer",
-  configConsumer: "./sample/contracts/IConfigConsumer",
+  logger: "fnioc-integration-sample/src/sample/contracts:ILogger",
+  db: "fnioc-integration-sample/src/sample/contracts:IDbConnection",
+  repo: "fnioc-integration-sample/src/sample/contracts:IUserRepo",
+  ctx: "fnioc-integration-sample/src/sample/contracts:IRequestContext",
+  report: "fnioc-integration-sample/src/sample/contracts:IReport",
+  reportService: "fnioc-integration-sample/src/sample/contracts:IReportService",
+  reportFactory: "fnioc-integration-sample/src/sample/contracts:IReportFactory",
+  thunkConsumer: "fnioc-integration-sample/src/sample/contracts:IThunkConsumer",
+  configConsumer: "fnioc-integration-sample/src/sample/contracts:IConfigConsumer",
   // Honest Promise<IConfig> token-split: ConfigConsumer's ctor param is typed
   // `Promise<IConfig>`, so it depends on this closed-generic token, and the async
   // factory is registered here.
-  config: "Promise<./sample/contracts/IConfig>",
-  thunk: "./sample/contracts/IThunk",
+  config: "Promise<fnioc-integration-sample/src/sample/contracts:IConfig>",
+  thunk: "fnioc-integration-sample/src/sample/contracts:IThunk",
 } as const;
 
 let handFedConfigRuns = 0;

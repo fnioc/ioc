@@ -125,7 +125,7 @@ services.add<ICategoryLogger<$<1>>>(CategoryLogger<$<1>>).as<"singleton">();
 // explicit-token calls untouched): tokens hand-written to the derived grammar,
 // so authored resolve<IAudit<Order>>() closes THIS registration, and its
 // IRepository<$1> dep closes the transformer-authored open registration above.
-services.add("./contracts/IAudit<$1>", AuditTrail, [["./contracts/IRepository<$1>", typeArg(1)]]).as("singleton");
+services.add("fnioc-integration-sample/src/contracts:IAudit<$1>", AuditTrail, [["fnioc-integration-sample/src/contracts:IRepository<$1>", typeArg(1)]]).as("singleton");
 `,
   "app.ts": `
 import type { ServiceProvider } from "@fnioc/di";
@@ -171,13 +171,13 @@ export function observe(): Observations {
 // emit-shape assertions below; the behavioral tests reuse them for the
 // manual-token cross-checks).
 const T = {
-  logger: "./contracts/ILogger",
-  repoBase: "./contracts/IRepository",
-  repoTemplate: "./contracts/IRepository<$1>",
-  catTemplate: "./contracts/ICategoryLogger<$1>",
-  user: "./contracts/User",
-  order: "./contracts/Order",
-  invoice: "./contracts/Invoice",
+  logger: "fnioc-integration-sample/src/contracts:ILogger",
+  repoBase: "fnioc-integration-sample/src/contracts:IRepository",
+  repoTemplate: "fnioc-integration-sample/src/contracts:IRepository<$1>",
+  catTemplate: "fnioc-integration-sample/src/contracts:ICategoryLogger<$1>",
+  user: "fnioc-integration-sample/src/contracts:User",
+  order: "fnioc-integration-sample/src/contracts:Order",
+  invoice: "fnioc-integration-sample/src/contracts:Invoice",
 } as const;
 
 interface LoadedRepo {
@@ -238,7 +238,7 @@ describe("emit contract — open-generics lowered ABI", () => {
 
   test("manual (explicit-token) registration passes through the transformer untouched", () => {
     const wiring = project.emitted("wiring.js");
-    expect(wiring).toContain("services.add(\"./contracts/IAudit<$1>\", AuditTrail, ");
+    expect(wiring).toContain("services.add(\"fnioc-integration-sample/src/contracts:IAudit<$1>\", AuditTrail, ");
     expect(wiring).toContain(`"${T.repoTemplate}", typeArg(1)`);
   });
 
