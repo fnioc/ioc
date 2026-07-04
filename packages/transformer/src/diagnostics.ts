@@ -57,8 +57,9 @@ export const enum DiagnosticCode {
 
 const SOURCE = "@fnioc/transformer";
 
-/** Build an informational diagnostic anchored at `node` in `file`. */
-export function info(
+/** Build a diagnostic of `category` anchored at `node` in `file`. */
+function diagnostic(
+  category: ts.DiagnosticCategory,
   file: ts.SourceFile,
   node: ts.Node,
   code: DiagnosticCode,
@@ -68,7 +69,7 @@ export function info(
     file,
     start: node.getStart(file),
     length: node.getWidth(file),
-    category: ts.DiagnosticCategory.Message,
+    category,
     code,
     messageText,
     source: SOURCE,
@@ -82,15 +83,7 @@ export function warning(
   code: DiagnosticCode,
   messageText: string,
 ): Diagnostic {
-  return {
-    file,
-    start: node.getStart(file),
-    length: node.getWidth(file),
-    category: ts.DiagnosticCategory.Warning,
-    code,
-    messageText,
-    source: SOURCE,
-  };
+  return diagnostic(ts.DiagnosticCategory.Warning, file, node, code, messageText);
 }
 
 /** Build an error diagnostic anchored at `node` in `file`. */
@@ -100,13 +93,5 @@ export function error(
   code: DiagnosticCode,
   messageText: string,
 ): Diagnostic {
-  return {
-    file,
-    start: node.getStart(file),
-    length: node.getWidth(file),
-    category: ts.DiagnosticCategory.Error,
-    code,
-    messageText,
-    source: SOURCE,
-  };
+  return diagnostic(ts.DiagnosticCategory.Error, file, node, code, messageText);
 }
