@@ -56,9 +56,10 @@ jobs:
 
   # ── Publish ───────────────────────────────────────────────────────────────
   # Runs on every push to main. release-please-action either opens/updates a
-  # per-package release PR or, when one is merged, tags the release and surfaces
-  # the released paths via `paths_released`. For each released path we build and
-  # publish that package to npm at the `@next` dist-tag.
+  # per-package release PR or, when one is merged, tags the release. We then build
+  # and publish to the `@next` dist-tag every managed package whose committed
+  # version is not yet on `@next` — manifest-driven and idempotent, deliberately
+  # NOT keyed on release-please's `paths_released` (see the selection step for why).
   #
   # Two-stage publish: every release publishes to `@next` automatically here.
   # Promotion to `@latest` is a separate, manual step — see promote.yml. A
@@ -146,24 +147,43 @@ jobs:
         if: ${{ steps.release.outputs.releases_created == 'true' }}
         run: moon run :build
 
-      # Topo-sort `paths_released` so dependencies publish before dependents.
-      # @fnioc/core is a PUBLISHED pure-types package (a library author depends on
-      # it via `import type`), but di and transformer INLINE core's types into
-      # their own dist and carry no @fnioc/core dependency — so core is not a
-      # publish-order constraint for them. transformer's @fnioc/di reference is a
-      # peer the consumer installs, not a publish-order constraint either. Every
-      # package is thus independent at publish time; any order is valid and the
-      # sort is a stable passthrough.
-      - name: Topo-sort paths_released (dependencies first)
+      # Select which managed packages to publish to @next — MANIFEST-DRIVEN and
+      # IDEMPOTENT, deliberately NOT release-please's `paths_released`.
+      #
+      # `paths_released` lists only the packages release-please TAGGED this run,
+      # and a lockstep release is not reliably atomic: release-please can tag one
+      # member of the group and then, once a sibling's manifest version has no
+      # matching tag, its bootstrap logic treats that version as "already released"
+      # and skips it — so `paths_released` omits it and the old loop silently
+      # shipped a partial (split) release. (This is exactly how 10.1.0 shipped core
+      # only, stranding di/transformer at 10.0.0 on @next.)
+      #
+      # Instead: publish every managed package (keys of the release-please manifest)
+      # whose committed package.json version is not yet its @next dist-tag on npm.
+      # A partial release-creation then self-heals into a complete lockstep publish,
+      # and the step is safe to re-run — a package already at its version on @next
+      # is skipped. Order is irrelevant at publish time (di/transformer inline
+      # core's types and carry no @fnioc/core dep; transformer's @fnioc/di is a
+      # consumer-installed peer), so the set is emitted sorted for determinism.
+      - name: Select packages needing an @next publish (manifest-driven, idempotent)
         id: sorted
         if: ${{ steps.release.outputs.releases_created == 'true' }}
-        env:
-          PATHS_RELEASED: ${{ steps.release.outputs.paths_released }}
         run: |
           set -euo pipefail
-          sorted=$(echo "$PATHS_RELEASED" | jq -c 'sort')
-          echo "Original order: $PATHS_RELEASED"
-          echo "Sorted order:   $sorted"
+          need='[]'
+          for pkg_path in $(jq -r 'keys[]' .release-please-manifest.json); do
+            name=$(jq -r .name "$pkg_path/package.json")
+            committed=$(jq -r .version "$pkg_path/package.json")
+            published=$(npm view "$name@next" version 2>/dev/null || echo "")
+            if [ "$committed" != "$published" ]; then
+              echo "$name: committed=$committed, @next=${published:-<none>} -> PUBLISH"
+              need=$(printf '%s' "$need" | jq -c --arg p "$pkg_path" '. + [$p]')
+            else
+              echo "$name: committed=$committed already on @next -> skip"
+            fi
+          done
+          sorted=$(printf '%s' "$need" | jq -c 'sort')
+          echo "Publish set: $sorted"
           echo "sorted=${sorted}" >> "$GITHUB_OUTPUT"
 
       # Strip the workspace @fnioc/core devDependency before packing. Although
