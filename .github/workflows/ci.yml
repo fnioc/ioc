@@ -119,6 +119,37 @@ jobs:
       - uses: actions/checkout@v4
         if: ${{ steps.release.outputs.releases_created == 'true' && steps.checkout-1.outcome == 'failure' && steps.checkout-2.outcome == 'failure' }}
 
+      # Backfill any GitHub release/tag that release-please skipped for a lockstep
+      # sibling. In linked-versions mode release-please can advance the manifest for
+      # the whole group but create the release for only some members: once a
+      # sibling's manifest version has no matching tag, its bootstrap logic assumes
+      # that version is already released and skips it. That strands the tag, leaves
+      # `paths_released` short (the manifest-driven publish below still ships it),
+      # and makes release-please float a spurious follow-up release PR. Create any
+      # missing <component>-v<version> release at the release commit so the tag
+      # state matches the manifest. Idempotent — existing tags are left untouched.
+      # (Observed on the 10.1.0 release: core tagged, di/transformer skipped.)
+      - name: Backfill release-please-skipped tags (lockstep robustness)
+        if: ${{ steps.release.outputs.releases_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for pkg_path in $(jq -r 'keys[]' .release-please-manifest.json); do
+            component=$(basename "$pkg_path")
+            ver=$(jq -r .version "$pkg_path/package.json")
+            tag="${component}-v${ver}"
+            if gh release view "$tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "$tag exists"
+            else
+              echo "::warning::$tag missing (release-please skipped it) — backfilling at $GITHUB_SHA"
+              gh release create "$tag" --target "$GITHUB_SHA" \
+                --title "$component: v$ver" \
+                --notes "Lockstep release $component v$ver (backfilled — release-please skipped this member of the linked-versions group)." \
+                -R "$GITHUB_REPOSITORY"
+            fi
+          done
+
       - uses: actions/setup-node@v4
         if: ${{ steps.release.outputs.releases_created == 'true' }}
         with:
