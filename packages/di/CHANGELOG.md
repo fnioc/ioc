@@ -1,5 +1,12 @@
 # Changelog
 
+## [10.1.0](https://github.com/fnioc/ioc/compare/di-v10.0.0...di-v10.1.0) (2026-07-05)
+
+
+### Features
+
+* **transformer:** tokenless addFactory&lt;I&gt;(fn) with overload-faithful factory params ([#96](https://github.com/fnioc/ioc/issues/96)) ([57d50e3](https://github.com/fnioc/ioc/commit/57d50e39ce1d015a472d3e216ada81b92688cbeb))
+
 ## [10.1.0](https://github.com/fnioc/ioc/compare/di-v10.0.0...di-v10.1.0) (2026-07-04)
 
 
